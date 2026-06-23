@@ -89,6 +89,7 @@ private:
                               QString *backupPath, QString *errorMessage) const;
     int findNodeIndex(const AnalysisResult &analysis, const WizardNodeRef &ref) const;
     void showGraphForRow(int row);
+    void setDuplicateMergeEnabled(bool enabled);
 
     QString m_rootFolder;
     QString m_currentSourcePath;

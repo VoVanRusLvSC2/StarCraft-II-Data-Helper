@@ -42,7 +42,12 @@ void addRow(QTableWidget *target, const OptimizationPlanRow &row) {
     }
 }
 
-OptimizationPlanData calculatePlan(const AnalysisResult &result) {
+QVector<int> wizardSteps(bool duplicateMergeEnabled)
+{
+    return duplicateMergeEnabled ? QVector<int>{0, 1, 2, 3, 4} : QVector<int>{0, 2, 3, 4};
+}
+
+OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateMergeEnabled) {
     OptimizationPlanData plan;
     for (const UnusedCandidateInfo &candidate : result.unusedCandidates) {
         const DataNode &node = result.nodes[candidate.nodeIndex];
@@ -50,7 +55,7 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result) {
         plan.unused.append({{safe ? QString() : QStringLiteral("Blocked"), node.id, node.elementName,
                              candidate.reason, candidate.riskLevel}, safe, safe, candidate.nodeIndex, -1});
     }
-    for (const DuplicateContentGroup &group : result.duplicateContentGroups) if (group.nodeIndices.size() > 1) {
+    if (duplicateMergeEnabled) for (const DuplicateContentGroup &group : result.duplicateContentGroups) if (group.nodeIndices.size() > 1) {
         const int keep = group.nodeIndices.front();
         for (int position = 1; position < group.nodeIndices.size(); ++position) {
             const int remove = group.nodeIndices[position];
@@ -62,15 +67,9 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result) {
                                     group.mergeCandidate, group.mergeCandidate, keep, remove});
         }
     }
-    const QVector<UnitFamily> families = UnitFamilyDetector().detect(result);
-    for (int familyIndex = 0; familyIndex < families.size(); ++familyIndex) {
-        const UnitFamily &family = families[familyIndex];
-        const RenamePlan renamePlan = StandardNamePlanner().plan(result, family, family.rootId);
-        for (const RenamePlanItem &item : renamePlan.items) {
-            plan.rename.append({{QString(), family.rootId, item.oldId, item.newId,
-                                 item.blocked ? item.conflict : item.riskLevel},
-                                !item.blocked, !item.blocked, familyIndex, item.nodeIndex});
-        }
+    const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(result);
+    for (int familyIndex = 0; familyIndex < collectionFamilies.size(); ++familyIndex) {
+        const UnitFamily &family = collectionFamilies[familyIndex];
         DataCollectionBuildRequest request;
         request.family = family;
         const DataCollectionPreviewReport collection = DataCollectionUnitBuilder().preview(result, request);
@@ -87,7 +86,7 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     auto *layout = new QVBoxLayout(this); layout->setContentsMargins(18, 18, 18, 18); layout->setSpacing(12);
     auto *title = new QLabel(QStringLiteral("Optimization Wizard"), this); title->setObjectName(QStringLiteral("panelTitle"));
     layout->addWidget(title);
-    auto *hint = new QLabel(QStringLiteral("Build once, then review and adjust all five optimization steps inside this window. Use the separate main tabs only for individual manual operations."), this);
+    auto *hint = new QLabel(QStringLiteral("Build once, then review and adjust every enabled optimization step inside this window. Use the separate main tabs only for individual manual operations."), this);
     hint->setObjectName(QStringLiteral("inspectorSubtitle")); hint->setWordWrap(true); layout->addWidget(hint);
     m_steps = new QTabWidget(this);
     m_steps->setObjectName(QStringLiteral("optimizationSteps"));
@@ -122,10 +121,17 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     navigation->addWidget(m_stepLabel); navigation->addStretch(1); navigation->addWidget(m_selectRecommendedButton); navigation->addWidget(m_clearSelectionButton); navigation->addWidget(m_backButton); navigation->addWidget(m_buildButton); navigation->addWidget(m_applyPlanButton); navigation->addWidget(m_nextButton);
     m_stepActionButton->hide();
     layout->addLayout(navigation);
-    connect(m_backButton, &QPushButton::clicked, this, [this] { m_steps->setCurrentIndex(qMax(0, m_steps->currentIndex() - 1)); updateNavigation(); });
+    connect(m_backButton, &QPushButton::clicked, this, [this] {
+        const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled);
+        const int position = steps.indexOf(m_steps->currentIndex());
+        if (position > 0) m_steps->setCurrentIndex(steps[position - 1]);
+        updateNavigation();
+    });
     connect(m_nextButton, &QPushButton::clicked, this, [this] {
-        if (m_steps->currentIndex() >= 4) emit wizardFinished();
-        else { m_steps->setCurrentIndex(m_steps->currentIndex() + 1); updateNavigation(); }
+        const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled);
+        const int position = steps.indexOf(m_steps->currentIndex());
+        if (position < 0 || position + 1 >= steps.size()) emit wizardFinished();
+        else { m_steps->setCurrentIndex(steps[position + 1]); updateNavigation(); }
     });
     connect(m_buildButton, &QPushButton::clicked, this, &FormatterPage::buildPreview);
     connect(m_selectRecommendedButton, &QPushButton::clicked, this, [this] { setRecommendedSelection(true); });
@@ -164,8 +170,10 @@ void FormatterPage::startWizard() {
     m_actualRenamed = 0;
     m_actualCollectionAdded = 0;
     for (QTableWidget *value : {m_unused, m_duplicates, m_rename, m_collection}) value->setRowCount(0);
-    m_summary->setPlainText(QStringLiteral("Optimization is open.\n\nNo heavy scan was started yet.\nPress Build Optimization Preview to calculate unused objects, duplicate merges, rename items, Data Collection additions, and the final summary."));
-    m_details->setPlainText(QStringLiteral("1. Press Build Optimization Preview.\n2. Review every item and compare XML here.\n3. Keep recommendations checked or clear individual items.\n4. Save on step 5."));
+    m_summary->setPlainText(m_duplicateMergeEnabled
+        ? QStringLiteral("Optimization is open.\n\nNo heavy scan was started yet.\nPress Build Optimization Preview to calculate unused objects, duplicate merges, rename items, Data Collection additions, and the final summary.")
+        : QStringLiteral("Optimization is open.\n\nDuplicate Merge is disabled in Settings and will be skipped.\nPress Build Optimization Preview to calculate unused objects, rename items, Data Collection additions, and the final summary."));
+    m_details->setPlainText(QStringLiteral("1. Press Build Optimization Preview.\n2. Review every item and compare XML here.\n3. Keep recommendations checked or clear individual items.\n4. Apply on step 4 and close when finished."));
     m_steps->setCurrentIndex(0);
     updateNavigation();
 }
@@ -211,13 +219,19 @@ void FormatterPage::buildPreview() {
         emit previewBuilt();
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run([result = m_result] { return calculatePlan(result); }));
+    watcher->setFuture(QtConcurrent::run([result = m_result, duplicates = m_duplicateMergeEnabled] { return calculatePlan(result, duplicates); }));
 }
 void FormatterPage::updateNavigation() {
-    const int step = m_steps->currentIndex(); m_stepLabel->setText(QStringLiteral("Step %1 of 5 - %2").arg(step + 1).arg(m_steps->tabText(step)));
-    m_backButton->setEnabled(step > 0 && !m_building && !m_applying);
-    m_nextButton->setEnabled(!m_building && !m_applying && (step < 4 ? m_planBuilt : (m_planBuilt && (m_planConfirmed || m_hasAppliedChanges))));
-    m_nextButton->setText(step < 4 ? QStringLiteral("Next") : QStringLiteral("Save Optimization"));
+    const int step = m_steps->currentIndex();
+    const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled);
+    const int position = qMax(0, steps.indexOf(step));
+    m_stepLabel->setText(QStringLiteral("Step %1 of %2 - %3").arg(position + 1).arg(steps.size()).arg(m_steps->tabText(step)));
+    m_backButton->setEnabled(position > 0 && !m_building && !m_applying);
+    const bool summary = step == 4;
+    m_nextButton->setEnabled(!m_building && !m_applying && (!summary ? m_planBuilt : (m_hasAppliedChanges || (m_planBuilt && m_planConfirmed))));
+    m_nextButton->setText(!summary ? QStringLiteral("Next")
+                                   : m_hasAppliedChanges ? QStringLiteral("Close Optimization")
+                                                         : QStringLiteral("Apply Complete"));
     m_buildButton->setEnabled(!m_planBuilt && !m_building && !m_applying);
     m_buildButton->setText(m_applying ? QStringLiteral("Applying Plan...")
                                       : m_building ? QStringLiteral("Building Preview...")
@@ -416,7 +430,7 @@ OptimizationWizardSelection FormatterPage::currentSelection() const
         if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
         result.unused.append(nodeRefFromIndices(item->data(Qt::UserRole).toInt()));
     }
-    for (int row = 0; row < m_duplicates->rowCount(); ++row) {
+    if (m_duplicateMergeEnabled) for (int row = 0; row < m_duplicates->rowCount(); ++row) {
         const QTableWidgetItem *item = m_duplicates->item(row, 0);
         if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
         WizardMergeSelection selection;
@@ -440,4 +454,11 @@ OptimizationWizardSelection FormatterPage::currentSelection() const
     }
     result.collectionFamilyRoots.removeDuplicates();
     return result;
+}
+
+void FormatterPage::setDuplicateMergeEnabled(bool enabled)
+{
+    m_duplicateMergeEnabled = enabled;
+    if (!enabled && m_steps && m_steps->currentIndex() == 1) m_steps->setCurrentIndex(2);
+    updateNavigation();
 }

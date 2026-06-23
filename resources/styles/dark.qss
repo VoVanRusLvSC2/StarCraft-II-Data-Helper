@@ -40,7 +40,14 @@ QTabBar::tab:focus {
 QPushButton:hover,
 QToolBar#mainToolbar QToolButton:hover {
     border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largeover_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
-    color: #fff1e4;
+    color: #effff7;
+    font-weight: 700;
+}
+
+QPushButton[textPulse="true"],
+QToolButton[textPulse="true"] {
+    color: #ffffff;
+    font-weight: 800;
 }
 
 QPushButton:pressed,
@@ -56,9 +63,20 @@ QToolBar#mainToolbar QToolButton:disabled {
 }
 
 QToolBar#mainToolbar QToolButton {
-    min-width: 112px;
+    min-width: 152px;
     min-height: 34px;
     margin: 0;
+    font-weight: 700;
+}
+
+QPushButton#analysisCancelButton {
+    min-width: 220px;
+    min-height: 34px;
+    padding: 4px 24px;
+    font-weight: 700;
+}
+
+QPushButton#analysisCancelButton:hover {
     font-weight: 700;
 }
 
@@ -491,8 +509,9 @@ QTreeView::item:hover,
 QTableView::item:hover,
 QTableWidget::item:hover,
 QListWidget::item:hover {
-    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
-    color: #eafff8;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+    font-weight: 700;
 }
 
 QTreeView::item:selected,

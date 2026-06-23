@@ -23,6 +23,12 @@ set(PUGIXML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(PUGIXML_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/pugixml EXCLUDE_FROM_ALL)
 
+set(STORM_SKIP_INSTALL ON CACHE BOOL "" FORCE)
+set(STORM_USE_BUNDLED_LIBRARIES ON CACHE BOOL "" FORCE)
+set(STORM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(STORM_UNICODE ON CACHE BOOL "" FORCE)
+add_subdirectory(third_party/StormLib EXCLUDE_FROM_ALL)
+
 add_library(nlohmann_json INTERFACE)
 add_library(nlohmann_json::nlohmann_json ALIAS nlohmann_json)
 target_include_directories(nlohmann_json INTERFACE
@@ -114,8 +120,11 @@ target_link_libraries(SC2DataHelper PRIVATE
     Qt6::Concurrent
     spdlog::spdlog_header_only
     pugixml
+    StormLib::storm
     nlohmann_json::nlohmann_json
 )
+
+target_compile_definitions(SC2DataHelper PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
 
 if (WIN32)
     target_link_libraries(SC2DataHelper PRIVATE winmm)
@@ -172,8 +181,11 @@ target_link_libraries(SC2DataHelperTests PRIVATE
     Qt6::Test
     Qt6::Widgets
     pugixml
+    StormLib::storm
     nlohmann_json::nlohmann_json
 )
+
+target_compile_definitions(SC2DataHelperTests PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
 
 if (SC2DH_HAVE_LIBZIP)
     target_compile_definitions(SC2DataHelperTests PRIVATE SC2DH_USE_LIBZIP=1)

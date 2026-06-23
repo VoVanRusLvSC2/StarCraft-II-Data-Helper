@@ -66,6 +66,7 @@ public:
     void recordCollectionResult(int added);
     void setApplyingState(bool applying, const QString &message = {});
     void rebuildAfterApply();
+    void setDuplicateMergeEnabled(bool enabled);
     OptimizationWizardSelection currentSelection() const;
 signals:
     void previewBuilt();
@@ -109,5 +110,6 @@ private:
     bool m_applying = false;
     bool m_planConfirmed = false;
     bool m_hasAppliedChanges = false;
+    bool m_duplicateMergeEnabled = false;
     int m_actualUnused = 0, m_actualDuplicates = 0, m_actualRedirected = 0, m_actualRenamed = 0, m_actualCollectionAdded = 0;
 };

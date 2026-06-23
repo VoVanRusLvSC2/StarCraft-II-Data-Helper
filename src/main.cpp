@@ -1,7 +1,9 @@
 #include "app/MainWindow.h"
 
 #include <QApplication>
+#include <QCursor>
 #include <QIcon>
+#include <QPixmap>
 
 int main(int argc, char *argv[])
 {
@@ -11,8 +13,11 @@ int main(int argc, char *argv[])
     QApplication::setOrganizationDomain(QStringLiteral("local"));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
 
+    const QPixmap cursorPixmap(QStringLiteral(":/cursors/cursor.png"));
+    if (!cursorPixmap.isNull()) QApplication::setOverrideCursor(QCursor(cursorPixmap, 2, 2));
+
     MainWindow window;
-    window.showFullScreen();
+    window.show();
 
     return app.exec();
 }

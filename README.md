@@ -1,94 +1,103 @@
 # StarCraft II Data Helper
 
-**StarCraft II Data Helper** is a Windows desktop tool for analyzing and optimizing
-StarCraft II XML data in maps, mods, and component folders. It helps SC2 modders
-clean catalog data, inspect references, safely merge duplicates, and maintain
-Data Collections without editing every XML file by hand.
+StarCraft II Data Helper is a Windows desktop tool for analyzing and optimizing
+StarCraft II catalog XML in `.SC2Map`, `.SC2Mod`, extracted component folders,
+and standalone XML files.
 
-[Download the latest version from Releases](https://github.com/VoVanRusLvSC2/StarCraft-II-Data-Helper/releases)
+Main goal: make SC2 data cleanup safer and faster without hand-editing every
+catalog file.
 
-> The project is under active development. Always keep a copy of your map or mod
-> and review the generated preview before applying changes.
+[Download the latest build from Releases](https://github.com/VoVanRusLvSC2/StarCraft-II-Data-Helper/releases)
 
-## Features
+## What it does
 
-### Remove unused data objects
+- Analyze XML catalogs, references, duplicate bodies, and unused objects
+- Build and update Data Collections for supported editor catalog objects
+- Preview and safely remove unused objects with backup-first flow
+- Find exact duplicate XML bodies, redirect references, and merge safely
+- Preview Rename To Standard operations for unit-family style data
+- Show full XML source with syntax highlighting
+- Open an Optimization Wizard for batch review before apply
 
-Find catalog objects that have no incoming XML, script, or text references.
-Objects are never deleted automatically: every candidate must be selected and
-previewed by the user. Whitelisted, root, runtime-protected, and referenced
-objects are blocked from deletion.
+## Main feature: Data Collection
 
-### Find and merge exact duplicates
+The tool can create or update `DataCollectionData.xml` and preserve existing
+collections instead of recreating the file from scratch.
 
-Detect objects of the same type with identical normalized XML bodies. Choose
-which object to keep, preview every affected reference, redirect references to
-the kept ID, and then remove the duplicate. Replacement is token-aware, so an ID
-inside a longer name is not changed accidentally.
+Supported workflow:
 
-### Rename data objects *(beta)*
+- detect related families from real catalog links
+- reuse existing `CDataCollection`, `CDataCollectionUnit`,
+  `CDataCollectionAbil`, and `CDataCollectionUpgrade`
+- add missing `DataRecord` entries for supported real objects
+- keep existing records, metadata, and unrelated XML nodes
+- update archive `(listfile)` when needed
 
-Build a preview for standardizing related unit-family IDs and update supported
-references. Rename operations remain review-first because custom maps can use
-project-specific naming and runtime references.
+The tool works with real SC2 object IDs. It can also handle non-standard naming
+when the map already contains existing custom IDs outside the `CollectionID@Child`
+style.
 
-### Build and update Data Collections
+## Safety
 
-Add objects from all supported StarCraft II Editor catalogs to Data Collections,
-not only units. This includes related Actors, Models, Sounds, Weapons, Abilities,
-Effects, Behaviors, Validators, Requirements, Upgrades, and other recognized
-data types. For a unit family, the tool creates or updates its
-`CDataCollectionUnit` container and adds the missing catalog records.
+Destructive operations are preview-first and backup-first.
 
-Existing collections, records, custom attributes, metadata, and unrelated XML
-nodes are preserved. The tool also creates or updates the archive `(listfile)`
-entry when required.
+- No automatic deletion
+- Duplicate merge redirects references before delete
+- Unused-object cleanup is manual only
+- Rollback is used on apply failure
+- Archive mode stays conservative when binary references cannot be proven
 
-### Analysis and inspection
+## Main tools
 
-- Browse SC2 catalog objects and their properties.
-- Inspect incoming and outgoing dependencies.
-- Visualize the reference graph.
-- View complete source XML with highlighting.
-- Review warnings and optimization reports per file.
+### Unused Objects
 
-## Safe optimization workflow
+Find catalog objects with no incoming XML references and no script/text usage.
+Whitelisted, protected, and referenced objects are blocked.
 
-1. Open an `.SC2Map`, `.SC2Mod`, XML file, or extracted component folder.
-2. Run **Analyze**.
-3. Open **Optimization** and build the preview.
-4. Review and select changes in all five steps.
-5. Apply the plan and save only after checking the summary.
+### Duplicate Merge
 
-Destructive operations are preview-first and backup-first. Folder/XML mode can
-apply verified changes. Archive operations are limited when binary references
-cannot be checked safely.
+Detect exact duplicate normalized XML bodies for the same object type, preview
+reference redirects, then keep one object and remove the duplicate safely.
 
-## Building from source
+### Rename To Standard
+
+Preview rename plans for unit-family style data. This remains review-first
+because many maps use custom naming rules.
+
+### Optimization Wizard
+
+Build one batch plan, review every step, apply changes, refresh analysis, then
+close the wizard.
+
+## Typical usage
+
+1. Open an `.SC2Map`, `.SC2Mod`, folder, or XML file
+2. Run `Analyze`
+3. Review Data Collection, Unused Objects, Duplicate Merge, or Optimization
+4. Preview the change
+5. Apply only after checking the result
+
+## Build from source
 
 Requirements:
 
 - Windows 10 or Windows 11
-- CMake 3.24 or newer
-- Qt 6.5 or newer with Widgets, Test, and Concurrent
-- A C++20 compiler such as Visual Studio 2022
+- CMake 3.24+
+- Qt 6.5+ with `Widgets`, `Concurrent`, and `Test`
+- Visual Studio 2022 or another C++20 compiler
 
 ```powershell
 cmake -S . -B build
 cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-The executable is generated at `build/Release/SC2DataHelper.exe` when using the
-Visual Studio generator.
+Release executable:
 
-## Important notes
+`build/Release/SC2DataHelper.exe`
 
-- Test the optimized copy in the StarCraft II Editor before publishing it.
-- Script-generated and binary references cannot always be proven from XML alone.
-- This is an independent community project and is not affiliated with or
-  endorsed by Blizzard Entertainment.
+## Notes
 
-## Contributing
-
-Bug reports and reproducible SC2 XML examples are welcome through
-[GitHub Issues](https://github.com/VoVanRusLvSC2/StarCraft-II-Data-Helper/issues).
+- Always test the optimized copy in StarCraft II Editor
+- XML analysis cannot prove every binary/runtime reference inside archives
+- This is a community project and is not affiliated with Blizzard Entertainment

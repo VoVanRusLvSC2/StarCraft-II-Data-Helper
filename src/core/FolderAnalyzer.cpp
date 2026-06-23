@@ -318,6 +318,7 @@ bool FolderAnalyzer::populateReferenceIds(AnalysisResult *result,
     }
 
     const QRegularExpression quotedValueRe(QStringLiteral("\"([^\"]*)\""));
+    const QRegularExpression xmlTokenRe(QStringLiteral("\\b[A-Za-z_][A-Za-z0-9_@]*\\b"));
     for (int nodeIndex = 0; nodeIndex < result->nodes.size(); ++nodeIndex)
     {
         if (nodeIndex % 25 == 0)
@@ -354,11 +355,11 @@ bool FolderAnalyzer::populateReferenceIds(AnalysisResult *result,
         {
             addCandidate(matchIterator.next().captured(1));
         }
-        // Text nodes and less conventional attribute quoting are still references.
-        for (const QString &knownId : knownIds)
-        {
-            if (knownId != node.id && tokenCount(node.serializedXml, knownId) > 0)
-                references.insert(knownId);
+        auto tokenIterator = xmlTokenRe.globalMatch(node.serializedXml);
+        while (tokenIterator.hasNext()) {
+            const QString token = tokenIterator.next().captured(0);
+            if (!token.isEmpty() && token != node.id && knownIds.contains(token))
+                references.insert(token);
         }
 
         node.referencedIds = references.values();
@@ -471,8 +472,21 @@ bool FolderAnalyzer::analyzeFolder(const QString &rootFolder,
     if (progress)
         progress(filePaths.size(), filePaths.size(), QString());
 
-    if (!populateReferenceIds(result, [&]
-                              { if (progress) progress(filePaths.size(), filePaths.size(), QString()); }, isCancelled))
+    return finalizeAnalysisResult(result, whitelistIds, errorMessage,
+                                  [&] {
+                                      if (progress)
+                                          progress(filePaths.size(), filePaths.size(), QString());
+                                  },
+                                  isCancelled);
+}
+
+bool FolderAnalyzer::finalizeAnalysisResult(AnalysisResult *result,
+                                            const QSet<QString> &whitelistIds,
+                                            QString *errorMessage,
+                                            const std::function<void()> &heartbeat,
+                                            const std::function<bool()> &isCancelled) const
+{
+    if (!populateReferenceIds(result, heartbeat, isCancelled))
     {
         if (errorMessage)
             *errorMessage = QStringLiteral("Analysis canceled.");

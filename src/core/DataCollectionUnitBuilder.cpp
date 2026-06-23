@@ -71,7 +71,7 @@ void setAttribute(pugi::xml_node node, const char *name, const QString &value)
 void updateCollection(pugi::xml_node collection, const QString &parent, const QString &categories,
                        const QStringList &records)
 {
-    setAttribute(collection, "parent", parent);
+    if (!parent.isEmpty()) setAttribute(collection, "parent", parent);
     pugi::xml_node category = collection.child("EditorCategories");
     if (!category) category = collection.prepend_child("EditorCategories");
     setAttribute(category, "value", categories);
@@ -103,7 +103,7 @@ QString serializeNode(const pugi::xml_node &node)
 
 QString buildReport(const DataCollectionPreviewReport &preview, const QString &finalResult)
 {
-    QString report = QStringLiteral("Data Collection Preview\nSelected family: %1\nCurrent real unit ID: %1\nRequested unit name: %2\nCollection ID: %1\nParent: %3\nEditor categories: %4\nTarget file: %5\nArchive entry: %6\nListfile: %7\nListfile update required: %8\n\nReal object IDs / DataRecord aliases\n")
+    QString report = QStringLiteral("Data Collection Preview\nSelected family: %1\nCurrent real unit ID: %1\nRequested unit name: %2\nCollection ID: %1\nParent: %3\nEditor categories: %4\nTarget file: %5\nArchive entry: %6\nListfile: %7\nListfile update required: %8\n\nReal object IDs / DataRecord entries\n")
                          .arg(preview.request.family.rootId,
                               preview.request.requestedUnitId.isEmpty() ? preview.request.family.rootId : preview.request.requestedUnitId,
                               preview.request.parent, preview.request.editorCategories, preview.targetFile,
@@ -151,7 +151,7 @@ bool listfileContains(const QString &path, const QString &entry)
     return false;
 }
 
-QByteArray buildCollectionDocument(const QString &targetFile, const QString &id, const QString &parent,
+QByteArray buildCollectionDocument(const QString &targetFile, const QString &elementName, const QString &id, const QString &parent,
                                    const QString &categories, const QStringList &records, QString *error)
 {
     pugi::xml_document doc;
@@ -168,9 +168,9 @@ QByteArray buildCollectionDocument(const QString &targetFile, const QString &id,
     }
     pugi::xml_node catalog = doc.child("Catalog");
     if (!catalog) catalog = doc.append_child("Catalog");
-    pugi::xml_node collection = findByTypeAndId(doc, QStringLiteral("CDataCollectionUnit"), id);
+    pugi::xml_node collection = findByTypeAndId(doc, elementName, id);
     if (!collection) {
-        collection = catalog.append_child("CDataCollectionUnit");
+        collection = catalog.append_child(elementName.toUtf8().constData());
         setAttribute(collection, "id", id);
     }
     updateCollection(collection, parent, categories, records);
@@ -207,14 +207,14 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
         result.warnings << QStringLiteral("Select a unit family."); result.reportText = buildReport(result, QStringLiteral("blocked")); return result;
     }
     const QString root = request.family.rootId;
-    const QString requestedUnitId = request.requestedUnitId.trimmed().isEmpty() ? root : request.requestedUnitId.trimmed();
-    const bool nameMatchesRealUnit = requestedUnitId == root;
-    if (!nameMatchesRealUnit)
-        result.warnings << QStringLiteral("New unit name does not match the real CUnit ID. Run Rename To Standard first; Data Collection will not rename real XML IDs.");
+    const QString requestedCollectionId = request.requestedUnitId.trimmed().isEmpty() ? root : request.requestedUnitId.trimmed();
+    const bool nameMatchesCollection = requestedCollectionId == root;
+    if (!nameMatchesCollection)
+        result.warnings << QStringLiteral("The requested Collection ID differs from the detected CollectionID@ child prefix. Rename the real XML IDs first.");
     const DataNode &rootNode = analysis.nodes[request.family.rootNodeIndex];
     const DataNode *existingCollectionNode = nullptr;
     for (const DataNode &node : analysis.nodes)
-        if (node.elementName.compare(QStringLiteral("CDataCollectionUnit"), Qt::CaseInsensitive) == 0 && node.id == root)
+        if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive) && node.id == root)
             existingCollectionNode = &node;
     result.existingCollection = existingCollectionNode != nullptr;
     result.targetFile = existingCollectionNode ? existingCollectionNode->sourceFile : collectionFilePath(rootNode.sourceFile);
@@ -240,50 +240,57 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     QHash<int, UnitFamilyObject> familyObjects;
     for (const UnitFamilyObject &object : request.family.objects) familyObjects.insert(object.nodeIndex, object);
     bool standardized = true;
+    int linkedObjectCount = 0;
     for (const UnitFamilyObject &object : request.family.objects) {
         const DataNode &node = analysis.nodes[object.nodeIndex];
         DataCollectionEntryProposal proposal;
         proposal.nodeIndex = object.nodeIndex; proposal.realType = node.elementName; proposal.realId = node.id;
         proposal.role = object.role; proposal.confidence = object.confidence; proposal.included = included.contains(object.nodeIndex);
+        const bool validCollectionId = node.id.compare(root, Qt::CaseInsensitive) == 0
+            || node.id.startsWith(root + QLatin1Char('@'), Qt::CaseInsensitive);
         proposal.alias = mapper.aliasFor(node, root, object.role);
         if (proposal.alias.isEmpty()) {
-            proposal.status = QStringLiteral("Manual Review");
+            proposal.status = QStringLiteral("Manual Review: unsupported catalog type");
             result.manualReviewObjects << node.id;
             standardized = false;
         } else if (object.role == UnitFamilyRole::ManualReview) {
             result.manualReviewObjects << node.id;
             if (proposal.included && request.confirmNonStandard) {
                 if (knownAliases.contains(proposal.alias)) proposal.status = QStringLiteral("Already exists (manually confirmed)");
-                else { proposal.status = QStringLiteral("Will add (manually confirmed)"); result.recordsToAdd << proposal.alias; }
+                else { proposal.status = QStringLiteral("Will add (manually confirmed)"); result.recordsToAdd << proposal.alias; ++linkedObjectCount; }
             } else proposal.status = QStringLiteral("Manual Review");
-        } else if (knownAliases.contains(proposal.alias)) proposal.status = QStringLiteral("Already exists");
-        else if (proposal.included) { proposal.status = QStringLiteral("Will add"); result.recordsToAdd << proposal.alias; }
+        } else if (knownAliases.contains(proposal.alias)) {
+            proposal.status = validCollectionId ? QStringLiteral("Already exists")
+                                                : QStringLiteral("Already exists (non-standard ID)");
+            ++linkedObjectCount;
+        } else if (proposal.included) {
+            proposal.status = validCollectionId ? QStringLiteral("Will add")
+                                                : QStringLiteral("Will add (non-standard ID)");
+            result.recordsToAdd << proposal.alias;
+            ++linkedObjectCount;
+        }
         else proposal.status = QStringLiteral("Excluded");
-        if (object.role != UnitFamilyRole::Unit && !node.id.startsWith(root, Qt::CaseInsensitive)) standardized = false;
         result.entries << proposal;
+        if (!validCollectionId)
+            standardized = false;
     }
     result.familyStandardized = standardized;
-    if (!standardized) result.warnings << QStringLiteral("Family contains non-standard real IDs. Run Rename To Standard first.");
-    if (!standardized && !request.confirmNonStandard) result.warnings << QStringLiteral("Manual confirmation is required to preview a non-standard family.");
-
-    const QStringList expectedSuffixes{QString(), QStringLiteral("Actor"), QStringLiteral("Button"), QStringLiteral("Model"),
-        QStringLiteral("DeathModel"), QStringLiteral("DeathFireModel"), QStringLiteral("DeathDisintegrateModel"),
-        QStringLiteral("DeathBlastModel"), QStringLiteral("PortraitModel"), QStringLiteral("DeathVoice"), QStringLiteral("Death"),
-        QStringLiteral("Attack"), QStringLiteral("Help"), QStringLiteral("Pissed"), QStringLiteral("Yes"), QStringLiteral("What"), QStringLiteral("Ready")};
-    QSet<QString> ids; for (const DataNode &node : analysis.nodes) ids.insert(node.id);
-    for (const QString &suffix : expectedSuffixes) if (!ids.contains(root + suffix)) result.missingExpectedObjects << root + suffix;
-    if (request.parent == QStringLiteral("UnitGround") && !ids.contains(QStringLiteral("UnitGround")))
-        result.warnings << QStringLiteral("Parent UnitGround was not found in loaded data; allowed as custom parent.");
+    if (!standardized)
+        result.warnings << QStringLiteral("Family contains existing real IDs outside CollectionID / CollectionID@Child format. They can still be linked, but naming is non-standard.");
+    if (!result.existingCollection && linkedObjectCount < 2)
+        result.warnings << QStringLiteral("A new collection requires at least two existing related objects; a single standard override is not a collection candidate.");
 
     QStringList allRecords = existing;
     for (const QString &entry : result.recordsToAdd) if (!allRecords.contains(entry)) allRecords << entry;
     sortEntries(&allRecords);
     QString generatedError;
-    const QByteArray generated = buildCollectionDocument(result.targetFile, root, request.parent,
+    const QString elementName = existingCollectionNode ? existingCollectionNode->elementName : request.family.collectionElementName;
+    const QByteArray generated = buildCollectionDocument(result.targetFile, elementName, root, request.parent,
                                                          request.editorCategories, allRecords, &generatedError);
     result.generatedXml = QString::fromUtf8(generated);
     if (!generatedError.isEmpty()) result.warnings << generatedError;
-    result.valid = (standardized || request.confirmNonStandard) && nameMatchesRealUnit && generatedError.isEmpty();
+    result.valid = nameMatchesCollection && generatedError.isEmpty()
+        && (result.existingCollection || linkedObjectCount >= 2);
     result.reportText = buildReport(result, QStringLiteral("Preview only; no files modified"));
     return result;
 }
@@ -346,7 +353,7 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
     if (!parsed) {
         result.error = QStringLiteral("Collection verification failed: %1").arg(parsed.description()); rollback(); return result;
     }
-    const pugi::xml_node verified = findByTypeAndId(verifiedDocument, QStringLiteral("CDataCollectionUnit"), request.family.rootId);
+    const pugi::xml_node verified = findByTypeAndId(verifiedDocument, request.family.collectionElementName, request.family.rootId);
     if (!verified) { result.error = QStringLiteral("Collection verification failed: object missing."); rollback(); return result; }
     QStringList verifyDuplicates; const QStringList verifiedEntries = existingEntries(verified, &verifyDuplicates);
     for (const QString &entry : plan.recordsToAdd) if (!verifiedEntries.contains(entry)) {

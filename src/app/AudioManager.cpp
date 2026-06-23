@@ -46,13 +46,11 @@ void AudioManager::initialize()
 {
     if (m_initialized)
     {
-        applySettings();
         return;
     }
 
     m_runtimeTrackPath = ensureRuntimeTrackPath();
     m_initialized = true;
-    applySettings();
 }
 
 void AudioManager::applySettings()
@@ -142,20 +140,15 @@ void AudioManager::startMusic()
     }
 
     stopMusic();
-    const QString escapedPath = QDir::toNativeSeparators(m_runtimeTrackPath).replace(QStringLiteral("\""), QStringLiteral("\"\""));
-    const QString openCommand = QStringLiteral("open \"%1\" type waveaudio alias sc2dh_music").arg(escapedPath);
-    mciSendStringW(reinterpret_cast<LPCWSTR>(openCommand.utf16()), nullptr, 0, nullptr);
-    const int volume = int(clampVolume(musicVolume()) * 1000.0);
-    const QString volumeCommand = QStringLiteral("setaudio sc2dh_music volume to %1").arg(volume);
-    mciSendStringW(reinterpret_cast<LPCWSTR>(volumeCommand.utf16()), nullptr, 0, nullptr);
-    mciSendStringW(L"play sc2dh_music repeat", nullptr, 0, nullptr);
+    PlaySoundW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(m_runtimeTrackPath).utf16()),
+               nullptr,
+               SND_FILENAME | SND_ASYNC | SND_LOOP | SND_NODEFAULT);
 #endif
 }
 
 void AudioManager::stopMusic()
 {
 #ifdef Q_OS_WIN
-    mciSendStringW(L"stop sc2dh_music", nullptr, 0, nullptr);
-    mciSendStringW(L"close sc2dh_music", nullptr, 0, nullptr);
+    PlaySoundW(nullptr, nullptr, 0);
 #endif
 }

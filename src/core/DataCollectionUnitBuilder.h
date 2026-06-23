@@ -20,8 +20,8 @@ struct DataCollectionBuildRequest
 {
     UnitFamily family;
     QString requestedUnitId;
-    QString parent = QStringLiteral("UnitGround");
-    QString editorCategories = QStringLiteral("DataFamily:Campaign,DataGroup:Unit,ObjectType:Hero,Race:Terran");
+    QString parent;
+    QString editorCategories;
     QSet<int> includedNodeIndices;
     bool confirmNonStandard = false;
 };

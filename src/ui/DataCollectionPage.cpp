@@ -19,9 +19,11 @@
 #include <QPushButton>
 #include <QPropertyAnimation>
 #include <QSignalBlocker>
+#include <QSyntaxHighlighter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabWidget>
+#include <QTextCharFormat>
 #include <QTextEdit>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -56,6 +58,34 @@ protected:
             }
         }
         return QObject::eventFilter(watched, event);
+    }
+};
+
+class XmlPreviewHighlighter final : public QSyntaxHighlighter
+{
+public:
+    explicit XmlPreviewHighlighter(QTextDocument *document) : QSyntaxHighlighter(document) {}
+
+protected:
+    void highlightBlock(const QString &text) override
+    {
+        apply(text, QRegularExpression(QStringLiteral("</?[^>\\s/]+")), QColor(QStringLiteral("#8bc5ff")), true);
+        apply(text, QRegularExpression(QStringLiteral("\\b[A-Za-z_:-]+(?=\\=)")), QColor(QStringLiteral("#ffd47a")), false);
+        apply(text, QRegularExpression(QStringLiteral("\"[^\"]*\"")), QColor(QStringLiteral("#9ef7b6")), false);
+        apply(text, QRegularExpression(QStringLiteral("<!--.*-->")), QColor(QStringLiteral("#8292a6")), false);
+    }
+
+private:
+    void apply(const QString &text, const QRegularExpression &regex, const QColor &color, bool bold)
+    {
+        QTextCharFormat format;
+        format.setForeground(color);
+        format.setFontWeight(bold ? QFont::Bold : QFont::Normal);
+        auto matches = regex.globalMatch(text);
+        while (matches.hasNext()) {
+            const auto match = matches.next();
+            setFormat(match.capturedStart(), match.capturedLength(), format);
+        }
     }
 };
 
@@ -113,9 +143,9 @@ DataCollectionPage::DataCollectionPage(QWidget *parent) : QWidget(parent)
     headerLayout->addLayout(nameRow);
     auto *fields = new QHBoxLayout;
     fields->addWidget(new QLabel(QStringLiteral("Parent:"), header));
-    m_parent = new QLineEdit(QStringLiteral("UnitGround"), header); fields->addWidget(m_parent);
+    m_parent = new QLineEdit(header); fields->addWidget(m_parent);
     fields->addWidget(new QLabel(QStringLiteral("Editor categories:"), header));
-    m_categories = new QLineEdit(QStringLiteral("DataFamily:Campaign,DataGroup:Unit,ObjectType:Hero,Race:Terran"), header);
+    m_categories = new QLineEdit(header);
     fields->addWidget(m_categories, 1);
     m_confirmNonStandard = new QCheckBox(QStringLiteral("Manually confirm non-standard family preview"), header);
     fields->addWidget(m_confirmNonStandard); headerLayout->addLayout(fields); layout->addWidget(header);
@@ -139,6 +169,8 @@ DataCollectionPage::DataCollectionPage(QWidget *parent) : QWidget(parent)
     layout->addWidget(m_entryTabs, 1);
     auto *previewRow = new QHBoxLayout;
     m_xml = new QTextEdit(this); m_xml->setReadOnly(true); m_xml->setPlaceholderText(QStringLiteral("Generated XML preview"));
+    m_xml->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
+    new XmlPreviewHighlighter(m_xml->document());
     m_warnings = new QTextEdit(this); m_warnings->setReadOnly(true); m_warnings->setPlaceholderText(QStringLiteral("Warnings and report"));
     previewRow->addWidget(m_xml, 1); previewRow->addWidget(m_warnings, 1); layout->addLayout(previewRow, 1);
     auto *buttons = new QHBoxLayout;
@@ -182,7 +214,7 @@ QTableWidget *DataCollectionPage::createEntryTable() const
 
 void DataCollectionPage::setAnalysisResult(const AnalysisResult &result)
 {
-    m_result = result; m_families = UnitFamilyDetector().detect(result);
+    m_result = result; m_families = UnitFamilyDetector().detectCollectionFamilies(result);
     const QSignalBlocker blocker(m_selector); m_selector->clear();
     for (const UnitFamily &family : m_families) m_selector->addItem(QStringLiteral("%1 (%2 objects)").arg(family.rootId).arg(family.objects.size()));
     {
@@ -192,7 +224,7 @@ void DataCollectionPage::setAnalysisResult(const AnalysisResult &result)
             const UnitFamily &family = m_families[familyIndex];
             auto *root = new QTreeWidgetItem(m_familyTree);
             root->setText(0, family.rootId);
-            root->setText(1, QStringLiteral("CDataCollectionUnit"));
+            root->setText(1, family.collectionElementName);
             root->setText(2, QStringLiteral("Main collection"));
             root->setText(4, QStringLiteral("%1 child objects").arg(family.objects.size()));
             root->setData(0, Qt::UserRole, familyIndex);
@@ -240,8 +272,8 @@ void DataCollectionPage::rebuildFamily()
                                    view.listfileNeedsUpdate ? QStringLiteral("will add entry") : QStringLiteral("entry found")));
     {
         const QSignalBlocker parentBlock(m_parent), categoryBlock(m_categories);
-        m_parent->setText(QStringLiteral("UnitGround"));
-        m_categories->setText(QStringLiteral("DataFamily:Campaign,DataGroup:Unit,ObjectType:Hero,Race:Terran"));
+        m_parent->clear();
+        m_categories->clear();
     }
     if (view.existingCollection) {
         for (const DataNode &node : m_result.nodes) if (node.elementName == QStringLiteral("CDataCollectionUnit") && node.id == request.family.rootId) {

@@ -19,6 +19,11 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+
+#ifdef SC2DH_USE_STORMLIB
+#include <StormLib.h>
+#endif
 
 #if defined(SC2DH_USE_LIBZIP) && __has_include(<zip.h>)
 #include <zip.h>
@@ -234,7 +239,32 @@ bool Sc2Archive::load(const QString &archivePath, QString *errorMessage)
     m_allEntries.clear();
     m_gameDataEntries.clear();
 
-#ifdef SC2DH_HAS_LIBZIP
+#ifdef SC2DH_USE_STORMLIB
+    HANDLE archive = nullptr;
+    if (!SFileOpenArchive(reinterpret_cast<const TCHAR *>(archivePath.utf16()), 0, 0, &archive)) {
+        if (errorMessage) *errorMessage = QStringLiteral("Unable to open SC2 archive (StormLib error %1).").arg(GetLastError());
+        return false;
+    }
+    SFILE_FIND_DATA found{};
+    HANDLE search = SFileFindFirstFile(archive, "*", &found, nullptr);
+    if (search) {
+        do {
+            const QString entryName = QString::fromUtf8(found.cFileName);
+            if (entryName.isEmpty()) continue;
+            m_allEntries.append(entryName);
+            if (isGameDataXml(entryName)) m_gameDataEntries.append(entryName);
+        } while (SFileFindNextFile(search, &found));
+        SFileFindClose(search);
+    }
+    SFileCloseArchive(archive);
+    m_allEntries.removeDuplicates();
+    m_gameDataEntries.removeDuplicates();
+    if (m_allEntries.isEmpty()) {
+        if (errorMessage) *errorMessage = QStringLiteral("The SC2 archive contains no enumerable entries.");
+        return false;
+    }
+    return true;
+#elif defined(SC2DH_HAS_LIBZIP)
     int err = 0;
     zip_t *archive = zip_open(QFile::encodeName(archivePath).constData(), ZIP_RDONLY, &err);
     if (!archive)
@@ -314,7 +344,45 @@ bool Sc2Archive::load(const QString &archivePath, QString *errorMessage)
 
 bool Sc2Archive::readEntry(const QString &entryName, QByteArray *bytes, QString *errorMessage) const
 {
-#ifdef SC2DH_HAS_LIBZIP
+#ifdef SC2DH_USE_STORMLIB
+    if (!bytes) {
+        if (errorMessage) *errorMessage = QStringLiteral("Internal error: bytes is null.");
+        return false;
+    }
+    HANDLE archive = nullptr;
+    if (!SFileOpenArchive(reinterpret_cast<const TCHAR *>(m_archivePath.utf16()), 0, 0, &archive)) {
+        if (errorMessage) *errorMessage = QStringLiteral("Unable to reopen SC2 archive (StormLib error %1).").arg(GetLastError());
+        return false;
+    }
+    const QByteArray archivedName = QDir::cleanPath(entryName).replace('/', '\\').toUtf8();
+    HANDLE file = nullptr;
+    if (!SFileOpenFileEx(archive, archivedName.constData(), SFILE_OPEN_FROM_MPQ, &file)) {
+        const DWORD error = GetLastError();
+        SFileCloseArchive(archive);
+        if (errorMessage) *errorMessage = QStringLiteral("Archive entry not found or invalid: %1 (StormLib error %2).").arg(entryName).arg(error);
+        return false;
+    }
+    DWORD high = 0;
+    const DWORD low = SFileGetFileSize(file, &high);
+    const quint64 size = (quint64(high) << 32) | low;
+    if ((low == SFILE_INVALID_SIZE && GetLastError() != ERROR_SUCCESS) || size > quint64(std::numeric_limits<int>::max())) {
+        SFileCloseFile(file);
+        SFileCloseArchive(archive);
+        if (errorMessage) *errorMessage = QStringLiteral("Archive entry is too large or invalid: %1.").arg(entryName);
+        return false;
+    }
+    bytes->resize(int(size));
+    DWORD actual = 0;
+    const bool read = size == 0 || SFileReadFile(file, bytes->data(), DWORD(size), &actual, nullptr);
+    SFileCloseFile(file);
+    SFileCloseArchive(archive);
+    if (!read || actual != DWORD(size)) {
+        bytes->clear();
+        if (errorMessage) *errorMessage = QStringLiteral("Failed to read archive entry: %1.").arg(entryName);
+        return false;
+    }
+    return true;
+#elif defined(SC2DH_HAS_LIBZIP)
     int err = 0;
     zip_t *archive = zip_open(QFile::encodeName(m_archivePath).constData(), ZIP_RDONLY, &err);
     if (!archive)
@@ -400,6 +468,121 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
                           const QStringList &removedEntries,
                           QString *errorMessage) const
 {
+#ifdef SC2DH_USE_STORMLIB
+    if (m_archivePath.isEmpty()) {
+        if (errorMessage) *errorMessage = QStringLiteral("No archive loaded.");
+        return false;
+    }
+
+    const QString tempPath = targetPath + QStringLiteral(".sc2dh.SC2Map");
+    QFile::remove(tempPath);
+    QFile::remove(targetPath);
+    if (!QFile::copy(m_archivePath, tempPath)) {
+        if (errorMessage) *errorMessage = QStringLiteral("Unable to create a working archive copy.");
+        return false;
+    }
+
+    HANDLE archive = nullptr;
+    if (!SFileOpenArchive(reinterpret_cast<const TCHAR *>(tempPath.utf16()), 0, 0, &archive)) {
+        QFile::remove(tempPath);
+        if (errorMessage) *errorMessage = QStringLiteral("StormLib could not open the working archive (error %1).").arg(GetLastError());
+        return false;
+    }
+
+    QTemporaryDir sources;
+    bool writeOk = sources.isValid();
+    QString writeError;
+    int fileIndex = 0;
+    for (auto it = replacementEntries.cbegin(); writeOk && it != replacementEntries.cend(); ++it) {
+        // StormLib maintains the internal listfile when entries are added or
+        // removed. Replacing that special file directly is not supported.
+        if (it.key().compare(QStringLiteral("(listfile)"), Qt::CaseInsensitive) == 0) continue;
+
+        const QString sourcePath = QDir(sources.path()).absoluteFilePath(QStringLiteral("replacement_%1.bin").arg(fileIndex++));
+        QSaveFile source(sourcePath);
+        if (!source.open(QIODevice::WriteOnly) || source.write(it.value()) != it.value().size() || !source.commit()) {
+            writeOk = false;
+            writeError = QStringLiteral("Unable to stage archive entry %1.").arg(it.key());
+            break;
+        }
+
+        const QByteArray archiveName = QDir::cleanPath(it.key()).replace('/', '\\').toUtf8();
+        const DWORD flags = MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS | MPQ_FILE_SINGLE_UNIT;
+        if (!SFileAddFileEx(archive, reinterpret_cast<const TCHAR *>(sourcePath.utf16()), archiveName.constData(),
+                            flags, MPQ_COMPRESSION_ZLIB, MPQ_COMPRESSION_NEXT_SAME)) {
+            writeOk = false;
+            writeError = QStringLiteral("StormLib could not write %1 (error %2).").arg(it.key()).arg(GetLastError());
+        }
+    }
+    for (const QString &entry : removedEntries) {
+        if (!writeOk) break;
+        const QByteArray archiveName = QDir::cleanPath(entry).replace('/', '\\').toUtf8();
+        if (!SFileRemoveFile(archive, archiveName.constData(), SFILE_OPEN_FROM_MPQ)) {
+            writeOk = false;
+            writeError = QStringLiteral("StormLib could not remove %1 (error %2).").arg(entry).arg(GetLastError());
+        }
+    }
+    if (writeOk && !SFileFlushArchive(archive)) {
+        writeOk = false;
+        writeError = QStringLiteral("StormLib could not flush the rewritten archive (error %1).").arg(GetLastError());
+    }
+    if (!SFileCloseArchive(archive) && writeOk) {
+        writeOk = false;
+        writeError = QStringLiteral("StormLib could not close the rewritten archive (error %1).").arg(GetLastError());
+    }
+    if (!writeOk) {
+        QFile::remove(tempPath);
+        if (errorMessage) *errorMessage = writeError;
+        return false;
+    }
+
+    Sc2Archive verification;
+    QString verifyError;
+    if (!verification.load(tempPath, &verifyError)) {
+        QFile::remove(tempPath);
+        if (errorMessage) *errorMessage = QStringLiteral("Rewritten archive verification failed: %1").arg(verifyError);
+        return false;
+    }
+    for (auto it = replacementEntries.cbegin(); it != replacementEntries.cend(); ++it) {
+        QByteArray actual;
+        if (!verification.readEntry(it.key(), &actual, &verifyError)) {
+            QFile::remove(tempPath);
+            if (errorMessage) *errorMessage = QStringLiteral("Rewritten entry verification failed: %1 (%2)").arg(it.key(), verifyError);
+            return false;
+        }
+        bool contentMatches = actual == it.value();
+        if (it.key().compare(QStringLiteral("(listfile)"), Qt::CaseInsensitive) == 0) {
+            const QString actualText = QString::fromUtf8(actual).replace('/', '\\');
+            contentMatches = true;
+            for (const QString &line : QString::fromUtf8(it.value()).split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts)) {
+                if (!actualText.contains(line.trimmed().replace('/', '\\'), Qt::CaseInsensitive)) {
+                    contentMatches = false;
+                    break;
+                }
+            }
+        }
+        if (!contentMatches) {
+            QFile::remove(tempPath);
+            if (errorMessage) *errorMessage = QStringLiteral("Rewritten entry verification failed: %1 (content mismatch)").arg(it.key());
+            return false;
+        }
+    }
+    for (const QString &entry : removedEntries) {
+        QByteArray unexpected;
+        QString ignored;
+        if (verification.readEntry(entry, &unexpected, &ignored)) {
+            QFile::remove(tempPath);
+            if (errorMessage) *errorMessage = QStringLiteral("Rewritten archive verification failed: removed entry remains: %1").arg(entry);
+            return false;
+        }
+    }
+    if (!QFile::rename(tempPath, targetPath)) {
+        QFile::remove(tempPath);
+        if (errorMessage) *errorMessage = QStringLiteral("Unable to finalize the rewritten archive copy.");
+        return false;
+    }
+    return true;
+#else
 #ifdef SC2DH_HAS_LIBZIP
     if (m_archivePath.isEmpty())
     {
@@ -644,5 +827,6 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         return false;
     }
     return true;
+#endif
 #endif
 }

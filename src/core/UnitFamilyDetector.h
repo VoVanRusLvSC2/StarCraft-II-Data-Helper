@@ -24,6 +24,7 @@ struct UnitFamily
 {
     int rootNodeIndex = -1;
     QString rootId;
+    QString collectionElementName = QStringLiteral("CDataCollectionUnit");
     QVector<UnitFamilyObject> objects;
 };
 
@@ -33,4 +34,5 @@ class UnitFamilyDetector
 {
 public:
     QVector<UnitFamily> detect(const AnalysisResult &analysis) const;
+    QVector<UnitFamily> detectCollectionFamilies(const AnalysisResult &analysis) const;
 };

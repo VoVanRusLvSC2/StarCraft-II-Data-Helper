@@ -134,6 +134,9 @@
   <qresource prefix="/icons">
     <file alias="Icon.png">textures/Icon.png</file>
   </qresource>
+  <qresource prefix="/cursors">
+    <file alias="cursor.png">cursors/cursor.png</file>
+  </qresource>
   <qresource prefix="/">
     <file>styles/dark.qss</file>
   </qresource>

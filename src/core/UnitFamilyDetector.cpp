@@ -1,8 +1,12 @@
 #include "core/UnitFamilyDetector.h"
 
+#include "core/DataCollectionAliasMapper.h"
+
 #include <QHash>
 #include <QQueue>
 #include <QSet>
+
+#include <pugixml.hpp>
 
 namespace {
 
@@ -166,4 +170,106 @@ QVector<UnitFamily> UnitFamilyDetector::detect(const AnalysisResult &analysis) c
         families.append(family);
     }
     return families;
+}
+
+QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisResult &analysis) const
+{
+    DataCollectionAliasMapper mapper;
+    QHash<QString, QVector<int>> indicesByPrefix;
+    QHash<QString, int> nodeByRecord;
+    QHash<QString, const DataNode *> existingCollections;
+
+    for (int index = 0; index < analysis.nodes.size(); ++index) {
+        const DataNode &node = analysis.nodes[index];
+        const QString catalog = mapper.catalogType(node.elementName);
+        if (!catalog.isEmpty() && !node.id.isEmpty()) {
+            nodeByRecord.insert(catalog.toLower() + QChar(0x1f) + node.id.toLower(), index);
+            const int separator = node.id.indexOf(QLatin1Char('@'));
+            if (separator > 0) indicesByPrefix[node.id.left(separator)].append(index);
+        }
+        if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive) && !node.id.isEmpty())
+            existingCollections.insert(node.id, &node);
+    }
+
+    const QVector<UnitFamily> detectedFamilies = detect(analysis);
+    for (const UnitFamily &family : detectedFamilies) {
+        if (family.rootId.isEmpty() || family.rootId.contains(QLatin1Char('@'))
+            || indicesByPrefix.contains(family.rootId) || existingCollections.contains(family.rootId))
+            continue;
+
+        QVector<int> indices;
+        for (const UnitFamilyObject &object : family.objects) {
+            if (object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size())
+                continue;
+            const DataNode &node = analysis.nodes[object.nodeIndex];
+            if (mapper.catalogType(node.elementName).isEmpty())
+                continue;
+            if (object.role == UnitFamilyRole::ManualReview)
+                continue;
+            indices.append(object.nodeIndex);
+        }
+        std::sort(indices.begin(), indices.end());
+        indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+        if (indices.size() >= 2)
+            indicesByPrefix.insert(family.rootId, indices);
+    }
+
+    // Existing collections are supplemented from their real DataRecord
+    // entries. The referenced ID must already exist in the analyzed catalog.
+    for (auto it = existingCollections.cbegin(); it != existingCollections.cend(); ++it) {
+        pugi::xml_document fragment;
+        if (!fragment.load_string(it.value()->serializedXml.toUtf8().constData())) continue;
+        for (pugi::xml_node record : fragment.first_child().children("DataRecord")) {
+            const QString entry = QString::fromUtf8(record.attribute("Entry").value());
+            const QString catalog = entry.section(QLatin1Char(','), 0, 0).trimmed();
+            const QString id = entry.section(QLatin1Char(','), 1).trimmed();
+            const int index = nodeByRecord.value(catalog.toLower() + QChar(0x1f) + id.toLower(), -1);
+            if (index >= 0 && !indicesByPrefix[it.key()].contains(index)) indicesByPrefix[it.key()].append(index);
+        }
+    }
+
+    QStringList roots = indicesByPrefix.keys();
+    std::sort(roots.begin(), roots.end(), [](const QString &left, const QString &right) {
+        return left.compare(right, Qt::CaseInsensitive) < 0;
+    });
+    QVector<UnitFamily> result;
+    for (const QString &root : roots) {
+        QVector<int> indices = indicesByPrefix.value(root);
+        std::sort(indices.begin(), indices.end());
+        indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+        const bool existing = existingCollections.contains(root);
+        if (!existing && indices.size() < 2) continue;
+        if (indices.isEmpty()) continue;
+
+        UnitFamily family;
+        family.rootId = root;
+        family.rootNodeIndex = indices.front();
+        if (existing) {
+            family.collectionElementName = existingCollections.value(root)->elementName;
+        } else {
+            bool hasUnit = false;
+            bool allAbilities = true;
+            bool allUpgrades = true;
+            for (int index : indices) {
+                const QString type = analysis.nodes[index].elementName;
+                hasUnit = hasUnit || type.compare(QStringLiteral("CUnit"), Qt::CaseInsensitive) == 0;
+                allAbilities = allAbilities && type.startsWith(QStringLiteral("CAbil"), Qt::CaseInsensitive);
+                allUpgrades = allUpgrades && type.startsWith(QStringLiteral("CUpgrade"), Qt::CaseInsensitive);
+                if (type.compare(QStringLiteral("CUnit"), Qt::CaseInsensitive) == 0) family.rootNodeIndex = index;
+            }
+            family.collectionElementName = hasUnit ? QStringLiteral("CDataCollectionUnit")
+                : allAbilities ? QStringLiteral("CDataCollectionAbil")
+                : allUpgrades ? QStringLiteral("CDataCollectionUpgrade")
+                              : QStringLiteral("CDataCollection");
+        }
+
+        for (int index : indices) {
+            QString confidence = QStringLiteral("High");
+            QString reason = QStringLiteral("Real object ID starts with CollectionID@");
+            const UnitFamilyRole role = roleFromNode(analysis.nodes[index], root, &confidence, &reason);
+            family.objects.append({index, role, confidence, reason});
+        }
+        result.append(family);
+    }
+    return result;
 }

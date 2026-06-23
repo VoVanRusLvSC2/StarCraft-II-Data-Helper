@@ -23,6 +23,11 @@ public:
     QString buildAnalysisReport(const AnalysisResult &result) const;
     QString buildDryRunReport(const AnalysisResult &result, const QVector<int> &selectedRows) const;
     QString buildPlannedChangesReport(const AnalysisResult &result, const QVector<int> &selectedRows) const;
+    bool finalizeAnalysisResult(AnalysisResult *result,
+                                const QSet<QString> &whitelistIds,
+                                QString *errorMessage,
+                                const std::function<void()> &heartbeat = {},
+                                const std::function<bool()> &isCancelled = {}) const;
     bool populateReferenceIds(AnalysisResult *result,
                               const std::function<void()> &heartbeat = {},
                               const std::function<bool()> &isCancelled = {}) const;

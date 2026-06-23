@@ -52,6 +52,7 @@
 #include <QIcon>
 #include <QKeySequence>
 #include <QStatusBar>
+#include <QStyle>
 #include <QSlider>
 #include <QTabWidget>
 #include <QTabBar>
@@ -65,6 +66,7 @@
 #include <QTemporaryDir>
 #include <QToolButton>
 #include <QToolBar>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #ifdef Q_OS_WIN
@@ -186,17 +188,6 @@ namespace
                 return;
             }
             widget->installEventFilter(this);
-            if (auto *button = qobject_cast<QAbstractButton *>(widget))
-            {
-                if (!button->graphicsEffect())
-                {
-                    auto *effect = new QGraphicsDropShadowEffect(button);
-                    effect->setOffset(0, 0);
-                    effect->setBlurRadius(6.0);
-                    effect->setColor(QColor(78, 255, 190, 70));
-                    button->setGraphicsEffect(effect);
-                }
-            }
         }
 
     protected:
@@ -208,16 +199,7 @@ namespace
                 return QObject::eventFilter(watched, event);
             }
 
-            if (event->type() == QEvent::Enter || event->type() == QEvent::Leave)
-            {
-                if (auto *glow = qobject_cast<QGraphicsDropShadowEffect *>(button->graphicsEffect()))
-                {
-                    const bool hover = event->type() == QEvent::Enter;
-                    glow->setBlurRadius(hover ? 17.0 : 7.0);
-                    glow->setColor(hover ? QColor(72, 255, 178, 205) : QColor(78, 220, 205, 105));
-                }
-            }
-            else if (event->type() == QEvent::MouseButtonRelease)
+            if (event->type() == QEvent::MouseButtonRelease)
             {
                 auto *mouseEvent = static_cast<QMouseEvent *>(event);
                 if (mouseEvent->button() == Qt::LeftButton)
@@ -235,7 +217,8 @@ namespace
 #ifdef Q_OS_WIN
             if (settings.value(QStringLiteral("ui/buttonSounds"), true).toBool() && !m_soundData.isEmpty())
             {
-                PlaySoundA(reinterpret_cast<LPCSTR>(m_soundData.constData()), nullptr, SND_ASYNC | SND_MEMORY | SND_NODEFAULT);
+                PlaySoundA(reinterpret_cast<LPCSTR>(m_soundData.constData()), nullptr,
+                           SND_ASYNC | SND_MEMORY | SND_NODEFAULT | SND_NOSTOP);
             }
 #else
             QApplication::beep();
@@ -246,21 +229,16 @@ namespace
                 return;
             }
 
-            auto *effect = qobject_cast<QGraphicsDropShadowEffect *>(button->graphicsEffect());
-            if (!effect)
-            {
-                effect = new QGraphicsDropShadowEffect(button);
-                effect->setOffset(0, 0);
-                button->setGraphicsEffect(effect);
-            }
-
-            auto *animation = new QPropertyAnimation(effect, "blurRadius", button);
-            animation->setDuration(160);
-            animation->setKeyValueAt(0.0, effect->blurRadius());
-            animation->setKeyValueAt(0.5, 20.0);
-            animation->setKeyValueAt(1.0, 15.0);
-            animation->setEasingCurve(QEasingCurve::OutCubic);
-            animation->start(QAbstractAnimation::DeleteWhenStopped);
+            // Pulse the text only. A graphics effect on the whole button also
+            // glows the texture border and produces unwanted extra colors.
+            button->setProperty("textPulse", true);
+            button->style()->unpolish(button);
+            button->style()->polish(button);
+            QTimer::singleShot(150, button, [button] {
+                button->setProperty("textPulse", false);
+                button->style()->unpolish(button);
+                button->style()->polish(button);
+            });
         }
 
         QByteArray m_soundData;
@@ -316,7 +294,8 @@ MainWindow::MainWindow(QWidget *parent)
     setupLogging();
     setupTheme();
     AudioManager::instance()->initialize();
-    AudioManager::setMusicSettings(true, AudioManager::musicVolume());
+    QSettings settings;
+    setDuplicateMergeEnabled(settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), false).toBool());
     loadDefaultFolder();
 
     const QString rulesPath = runtimePath(QStringLiteral("config/rules.json"));
@@ -564,7 +543,7 @@ void MainWindow::showSettingsDialog()
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("toolDialog"));
     dialog.setWindowTitle(QStringLiteral("SC2 Data Helper Settings"));
-    dialog.setFixedSize(560, 380);
+    dialog.setFixedSize(600, 430);
     auto *layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(20, 18, 20, 18);
     layout->setSpacing(10);
@@ -594,18 +573,25 @@ void MainWindow::showSettingsDialog()
         musicValue->setText(QStringLiteral("Music volume: %1%").arg(value));
     });
     musicValue->setText(QStringLiteral("Music volume: %1%").arg(musicSlider->value()));
+    auto *duplicatesCheck = new QCheckBox(QStringLiteral("Enable Duplicate Merge in Optimization"), &dialog);
+    duplicatesCheck->setChecked(settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), false).toBool());
+    duplicatesCheck->setToolTip(QStringLiteral("Disabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
+    duplicatesCheck->setFocusPolicy(Qt::NoFocus);
     layout->addWidget(soundCheck);
     layout->addWidget(animationCheck);
     layout->addWidget(musicCheck);
     layout->addWidget(musicValue);
     layout->addWidget(musicSlider);
+    layout->addWidget(duplicatesCheck);
     layout->addStretch(1);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
         settings.setValue(QStringLiteral("ui/buttonSounds"), soundCheck->isChecked());
         settings.setValue(QStringLiteral("ui/buttonAnimations"), animationCheck->isChecked());
+        settings.setValue(QStringLiteral("optimization/duplicateMergeEnabled"), duplicatesCheck->isChecked());
         AudioManager::setMusicSettings(musicCheck->isChecked(), musicSlider->value() / 100.0);
+        setDuplicateMergeEnabled(duplicatesCheck->isChecked());
         dialog.accept();
     });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -711,18 +697,20 @@ void MainWindow::openSc2File()
         return;
     }
     const QFileInfo info(selected);
+    const bool previousOptimizationEnabled = m_dryRunAction && m_dryRunAction->isEnabled();
+    const bool previousReviewEnabled = m_applyAction && m_applyAction->isEnabled();
     if (info.suffix().compare(QStringLiteral("xml"), Qt::CaseInsensitive) == 0) m_sourceKind = SourceKind::XmlFile;
     else if (info.suffix().startsWith(QStringLiteral("SC2"), Qt::CaseInsensitive)) m_sourceKind = SourceKind::ArchiveFile;
     else m_sourceKind = SourceKind::Unknown;
-    m_result = AnalysisResult{};
     m_rootFolder = info.absolutePath();
     setCurrentSourcePath(selected);
     m_analysisPage->setFolderPath(selected);
     m_analysisPage->setModeLabel(QStringLiteral("Mode: ready to analyze"));
     m_analysisPage->setOutputText(QStringLiteral("File selected. Press Analyze to start scanning."));
-    refreshPages();
-    m_dryRunAction->setEnabled(false);
-    m_applyAction->setEnabled(false);
+    if (m_result.nodes.isEmpty())
+        refreshPages();
+    m_dryRunAction->setEnabled(previousOptimizationEnabled);
+    m_applyAction->setEnabled(previousReviewEnabled);
     logLine(QStringLiteral("File selected without analysis: %1").arg(selected));
 }
 
@@ -745,6 +733,8 @@ void MainWindow::analyzeFolder()
 bool MainWindow::loadPathAndAnalyze(const QString &path)
 {
     QFileInfo info(path);
+    const bool previousOptimizationEnabled = m_dryRunAction && m_dryRunAction->isEnabled();
+    const bool previousReviewEnabled = m_applyAction && m_applyAction->isEnabled();
     m_dryRunAction->setEnabled(false);
     m_applyAction->setEnabled(false);
     if (!info.exists())
@@ -801,6 +791,8 @@ bool MainWindow::loadPathAndAnalyze(const QString &path)
     if (!ok)
     {
         m_result = previousResult;
+        m_dryRunAction->setEnabled(previousOptimizationEnabled);
+        m_applyAction->setEnabled(previousReviewEnabled);
         m_activeProgressDialog = nullptr;
         progress.close();
         if (errorMessage == QStringLiteral("Analysis canceled.")) {
@@ -948,17 +940,10 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
         return false;
     }
 
-    QTemporaryDir extractionDir;
-    if (!extractionDir.isValid())
-    {
-        if (errorMessage)
-        {
-            *errorMessage = QStringLiteral("Unable to create a temporary directory for archive analysis.");
-        }
-        return false;
-    }
+    m_result = AnalysisResult{};
+    m_result.rootFolder = filePath;
+    XmlLoader loader;
 
-    const QString tempRoot = extractionDir.path();
     for (int entryIndex = 0; entryIndex < xmlEntries.size(); ++entryIndex)
     {
         const QString &entryName = xmlEntries[entryIndex];
@@ -982,41 +967,42 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
             return false;
         }
 
-        const QString targetPath = QDir(tempRoot).absoluteFilePath(QDir::cleanPath(entryName));
-        const QFileInfo targetInfo(targetPath);
-        QDir().mkpath(targetInfo.absolutePath());
-        QFile targetFile(targetPath);
-        if (!targetFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        ScannedFileInfo scanned;
+        scanned.filePath = entryName;
+        scanned.isXml = true;
+        scanned.isSc2DataLike = true;
+        scanned.size = xmlBytes.size();
+        m_result.scannedFiles.append(scanned);
+        m_result.sourceXmlByFile.insert(entryName, QString::fromUtf8(xmlBytes));
+
+        QVector<DataNode> fileNodes;
+        QString parseError;
+        if (!loader.extractNodes(entryName, xmlBytes, &fileNodes, &parseError))
         {
-            if (errorMessage)
-            {
-                *errorMessage = QStringLiteral("Failed to write extracted XML: %1").arg(entryName);
-            }
-            return false;
+            ParseErrorInfo error;
+            error.filePath = entryName;
+            error.message = parseError;
+            m_result.parseErrors.append(error);
+            continue;
         }
-        if (targetFile.write(xmlBytes) != xmlBytes.size())
-        {
-            if (errorMessage)
-            {
-                *errorMessage = QStringLiteral("Failed to write extracted XML: %1").arg(entryName);
-            }
-            return false;
-        }
-        targetFile.close();
+        m_result.nodes += fileNodes;
     }
 
-    if (!m_analyzer.analyzeFolder(tempRoot, m_whitelistIds, &m_result, errorMessage,
-        [this](int current, int total, const QString &file) {
-            if (!m_activeProgressDialog) return;
-            m_activeProgressDialog->setProgress(58 + (current * 27 / qMax(1, total)),
-                                                QStringLiteral("Analyzing extracted XML"), QFileInfo(file).fileName());
+    if (!m_analyzer.finalizeAnalysisResult(&m_result, m_whitelistIds, errorMessage,
+        [this] {
+            if (!m_activeProgressDialog)
+                return;
+            m_activeProgressDialog->setProgress(85,
+                                                QStringLiteral("Analyzing extracted XML"),
+                                                QStringLiteral("Building references, duplicate groups and candidates"));
             QApplication::processEvents();
-        }, [this] { return m_activeProgressDialog && m_activeProgressDialog->isCancelled(); }))
+        },
+        [this] { return m_activeProgressDialog && m_activeProgressDialog->isCancelled(); }))
     {
         return false;
     }
 
-    normalizeArchiveAnalysis(&m_result, tempRoot, filePath);
+    normalizeArchiveAnalysis(&m_result, QString(), filePath);
     return true;
 }
 
@@ -1024,14 +1010,16 @@ void MainWindow::normalizeArchiveAnalysis(AnalysisResult *analysis, const QStrin
                                           const QString &archivePath) const
 {
     if (!analysis) return;
-    QHash<QString, QString> relativeXml;
-    for (auto it = analysis->sourceXmlByFile.cbegin(); it != analysis->sourceXmlByFile.cend(); ++it)
-        relativeXml.insert(QDir(tempRoot).relativeFilePath(it.key()), it.value());
-    analysis->sourceXmlByFile = relativeXml;
-    for (ScannedFileInfo &file : analysis->scannedFiles)
-        file.filePath = QDir(tempRoot).relativeFilePath(file.filePath);
-    for (DataNode &node : analysis->nodes)
-        node.sourceFile = QDir(tempRoot).relativeFilePath(node.sourceFile);
+    if (!tempRoot.isEmpty()) {
+        QHash<QString, QString> relativeXml;
+        for (auto it = analysis->sourceXmlByFile.cbegin(); it != analysis->sourceXmlByFile.cend(); ++it)
+            relativeXml.insert(QDir(tempRoot).relativeFilePath(it.key()), it.value());
+        analysis->sourceXmlByFile = relativeXml;
+        for (ScannedFileInfo &file : analysis->scannedFiles)
+            file.filePath = QDir(tempRoot).relativeFilePath(file.filePath);
+        for (DataNode &node : analysis->nodes)
+            node.sourceFile = QDir(tempRoot).relativeFilePath(node.sourceFile);
+    }
     analysis->rootFolder = archivePath;
     // Binary placement/runtime references cannot be proven unused from XML.
     analysis->possibleUnusedNodeIndices.clear();
@@ -1565,10 +1553,24 @@ void MainWindow::showDryRunTab()
     auto *layout = new QVBoxLayout(&dialog); layout->setContentsMargins(0, 0, 0, 0);
     m_dryRunPage->setParent(&dialog); m_dryRunPage->show(); layout->addWidget(m_dryRunPage);
     m_dryRunPage->startWizard();
-    dialog.showFullScreen();
+    dialog.resize(1500, 900);
+    dialog.showNormal();
     dialog.exec();
     layout->removeWidget(m_dryRunPage); m_dryRunPage->setParent(this); m_dryRunPage->hide();
     m_optimizationDialog = nullptr;
+}
+
+void MainWindow::setDuplicateMergeEnabled(bool enabled)
+{
+    if (m_dryRunPage) m_dryRunPage->setDuplicateMergeEnabled(enabled);
+    if (!m_tabs || !m_duplicatesPage) return;
+    const int index = m_tabs->indexOf(m_duplicatesPage);
+    if (index < 0) return;
+    if (!enabled && m_tabs->currentWidget() == m_duplicatesPage) m_tabs->setCurrentWidget(m_analysisPage);
+    m_tabs->setTabVisible(index, enabled);
+    m_tabs->setTabEnabled(index, enabled);
+    m_tabs->setTabToolTip(index, enabled ? QStringLiteral("Duplicate Merge")
+                                         : QStringLiteral("Enable Duplicate Merge in Settings"));
 }
 
 int MainWindow::findNodeIndex(const AnalysisResult &analysis, const WizardNodeRef &ref) const
@@ -1608,7 +1610,16 @@ void MainWindow::applyOptimizationWizardPlan()
     }
 
     m_dryRunPage->setApplyingState(true, QStringLiteral("Applying selected optimization steps and saving files...\n\nThe wizard will rebuild the preview from updated files when the batch finishes."));
+    AnalysisProgressDialog applyProgress(this);
+    applyProgress.setTitleText(QStringLiteral("SC2 DATA APPLY"));
+    applyProgress.setCancelVisible(false);
+    applyProgress.setProgress(5, QStringLiteral("Preparing apply"), QStringLiteral("Building the selected optimization batch"));
+    applyProgress.show();
     QApplication::processEvents();
+    const auto updateApplyProgress = [&](int percent, const QString &primary, const QString &secondary = QString()) {
+        applyProgress.setProgress(percent, primary, secondary);
+        QApplication::processEvents();
+    };
 
     int removedUnused = 0;
     int removedDuplicates = 0;
@@ -1628,6 +1639,7 @@ void MainWindow::applyOptimizationWizardPlan()
     };
 
     if (m_sourceKind == SourceKind::ArchiveFile) {
+        updateApplyProgress(15, QStringLiteral("Preparing archive workspace"), QStringLiteral("Materializing XML and listfile"));
         QTemporaryDir workspace;
         AnalysisResult current;
         QString error;
@@ -1647,6 +1659,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 group.first = item.keep;
                 group.second.append(item.remove);
             }
+            updateApplyProgress(35, QStringLiteral("Applying duplicate merges"), QStringLiteral("Redirecting references and removing duplicate objects"));
             for (auto it = mergeGroups.cbegin(); failure.isEmpty() && it != mergeGroups.cend(); ++it) {
                 const int keepIndex = findNodeIndex(current, it.value().first);
                 if (keepIndex < 0) {
@@ -1675,10 +1688,11 @@ void MainWindow::applyOptimizationWizardPlan()
                 }
             }
 
-            QVector<UnitFamily> families = UnitFamilyDetector().detect(current);
+            QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(current);
             QHash<QString, UnitFamily> familyByRoot;
             for (const UnitFamily &family : families) familyByRoot.insert(family.rootId, family);
             bool collectionChanged = false;
+            updateApplyProgress(65, QStringLiteral("Applying Data Collection"), QStringLiteral("Adding selected collection records"));
             for (const QString &rootId : selection.collectionFamilyRoots) {
                 if (failure.isEmpty()) {
                     const auto match = familyByRoot.constFind(rootId);
@@ -1707,6 +1721,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 failure = error;
 
             if (failure.isEmpty() && !changedFiles.isEmpty()) {
+                updateApplyProgress(85, QStringLiteral("Saving archive"), QStringLiteral("Writing verified XML back to the SC2 archive"));
                 if (!commitArchiveChanges(workspace.path(), changedFiles, &archiveBackup, &error)) {
                     failure = error;
                 } else {
@@ -1726,6 +1741,7 @@ void MainWindow::applyOptimizationWizardPlan()
             if (index >= 0) unusedRows.append(index);
         }
         if (!unusedRows.isEmpty()) {
+            updateApplyProgress(20, QStringLiteral("Deleting unused objects"), QStringLiteral("Removing selected safe unused objects"));
             QString backupFolder;
             QStringList changedFiles;
             int removed = 0;
@@ -1748,6 +1764,7 @@ void MainWindow::applyOptimizationWizardPlan()
             group.first = item.keep;
             group.second.append(item.remove);
         }
+        updateApplyProgress(45, QStringLiteral("Applying duplicate merges"), QStringLiteral("Redirecting references and removing duplicate objects"));
         for (auto it = mergeGroups.cbegin(); failure.isEmpty() && it != mergeGroups.cend(); ++it) {
             const int keepIndex = findNodeIndex(current, it.value().first);
             if (keepIndex < 0) {
@@ -1781,6 +1798,7 @@ void MainWindow::applyOptimizationWizardPlan()
         for (const WizardRenameSelection &item : selection.rename)
             renameByFamily[item.familyRootId].append(item.node);
         StandardNamePlanner planner;
+        updateApplyProgress(60, QStringLiteral("Applying rename changes"), QStringLiteral("Updating IDs and references"));
         for (auto it = renameByFamily.cbegin(); failure.isEmpty() && it != renameByFamily.cend(); ++it) {
             const auto familyIt = familyByRoot.constFind(it.key());
             if (familyIt == familyByRoot.cend()) {
@@ -1813,10 +1831,14 @@ void MainWindow::applyOptimizationWizardPlan()
             for (const UnitFamily &family : families) familyByRoot.insert(family.rootId, family);
         }
 
+        QHash<QString, UnitFamily> collectionFamilyByRoot;
+        for (const UnitFamily &family : UnitFamilyDetector().detectCollectionFamilies(current))
+            collectionFamilyByRoot.insert(family.rootId, family);
+        updateApplyProgress(80, QStringLiteral("Applying Data Collection"), QStringLiteral("Adding selected collection records"));
         for (const QString &rootId : selection.collectionFamilyRoots) {
             if (!failure.isEmpty()) break;
-            const auto familyIt = familyByRoot.constFind(rootId);
-            if (familyIt == familyByRoot.cend()) {
+            const auto familyIt = collectionFamilyByRoot.constFind(rootId);
+            if (familyIt == collectionFamilyByRoot.cend()) {
                 warnings << QStringLiteral("Skipped Data Collection family %1 because it is no longer present after apply.").arg(rootId);
                 continue;
             }
@@ -1836,6 +1858,7 @@ void MainWindow::applyOptimizationWizardPlan()
     m_dryRunPage->setApplyingState(false);
 
     if (!failure.isEmpty()) {
+        applyProgress.close();
         loadPathAndAnalyze(m_currentSourcePath);
         QMessageBox::critical(this, QStringLiteral("Optimization Apply Failed"),
                               QStringLiteral("The optimization batch stopped:\n%1").arg(failure));
@@ -1843,6 +1866,7 @@ void MainWindow::applyOptimizationWizardPlan()
     }
 
     if (archiveAnalysisReady) {
+        updateApplyProgress(92, QStringLiteral("Refreshing analysis"), QStringLiteral("Rebuilding tables and reports from updated data"));
         m_rootFolder = QFileInfo(m_currentSourcePath).absolutePath();
         m_analysisPage->setFolderPath(m_currentSourcePath);
         m_analysisPage->setModeLabel(modeLabelFor(static_cast<int>(m_sourceKind)));
@@ -1857,6 +1881,8 @@ void MainWindow::applyOptimizationWizardPlan()
                              QStringLiteral("Changes were saved, but automatic re-analysis failed. Re-open Analyze to refresh the wizard view."));
         return;
     }
+    updateApplyProgress(100, QStringLiteral("Apply complete"), QStringLiteral("Optimization changes were saved successfully"));
+    applyProgress.close();
 
     if (removedUnused > 0) m_dryRunPage->recordUnusedResult(removedUnused);
     if (removedDuplicates > 0 || redirectedReferences > 0) m_dryRunPage->recordMergeResult(removedDuplicates, redirectedReferences);

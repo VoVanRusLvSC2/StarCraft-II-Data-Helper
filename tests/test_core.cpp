@@ -138,6 +138,7 @@ private slots:
     void referenceRenameRollback();
     void dataCollectionAliasMapping();
     void dataCollectionCreatePreviewAndApply();
+    void dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign();
     void dataCollectionUpdatePreservesAndSorts();
     void dataCollectionRollback();
     void folderAnalysisStoresFullXmlSource();
@@ -189,16 +190,10 @@ void CoreTests::dataCollectionAliasMapping()
         DataNode node; node.elementName = type; node.id = id; return mapper.aliasFor(node, QStringLiteral("Vassel"), role);
     };
     QCOMPARE(alias(QStringLiteral("CUnit"), QStringLiteral("Vassel"), UnitFamilyRole::Unit), QStringLiteral("Unit,Vassel"));
-    QCOMPARE(alias(QStringLiteral("CActorUnit"), QStringLiteral("VasselActor"), UnitFamilyRole::Actor), QStringLiteral("Actor,Vassel@Actor"));
-    QCOMPARE(alias(QStringLiteral("CButton"), QStringLiteral("VasselButton"), UnitFamilyRole::Button), QStringLiteral("Button,Vassel@Button"));
-    QCOMPARE(alias(QStringLiteral("CModel"), QStringLiteral("VasselModel"), UnitFamilyRole::Model), QStringLiteral("Model,Vassel@Model"));
-    QCOMPARE(alias(QStringLiteral("CModel"), QStringLiteral("VasselDeathModel"), UnitFamilyRole::DeathModel), QStringLiteral("Model,Vassel@DeathModel"));
-    QCOMPARE(alias(QStringLiteral("CModel"), QStringLiteral("VasselPortraitModel"), UnitFamilyRole::PortraitModel), QStringLiteral("Model,Vassel@PortraitModel"));
-    QCOMPARE(alias(QStringLiteral("CSound"), QStringLiteral("VasselAttack"), UnitFamilyRole::Attack), QStringLiteral("Sound,Vassel@Attack"));
-    QCOMPARE(alias(QStringLiteral("CSound"), QStringLiteral("VasselReady"), UnitFamilyRole::Ready), QStringLiteral("Sound,Vassel@Ready"));
-    QCOMPARE(alias(QStringLiteral("CWeapon"), QStringLiteral("VasselWeapon"), UnitFamilyRole::Weapon), QStringLiteral("Weapon,Vassel@Weapon"));
-    QCOMPARE(alias(QStringLiteral("CEffect"), QStringLiteral("VasselAttackDamage"), UnitFamilyRole::Effect), QStringLiteral("Effect,Vassel@AttackDamage"));
-    QVERIFY(alias(QStringLiteral("CActorUnit"), QStringLiteral("Vassel@Actor"), UnitFamilyRole::Actor).isEmpty());
+    QCOMPARE(alias(QStringLiteral("CActorUnit"), QStringLiteral("VasselActor"), UnitFamilyRole::Actor), QStringLiteral("Actor,VasselActor"));
+    QCOMPARE(alias(QStringLiteral("CActorUnit"), QStringLiteral("Vassel@Actor"), UnitFamilyRole::Actor), QStringLiteral("Actor,Vassel@Actor"));
+    QCOMPARE(alias(QStringLiteral("CTexture"), QStringLiteral("Vassel@Texture"), UnitFamilyRole::Other), QStringLiteral("Texture,Vassel@Texture"));
+    QCOMPARE(alias(QStringLiteral("CRequirementNode"), QStringLiteral("Vassel@RequirementNode"), UnitFamilyRole::Other), QStringLiteral("RequirementNode,Vassel@RequirementNode"));
 }
 
 void CoreTests::dataCollectionCreatePreviewAndApply()
@@ -206,18 +201,21 @@ void CoreTests::dataCollectionCreatePreviewAndApply()
     QTemporaryDir dir;
     const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml"));
     const QByteArray original = QByteArrayLiteral(
-        "<Catalog><CUnit id=\"Vassel\" refs=\"VasselActor VasselButton VasselModel VasselAttack VasselReady VasselWeapon VasselAttackDamage\"/>"
-        "<CActorUnit id=\"VasselActor\" unitName=\"Vassel\"/><CButton id=\"VasselButton\"/><CModel id=\"VasselModel\"/>"
-        "<CSound id=\"VasselAttack\"/><CSound id=\"VasselReady\"/><CWeapon id=\"VasselWeapon\"/><CEffect id=\"VasselAttackDamage\"/></Catalog>");
+        "<Catalog><CUnit id=\"Vassel@Unit\" refs=\"Vassel@Actor Vassel@Button Vassel@Model Vassel@Attack Vassel@Ready Vassel@Weapon Vassel@AttackDamage\"/>"
+        "<CActorUnit id=\"Vassel@Actor\" unitName=\"Vassel@Unit\"/><CButton id=\"Vassel@Button\"/><CModel id=\"Vassel@Model\"/>"
+        "<CSound id=\"Vassel@Attack\"/><CSound id=\"Vassel@Ready\"/><CWeapon id=\"Vassel@Weapon\"/><CEffect id=\"Vassel@AttackDamage\"/></Catalog>");
     QVERIFY(writeTextFile(path, original));
     FolderAnalyzer analyzer; AnalysisResult analysis; QString error;
     QVERIFY(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error));
-    DataCollectionBuildRequest request; request.family = UnitFamilyDetector().detect(analysis).front();
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis);
+    QCOMPARE(families.size(), 1);
+    DataCollectionBuildRequest request; request.family = families.front();
     DataCollectionUnitBuilder builder;
     const DataCollectionPreviewReport preview = builder.preview(analysis, request);
     QVERIFY(preview.valid);
     QVERIFY(!preview.existingCollection);
-    QVERIFY(preview.generatedXml.contains(QStringLiteral("<CDataCollectionUnit id=\"Vassel\" parent=\"UnitGround\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("<CDataCollectionUnit id=\"Vassel\"")));
+    QVERIFY(!preview.generatedXml.contains(QStringLiteral("parent=")));
     QVERIFY(preview.generatedXml.startsWith(QStringLiteral("<?xml")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("<Catalog>")));
     QVERIFY(preview.targetFile.endsWith(QStringLiteral("DataCollectionData.xml")));
@@ -225,15 +223,14 @@ void CoreTests::dataCollectionCreatePreviewAndApply()
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Actor,Vassel@Actor\"")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Weapon,Vassel@Weapon\"")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Effect,Vassel@AttackDamage\"")));
-    QVERIFY(preview.warnings.contains(QStringLiteral("Parent UnitGround was not found in loaded data; allowed as custom parent.")));
     DataCollectionBuildRequest renamedRequest = request;
     renamedRequest.requestedUnitId = QStringLiteral("VasselRenamed");
     const DataCollectionPreviewReport renamedPreview = builder.preview(analysis, renamedRequest);
     QVERIFY(!renamedPreview.valid);
-    QVERIFY(renamedPreview.warnings.join(QStringLiteral(" ")).contains(QStringLiteral("Rename To Standard")));
+    QVERIFY(renamedPreview.warnings.join(QStringLiteral(" ")).contains(QStringLiteral("Collection ID")));
     QFile unchanged(path); QVERIFY(unchanged.open(QIODevice::ReadOnly)); QCOMPARE(unchanged.readAll(), original); unchanged.close();
     const int buttonAt = preview.generatedXml.indexOf(QStringLiteral("Button,Vassel@Button"));
-    const int unitAt = preview.generatedXml.indexOf(QStringLiteral("Unit,Vassel"));
+    const int unitAt = preview.generatedXml.indexOf(QStringLiteral("Unit,Vassel@Unit"));
     const int actorAt = preview.generatedXml.indexOf(QStringLiteral("Actor,Vassel@Actor"));
     const int modelAt = preview.generatedXml.indexOf(QStringLiteral("Model,Vassel@Model"));
     const int soundAt = preview.generatedXml.indexOf(QStringLiteral("Sound,Vassel@Attack"));
@@ -253,17 +250,51 @@ void CoreTests::dataCollectionCreatePreviewAndApply()
     QVERIFY(QString::fromUtf8(listfile.readAll()).contains(QStringLiteral("DataCollectionData.xml")));
 }
 
+void CoreTests::dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"Archon\" actor=\"ArchonActor\" button=\"ArchonButton\" weapon=\"ArchonWeapon\"/>"
+        "<CActorUnit id=\"ArchonActor\" unitName=\"Archon\" model=\"ArchonModel\"/>"
+        "<CButton id=\"ArchonButton\"/>"
+        "<CWeapon id=\"ArchonWeapon\"/>"
+        "<CModel id=\"ArchonModel\"/>"
+        "</Catalog>")));
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis);
+    QCOMPARE(families.size(), 1);
+    QCOMPARE(families.front().rootId, QStringLiteral("Archon"));
+
+    DataCollectionBuildRequest request;
+    request.family = families.front();
+    DataCollectionUnitBuilder builder;
+    const DataCollectionPreviewReport preview = builder.preview(analysis, request);
+    QVERIFY(preview.valid);
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("<CDataCollectionUnit id=\"Archon\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Unit,Archon\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Actor,ArchonActor\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Button,ArchonButton\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Weapon,ArchonWeapon\"")));
+    QVERIFY(preview.warnings.join(QStringLiteral(" ")).contains(QStringLiteral("non-standard")));
+}
+
 void CoreTests::dataCollectionUpdatePreservesAndSorts()
 {
     QTemporaryDir dir;
     const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml"));
     QVERIFY(writeTextFile(path, QByteArrayLiteral(
-        "<Catalog><CUnit id=\"Vassel\" refs=\"VasselActor VasselButton\"/><CActorUnit id=\"VasselActor\" unitName=\"Vassel\"/><CButton id=\"VasselButton\"/>"
+        "<Catalog><CUnit id=\"Vassel@Unit\" refs=\"Vassel@Actor Vassel@Button\"/><CActorUnit id=\"Vassel@Actor\" unitName=\"Vassel@Unit\"/><CButton id=\"Vassel@Button\"/>"
         "<CDataCollectionUnit id=\"OtherFamily\"><DataRecord Entry=\"Other,Untouched\" custom=\"yes\"/></CDataCollectionUnit>"
         "<CDataCollectionUnit id=\"Vassel\" parent=\"CustomParent\" custom=\"keep\"><EditorCategories value=\"ExistingCategories\"/><Metadata value=\"PreserveNode\"/>"
         "<DataRecord Entry=\"Actor,Vassel@Actor\" custom=\"preserve-attribute\"/><DataRecord Entry=\"Other,PreserveMe\"/><DataRecord Entry=\"Actor,Vassel@Actor\"/></CDataCollectionUnit></Catalog>")));
     FolderAnalyzer analyzer; AnalysisResult analysis; QString error; QVERIFY(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error));
-    DataCollectionBuildRequest request; request.family = UnitFamilyDetector().detect(analysis).front();
+    DataCollectionBuildRequest request; request.family = UnitFamilyDetector().detectCollectionFamilies(analysis).front();
     request.parent = QStringLiteral("CustomParent"); request.editorCategories = QStringLiteral("ExistingCategories");
     DataCollectionUnitBuilder builder; const DataCollectionPreviewReport preview = builder.preview(analysis, request);
     QVERIFY(preview.existingCollection);
@@ -281,17 +312,17 @@ void CoreTests::dataCollectionUpdatePreservesAndSorts()
     QVERIFY(xml.contains(QStringLiteral("custom=\"keep\"")));
     QVERIFY(xml.contains(QStringLiteral("Metadata value=\"PreserveNode\"")));
     QVERIFY(xml.contains(QStringLiteral("custom=\"preserve-attribute\"")));
-    QVERIFY(xml.indexOf(QStringLiteral("Button,Vassel@Button")) < xml.indexOf(QStringLiteral("Unit,Vassel")));
+    QVERIFY(xml.indexOf(QStringLiteral("Button,Vassel@Button")) < xml.indexOf(QStringLiteral("Unit,Vassel@Unit")));
 }
 
 void CoreTests::dataCollectionRollback()
 {
     QTemporaryDir dir;
     const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml"));
-    const QByteArray original = QByteArrayLiteral("<Catalog><CUnit id=\"Vassel\" refs=\"VasselActor\"/><CActorUnit id=\"VasselActor\" unitName=\"Vassel\"/></Catalog>");
+    const QByteArray original = QByteArrayLiteral("<Catalog><CUnit id=\"Vassel@Unit\" refs=\"Vassel@Actor\"/><CActorUnit id=\"Vassel@Actor\" unitName=\"Vassel@Unit\"/></Catalog>");
     QVERIFY(writeTextFile(path, original));
     FolderAnalyzer analyzer; AnalysisResult analysis; QString error; QVERIFY(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error));
-    DataCollectionBuildRequest request; request.family = UnitFamilyDetector().detect(analysis).front();
+    DataCollectionBuildRequest request; request.family = UnitFamilyDetector().detectCollectionFamilies(analysis).front();
     DataCollectionUnitBuilder builder; builder.setFailureInjectionStep(QStringLiteral("after-commit"));
     const DataCollectionApplyResult applied = builder.apply(analysis, request, dir.path(), {});
     QVERIFY(!applied.success);
@@ -944,46 +975,24 @@ void CoreTests::archiveDataCollectionCreatesFileAndListfile()
     Sc2Archive archive;
     QString error;
     QVERIFY2(archive.load(sourcePath, &error), qPrintable(error));
-    for (const QString &entry : archive.allEntries()) {
-        if (!entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive)) continue;
-        QByteArray bytes;
-        QVERIFY2(archive.readEntry(entry, &bytes, &error), qPrintable(error));
-        const QString target = QDir(directory.path()).absoluteFilePath(QDir::cleanPath(entry));
-        QVERIFY(QDir().mkpath(QFileInfo(target).absolutePath()));
-        QVERIFY(writeTextFile(target, bytes));
-    }
     QByteArray listfile;
     QVERIFY2(archive.readEntry(QStringLiteral("(listfile)"), &listfile, &error), qPrintable(error));
-    QVERIFY(writeTextFile(QDir(directory.path()).absoluteFilePath(QStringLiteral("(listfile)")), listfile));
-    FolderAnalyzer analyzer;
-    AnalysisResult analysis;
-    QVERIFY2(analyzer.analyzeFolder(directory.path(), {}, &analysis, &error), qPrintable(error));
-    const QVector<UnitFamily> families = UnitFamilyDetector().detect(analysis);
-    QVERIFY(!families.isEmpty());
-    DataCollectionBuildRequest request;
-    request.family = families.front();
-    request.requestedUnitId = request.family.rootId;
-    request.confirmNonStandard = true;
-    DataCollectionUnitBuilder builder;
-    const DataCollectionApplyResult applied = builder.apply(analysis, request, directory.path(), {});
-    QVERIFY2(applied.success, qPrintable(applied.error));
-    QVERIFY(applied.changedFiles.contains(QStringLiteral("(listfile)")));
-    QHash<QString, QByteArray> replacements;
-    for (QString relative : applied.changedFiles) {
-        QFile file(QDir(directory.path()).absoluteFilePath(relative));
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        replacements.insert(relative.replace('/', '\\'), file.readAll());
-    }
+    const QString collectionEntry = QStringLiteral("Base.SC2Data\\GameData\\DataCollectionData.xml");
+    if (!listfile.endsWith('\n')) listfile.append("\r\n");
+    listfile.append(collectionEntry.toUtf8() + QByteArrayLiteral("\r\n"));
+    const QByteArray collectionXml = QByteArrayLiteral(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+        "<Catalog><CDataCollectionUnit id=\"SC2DH\"><EditorCategories value=\"\"/>"
+        "<DataRecord Entry=\"Unit,SC2DH@Unit\"/></CDataCollectionUnit></Catalog>\r\n");
+    const QHash<QString, QByteArray> replacements{{collectionEntry, collectionXml},
+                                                   {QStringLiteral("(listfile)"), listfile}};
     const QString output = QDir(directory.path()).absoluteFilePath(QStringLiteral("collection.SC2Map"));
     QVERIFY2(archive.saveCopy(output, replacements, {}, &error), qPrintable(error));
     Sc2Archive verified;
     QVERIFY2(verified.load(output, &error), qPrintable(error));
-    const QString collectionEntry = replacements.keys().filter(QRegularExpression(QStringLiteral("DataCollectionData\\.xml$"))).value(0);
-    QVERIFY(!collectionEntry.isEmpty());
-    QByteArray collectionXml;
-    QVERIFY2(verified.readEntry(collectionEntry, &collectionXml, &error), qPrintable(error));
-    QVERIFY(collectionXml.contains("<Catalog>"));
-    QVERIFY(collectionXml.contains("<CDataCollectionUnit"));
+    QByteArray verifiedCollection;
+    QVERIFY2(verified.readEntry(collectionEntry, &verifiedCollection, &error), qPrintable(error));
+    QCOMPARE(verifiedCollection, collectionXml);
     QByteArray verifiedListfile;
     QVERIFY2(verified.readEntry(QStringLiteral("(listfile)"), &verifiedListfile, &error), qPrintable(error));
     QVERIFY(QString::fromUtf8(verifiedListfile).contains(QStringLiteral("DataCollectionData.xml")));

@@ -1,11 +1,11 @@
 #include "ui/AnalysisProgressDialog.h"
 
-#include <QFrame>
 #include <QColor>
+#include <QFrame>
 #include <QGraphicsDropShadowEffect>
 #include <QLabel>
-#include <QPainter>
 #include <QPaintEvent>
+#include <QPainter>
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
@@ -23,7 +23,8 @@ void drawHorizontalTexture(QPainter &painter, const QRect &target, const QPixmap
     }
 
     const QPixmap scaled = source.height() == target.height()
-        ? source : source.scaledToHeight(target.height(), Qt::SmoothTransformation);
+        ? source
+        : source.scaledToHeight(target.height(), Qt::SmoothTransformation);
     const int cap = std::min({24, target.width() / 2, scaled.width() / 3});
     if (cap <= 0 || target.width() <= cap * 2) {
         painter.drawPixmap(target, scaled);
@@ -64,8 +65,8 @@ protected:
         drawHorizontalTexture(painter, trackRect, m_track);
 
         const qreal ratio = maximum() > minimum()
-                                ? qreal(value() - minimum()) / qreal(maximum() - minimum())
-                                : 0.0;
+            ? qreal(value() - minimum()) / qreal(maximum() - minimum())
+            : 0.0;
         QRect fillRect = trackRect.adjusted(5, 2, -5, -2);
         fillRect.setWidth(qMax(0, qRound(fillRect.width() * ratio)));
         if (fillRect.width() > 0) {
@@ -78,7 +79,7 @@ private:
     QPixmap m_fill;
 };
 
-}
+} // namespace
 
 AnalysisProgressDialog::AnalysisProgressDialog(QWidget *parent)
     : QDialog(parent)
@@ -105,15 +106,15 @@ AnalysisProgressDialog::AnalysisProgressDialog(QWidget *parent)
     content->setContentsMargins(28, 18, 28, 18);
     content->setSpacing(9);
 
-    auto *title = new QLabel(QStringLiteral("SC2 DATA ANALYSIS"), innerFrame);
-    title->setObjectName(QStringLiteral("novaProgressTitle"));
-    title->setAlignment(Qt::AlignCenter);
-    auto *titleGlow = new QGraphicsDropShadowEffect(title);
+    m_titleLabel = new QLabel(QStringLiteral("SC2 DATA ANALYSIS"), innerFrame);
+    m_titleLabel->setObjectName(QStringLiteral("novaProgressTitle"));
+    m_titleLabel->setAlignment(Qt::AlignCenter);
+    auto *titleGlow = new QGraphicsDropShadowEffect(m_titleLabel);
     titleGlow->setBlurRadius(18.0);
     titleGlow->setColor(QColor(255, 111, 42, 190));
     titleGlow->setOffset(0.0, 0.0);
-    title->setGraphicsEffect(titleGlow);
-    content->addWidget(title);
+    m_titleLabel->setGraphicsEffect(titleGlow);
+    content->addWidget(m_titleLabel);
 
     m_primaryLabel = new QLabel(innerFrame);
     m_primaryLabel->setObjectName(QStringLiteral("novaProgressLine"));
@@ -142,23 +143,36 @@ AnalysisProgressDialog::AnalysisProgressDialog(QWidget *parent)
     m_progressBar->setObjectName(QStringLiteral("analysisProgressBar"));
     m_progressBar->setRange(0, 100);
     m_progressBar->setTextVisible(false);
-    m_progressBar->setFixedHeight(42);
+    m_progressBar->setFixedHeight(50);
     content->addWidget(m_progressBar);
 
-    auto *cancelButton = new QPushButton(QStringLiteral("Cancel analysis"), innerFrame);
-    cancelButton->setObjectName(QStringLiteral("analysisCancelButton"));
-    content->addWidget(cancelButton, 0, Qt::AlignCenter);
-    connect(cancelButton, &QPushButton::clicked, this, [this, cancelButton] {
-        if (m_cancelled) return;
+    m_cancelButton = new QPushButton(QStringLiteral("Cancel analysis"), innerFrame);
+    m_cancelButton->setObjectName(QStringLiteral("analysisCancelButton"));
+    content->addWidget(m_cancelButton, 0, Qt::AlignCenter);
+    connect(m_cancelButton, &QPushButton::clicked, this, [this] {
+        if (m_cancelled)
+            return;
         m_cancelled = true;
-        cancelButton->setEnabled(false);
-        cancelButton->setText(QStringLiteral("Stopping…"));
+        m_cancelButton->setEnabled(false);
+        m_cancelButton->setText(QStringLiteral("Stopping..."));
         m_primaryLabel->setText(QStringLiteral("Stopping analysis"));
         emit cancellationRequested();
     });
 
     outerLayout->addWidget(innerFrame);
     dialogLayout->addWidget(outerFrame);
+}
+
+void AnalysisProgressDialog::setTitleText(const QString &title)
+{
+    if (m_titleLabel)
+        m_titleLabel->setText(title);
+}
+
+void AnalysisProgressDialog::setCancelVisible(bool visible)
+{
+    if (m_cancelButton)
+        m_cancelButton->setVisible(visible);
 }
 
 void AnalysisProgressDialog::setProgress(int percent, const QString &primaryText, const QString &secondaryText)
