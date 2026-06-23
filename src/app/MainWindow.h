@@ -1,0 +1,140 @@
+#pragma once
+
+#include "core/AnalysisModels.h"
+#include "core/BackupManager.h"
+#include "core/ConfigManager.h"
+#include "core/FolderAnalyzer.h"
+#include "core/MergeService.h"
+#include "core/ReferenceRenamer.h"
+#include "core/DataCollectionUnitBuilder.h"
+
+#include <QMainWindow>
+#include <QSet>
+#include <QStringList>
+#include <memory>
+
+class QAction;
+class AnalysisProgressDialog;
+class QLineEdit;
+class QDialog;
+class QTemporaryDir;
+class QTabWidget;
+class OverviewPage;
+class DependenciesPage;
+class GraphPage;
+class PropertiesPage;
+class DataCollectionPage;
+class RenameIdsPage;
+class DuplicatesPage;
+class UnusedPage;
+class FormatterPage;
+class LogPanel;
+class XmlSourcePage;
+struct WizardNodeRef;
+
+namespace spdlog {
+class logger;
+}
+
+class MainWindow : public QMainWindow
+{
+    Q_OBJECT
+
+public:
+    explicit MainWindow(QWidget *parent = nullptr);
+
+private slots:
+    void openSc2File();
+    void analyzeFolder();
+    void showSettingsDialog();
+    void runDryRun();
+    void applySelectedChanges();
+    void previewMerge(const MergeRequest &request);
+    void applyMerge(const MergeRequest &request);
+    void previewUnusedDeletion(const QVector<int> &rows);
+    void applyUnusedDeletion(const QVector<int> &rows);
+    void previewStandardRename(const RenamePlan &plan);
+    void applyStandardRename(const RenamePlan &plan);
+    void exportStandardRenameReport(const QString &reportText);
+    void previewDataCollection(const DataCollectionBuildRequest &request);
+    void applyDataCollection(const DataCollectionBuildRequest &request);
+    void exportDataCollectionReport(const QString &reportText);
+    void showAnalysisTab();
+    void showDataCollectionTab();
+    void showDuplicatesTab();
+    void showCleanupTab();
+    void showDryRunTab();
+    void applyOptimizationWizardPlan();
+    void showLogsTab();
+    void undoFocusedEditor();
+    void redoFocusedEditor();
+
+private:
+    void setupUi();
+    void setupLogging();
+    void setupTheme();
+    void loadDefaultFolder();
+    void writeAnalysisReportFile() const;
+    QString runtimePath(const QString &relativePath) const;
+    void setCurrentSourcePath(const QString &path);
+    void logLine(const QString &line);
+    void refreshPages();
+    bool loadPathAndAnalyze(const QString &path);
+    bool analyzeFolderPath(const QString &folderPath, QString *errorMessage);
+    bool analyzeXmlFile(const QString &filePath, QString *errorMessage);
+    bool analyzeArchiveFile(const QString &filePath, QString *errorMessage);
+    bool materializeArchiveAnalysis(const QString &tempRoot, AnalysisResult *analysis, QString *errorMessage) const;
+    void normalizeArchiveAnalysis(AnalysisResult *analysis, const QString &tempRoot, const QString &archivePath) const;
+    bool commitArchiveChanges(const QString &tempRoot, const QStringList &changedFiles,
+                              QString *backupPath, QString *errorMessage) const;
+    int findNodeIndex(const AnalysisResult &analysis, const WizardNodeRef &ref) const;
+    void showGraphForRow(int row);
+
+    QString m_rootFolder;
+    QString m_currentSourcePath;
+    AnalysisResult m_result;
+    FolderAnalyzer m_analyzer;
+    ConfigManager m_configManager;
+    QSet<QString> m_whitelistIds;
+    MergeService m_mergeService;
+    MergeRequest m_previewedMerge;
+    QVector<int> m_previewedUnusedRows;
+    bool m_mergePreviewValid = false;
+    ReferenceRenamer m_referenceRenamer;
+    RenamePlan m_previewedRenamePlan;
+    bool m_renamePreviewValid = false;
+    DataCollectionUnitBuilder m_dataCollectionBuilder;
+    DataCollectionBuildRequest m_previewedCollectionRequest;
+    bool m_collectionPreviewValid = false;
+    std::shared_ptr<spdlog::logger> m_logger;
+    enum class SourceKind {
+        Folder,
+        XmlFile,
+        ArchiveFile,
+        Unknown
+    };
+    SourceKind m_sourceKind = SourceKind::Unknown;
+
+    QTabWidget *m_tabs = nullptr;
+    OverviewPage *m_analysisPage = nullptr;
+    DependenciesPage *m_dependenciesPage = nullptr;
+    GraphPage *m_graphPage = nullptr;
+    PropertiesPage *m_propertiesPage = nullptr;
+    DataCollectionPage *m_dataCollectionPage = nullptr;
+    RenameIdsPage *m_renameIdsPage = nullptr;
+    DuplicatesPage *m_duplicatesPage = nullptr;
+    UnusedPage *m_cleanupPage = nullptr;
+    FormatterPage *m_dryRunPage = nullptr;
+    LogPanel *m_logPanel = nullptr;
+    XmlSourcePage *m_xmlSourcePage = nullptr;
+    QLineEdit *m_pathEdit = nullptr;
+
+    QAction *m_openFileAction = nullptr;
+    QAction *m_analyzeAction = nullptr;
+    QAction *m_settingsAction = nullptr;
+    QAction *m_dryRunAction = nullptr;
+    QAction *m_applyAction = nullptr;
+    QAction *m_exitAction = nullptr;
+    AnalysisProgressDialog *m_activeProgressDialog = nullptr;
+    QDialog *m_optimizationDialog = nullptr;
+};

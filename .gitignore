@@ -67,3 +67,25 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# IDE and local helper state
+.vs/
+.vscode/
+.lh/
+out/
+
+# MSVC and user-specific project files
+*.idb
+*.exp
+*.user
+*.vcxproj.user
+*.opensdf
+*.sdf
+*.suo
+
+# Local setup and test reports
+aqtinstall.log
+test-results.txt
+archive-test.txt
+archive-collection-test.txt
+data-tests.txt

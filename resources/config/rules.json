@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "notes": "Placeholder cleanup rules for SC2 Data Helper MVP.",
+  "safe_categories": [
+    "Campaign",
+    "Texture",
+    "Model"
+  ]
+}

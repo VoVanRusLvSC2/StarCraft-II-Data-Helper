@@ -1,0 +1,206 @@
+#include "app/ThemeManager.h"
+
+#include <QApplication>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QIODevice>
+#include <QFileInfo>
+#include <QPainter>
+#include <QProxyStyle>
+#include <QStyleOptionSlider>
+#include <QTransform>
+#include <QStringList>
+
+#include <algorithm>
+
+namespace {
+
+void drawAxisTexture(QPainter *painter, const QRect &target, const QPixmap &source, Qt::Orientation orientation)
+{
+    if (!painter || target.isEmpty() || source.isNull()) {
+        return;
+    }
+
+    QPixmap texture = source;
+    if (orientation == Qt::Horizontal) {
+        texture = texture.transformed(QTransform().rotate(90.0), Qt::SmoothTransformation);
+        texture = texture.scaledToHeight(target.height(), Qt::SmoothTransformation);
+    } else {
+        texture = texture.scaledToWidth(target.width(), Qt::SmoothTransformation);
+    }
+
+    const int targetLength = orientation == Qt::Horizontal ? target.width() : target.height();
+    const int sourceLength = orientation == Qt::Horizontal ? texture.width() : texture.height();
+    const int cap = std::min({12, targetLength / 2, sourceLength / 4});
+    if (cap <= 0 || targetLength <= cap * 2) {
+        painter->drawPixmap(target, texture);
+        return;
+    }
+
+    if (orientation == Qt::Horizontal) {
+        painter->drawPixmap(QRect(target.left(), target.top(), cap, target.height()),
+                            texture, QRect(0, 0, cap, texture.height()));
+        painter->drawPixmap(QRect(target.right() - cap + 1, target.top(), cap, target.height()),
+                            texture, QRect(texture.width() - cap, 0, cap, texture.height()));
+        painter->drawTiledPixmap(QRect(target.left() + cap, target.top(), target.width() - cap * 2, target.height()),
+                                 texture.copy(QRect(cap, 0, texture.width() - cap * 2, texture.height())));
+    } else {
+        painter->drawPixmap(QRect(target.left(), target.top(), target.width(), cap),
+                            texture, QRect(0, 0, texture.width(), cap));
+        painter->drawPixmap(QRect(target.left(), target.bottom() - cap + 1, target.width(), cap),
+                            texture, QRect(0, texture.height() - cap, texture.width(), cap));
+        painter->drawTiledPixmap(QRect(target.left(), target.top() + cap, target.width(), target.height() - cap * 2),
+                                 texture.copy(QRect(0, cap, texture.width(), texture.height() - cap * 2)));
+    }
+}
+
+class Sc2ProxyStyle final : public QProxyStyle
+{
+public:
+    using QProxyStyle::QProxyStyle;
+
+    int pixelMetric(PixelMetric metric, const QStyleOption *option = nullptr, const QWidget *widget = nullptr) const override
+    {
+        if (metric == PM_ScrollBarExtent) {
+            return 16;
+        }
+        if (metric == PM_ScrollBarSliderMin) {
+            return 38;
+        }
+        return QProxyStyle::pixelMetric(metric, option, widget);
+    }
+
+    QRect subControlRect(ComplexControl control, const QStyleOptionComplex *option,
+                         SubControl subControl, const QWidget *widget = nullptr) const override
+    {
+        if (control != CC_ScrollBar) {
+            return QProxyStyle::subControlRect(control, option, subControl, widget);
+        }
+        const auto *slider = qstyleoption_cast<const QStyleOptionSlider *>(option);
+        if (!slider) {
+            return {};
+        }
+        if (subControl == SC_ScrollBarSubLine || subControl == SC_ScrollBarAddLine) {
+            return {};
+        }
+
+        const QRect area = slider->rect;
+        if (subControl == SC_ScrollBarGroove) {
+            return area;
+        }
+
+        const int length = slider->orientation == Qt::Vertical ? area.height() : area.width();
+        const int range = slider->maximum - slider->minimum;
+        const int page = qMax(1, slider->pageStep);
+        const int sliderLength = range <= 0 ? length : qMin(length, qMax(38, (length * page) / (range + page)));
+        const int available = qMax(0, length - sliderLength);
+        const int position = QStyle::sliderPositionFromValue(slider->minimum, slider->maximum,
+                                                              slider->sliderPosition, available,
+                                                              slider->upsideDown);
+        QRect sliderRect = slider->orientation == Qt::Vertical
+                               ? QRect(area.left(), area.top() + position, area.width(), sliderLength)
+                               : QRect(area.left() + position, area.top(), sliderLength, area.height());
+        if (subControl == SC_ScrollBarSlider) {
+            return sliderRect;
+        }
+        if (subControl == SC_ScrollBarSubPage) {
+            return slider->orientation == Qt::Vertical
+                       ? QRect(area.left(), area.top(), area.width(), qMax(0, sliderRect.top() - area.top()))
+                       : QRect(area.left(), area.top(), qMax(0, sliderRect.left() - area.left()), area.height());
+        }
+        if (subControl == SC_ScrollBarAddPage) {
+            return slider->orientation == Qt::Vertical
+                       ? QRect(area.left(), sliderRect.bottom() + 1, area.width(), qMax(0, area.bottom() - sliderRect.bottom()))
+                       : QRect(sliderRect.right() + 1, area.top(), qMax(0, area.right() - sliderRect.right()), area.height());
+        }
+        return {};
+    }
+
+    void drawComplexControl(ComplexControl control, const QStyleOptionComplex *option,
+                            QPainter *painter, const QWidget *widget = nullptr) const override
+    {
+        if (control != CC_ScrollBar) {
+            QProxyStyle::drawComplexControl(control, option, painter, widget);
+            return;
+        }
+        const auto *slider = qstyleoption_cast<const QStyleOptionSlider *>(option);
+        if (!slider) {
+            return;
+        }
+
+        static const QPixmap track(QStringLiteral(":/textures/ui_nova_global_scrollbar_bg2.png"));
+        static const QPixmap handle(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_normal2.png"));
+        static const QPixmap handleOver(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_over.png"));
+        drawAxisTexture(painter, subControlRect(control, option, SC_ScrollBarGroove, widget), track, slider->orientation);
+        const bool hover = (slider->state & State_MouseOver) && (slider->activeSubControls & SC_ScrollBarSlider);
+        drawAxisTexture(painter, subControlRect(control, option, SC_ScrollBarSlider, widget),
+                        hover ? handleOver : handle, slider->orientation);
+    }
+};
+
+bool loadStyleFromPath(const QString &path, QString *styleSheet)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return false;
+    }
+    if (styleSheet) {
+        *styleSheet = QString::fromUtf8(file.readAll());
+    }
+    return true;
+}
+
+}
+
+bool ThemeManager::applyDarkTheme(QApplication *application, QString *loadedFrom, QString *errorMessage)
+{
+    if (!application) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("No QApplication instance available.");
+        }
+        return false;
+    }
+
+    if (!application->property("sc2ProxyStyleInstalled").toBool()) {
+        application->setStyle(new Sc2ProxyStyle(application->style()->name()));
+        application->setProperty("sc2ProxyStyleInstalled", true);
+    }
+
+    const QString appDir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources/styles/dark.qss");
+    const QString workDir = QDir::currentPath() + QStringLiteral("/resources/styles/dark.qss");
+    const QString projectRoot = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../../resources/styles/dark.qss"));
+    const QString resourcePath = QStringLiteral(":/styles/dark.qss");
+
+    const QStringList candidates = {
+        resourcePath,
+        appDir,
+        workDir,
+        projectRoot
+    };
+
+    for (const QString &candidate : candidates) {
+        QString styleSheet;
+        if (candidate.startsWith(QStringLiteral(":/"))) {
+            QFile file(candidate);
+            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                continue;
+            }
+            styleSheet = QString::fromUtf8(file.readAll());
+        } else if (!loadStyleFromPath(candidate, &styleSheet)) {
+            continue;
+        }
+
+        application->setStyleSheet(styleSheet);
+        if (loadedFrom) {
+            *loadedFrom = candidate;
+        }
+        return true;
+    }
+
+    application->setStyleSheet(QString());
+    if (errorMessage) {
+        *errorMessage = QStringLiteral("Unable to load dark theme from qrc or file-system fallbacks.");
+    }
+    return false;
+}

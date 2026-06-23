@@ -1,0 +1,292 @@
+#include "core/ReferenceRenamer.h"
+
+#include "core/BackupManager.h"
+#include "core/FolderAnalyzer.h"
+#include "core/MergeService.h"
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QRegularExpression>
+#include <QSaveFile>
+
+#include <pugixml.hpp>
+
+#include <algorithm>
+#include <sstream>
+
+namespace {
+
+QString nodePath(const pugi::xml_node &node)
+{
+    QStringList parts;
+    for (pugi::xml_node current = node; current && current.type() == pugi::node_element; current = current.parent()) {
+        int index = 1;
+        for (pugi::xml_node previous = current.previous_sibling(current.name()); previous;
+             previous = previous.previous_sibling(current.name())) ++index;
+        parts.prepend(QStringLiteral("%1[%2]").arg(QString::fromUtf8(current.name())).arg(index));
+    }
+    return QStringLiteral("/") + parts.join(QLatin1Char('/'));
+}
+
+bool readFile(const QString &path, QByteArray *bytes, QString *error)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) { *error = QStringLiteral("Unable to read %1").arg(path); return false; }
+    *bytes = file.readAll();
+    return true;
+}
+
+int simultaneousReplace(QString *value, const QHash<QString, QString> &renames)
+{
+    if (!value) return 0;
+    int total = 0;
+    QHash<QString, QString> sentinels;
+    int serial = 0;
+    for (auto it = renames.cbegin(); it != renames.cend(); ++it) {
+        const QString sentinel = QStringLiteral("__SC2DH_RENAME_%1_7F4A__").arg(serial++);
+        const int count = MergeService::replaceIdTokens(value, it.key(), sentinel);
+        if (count) { total += count; sentinels.insert(sentinel, it.value()); }
+    }
+    for (auto it = sentinels.cbegin(); it != sentinels.cend(); ++it) value->replace(it.key(), it.value());
+    return total;
+}
+
+struct RewriteResult {
+    int identities = 0;
+    int references = 0;
+    QStringList changes;
+};
+
+void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QString> &identityByLocation,
+             const QHash<QString, QString> &renames, RewriteResult *result)
+{
+    if (node.type() == pugi::node_element) {
+        const QString path = nodePath(node);
+        for (pugi::xml_attribute attribute : node.attributes()) {
+            const QString attributeName = QString::fromUtf8(attribute.name());
+            if (attributeName.compare(QStringLiteral("id"), Qt::CaseInsensitive) == 0 && identityByLocation.contains(path)) {
+                const QString before = QString::fromUtf8(attribute.value());
+                const QString after = identityByLocation.value(path);
+                attribute.set_value(after.toUtf8().constData());
+                ++result->identities;
+                result->changes << QStringLiteral("%1 %2 @id: %3 -> %4 (object identity)").arg(file, path, before, after);
+                continue;
+            }
+            QString value = QString::fromUtf8(attribute.value());
+            const QString before = value;
+            const int count = simultaneousReplace(&value, renames);
+            if (count) {
+                attribute.set_value(value.toUtf8().constData());
+                result->references += count;
+                result->changes << QStringLiteral("%1 %2 @%3: %4 -> %5").arg(file, path, attributeName, before, value);
+            }
+        }
+    } else if (node.type() == pugi::node_pcdata || node.type() == pugi::node_cdata) {
+        QString value = QString::fromUtf8(node.value());
+        const QString before = value;
+        const int count = simultaneousReplace(&value, renames);
+        if (count) {
+            node.set_value(value.toUtf8().constData());
+            result->references += count;
+            result->changes << QStringLiteral("%1 %2 text: %3 -> %4").arg(file, nodePath(node.parent()), before, value);
+        }
+    }
+    for (pugi::xml_node child = node.first_child(); child; child = child.next_sibling())
+        rewrite(child, file, identityByLocation, renames, result);
+}
+
+bool restore(const QString &root, const QString &backup, const QStringList &files, QString *error)
+{
+    bool ok = true;
+    for (const QString &relative : files) {
+        const QString target = QDir(root).absoluteFilePath(relative);
+        QFile::remove(target);
+        if (!QFile::copy(QDir(backup).absoluteFilePath(relative), target)) {
+            ok = false; *error += QStringLiteral(" Rollback failed for %1.").arg(target);
+        }
+    }
+    return ok;
+}
+
+QString buildReport(const AnalysisResult &analysis, const RenamePlan &plan, const RewriteResult &rewriteResult,
+                    const QStringList &files, const QStringList &warnings, const QStringList &conflicts,
+                    const QString &finalResult)
+{
+    QString report = QStringLiteral("Rename To Standard Preview\nSelected family: %1\nRoot ID: %2\nTarget root ID: %3\nSource files: %4\n")
+                         .arg(plan.family.rootId, plan.family.rootId, plan.targetRootId).arg(files.size());
+    for (const QString &file : files) report += QStringLiteral("- %1\n").arg(file);
+    report += QStringLiteral("\nDetected objects\n");
+    for (const UnitFamilyObject &object : plan.family.objects) {
+        const DataNode &node = analysis.nodes[object.nodeIndex];
+        report += QStringLiteral("- %1 | %2 | role: %3 | confidence: %4 | %5\n")
+                      .arg(node.id, node.elementName, unitFamilyRoleName(object.role), object.confidence, node.sourceFile);
+    }
+    report += QStringLiteral("\nNon-standard objects / rename plan\n");
+    for (const RenamePlanItem &item : plan.items)
+        report += QStringLiteral("- %1 -> %2 | %3 | confidence: %4 | risk: %5 | %6\n")
+                      .arg(item.oldId, item.newId, unitFamilyRoleName(item.role), item.confidence, item.riskLevel, item.reason);
+    report += QStringLiteral("\nManual review objects\n");
+    for (const UnitFamilyObject &object : plan.manualReview)
+        report += QStringLiteral("- %1 | %2\n").arg(analysis.nodes[object.nodeIndex].id, object.reason);
+    report += QStringLiteral("\nReference update plan\n");
+    for (const QString &change : rewriteResult.changes) report += QStringLiteral("- %1\n").arg(change);
+    report += QStringLiteral("\nConflicts\n- %1\nWarnings\n- %2\nSkipped objects\n")
+                  .arg(conflicts.isEmpty() ? QStringLiteral("none") : conflicts.join(QStringLiteral("\n- ")),
+                       warnings.isEmpty() ? QStringLiteral("none") : warnings.join(QStringLiteral("\n- ")));
+    QSet<int> planned;
+    for (const RenamePlanItem &item : plan.items) planned.insert(item.nodeIndex);
+    for (const UnitFamilyObject &object : plan.family.objects)
+        if (!planned.contains(object.nodeIndex)) report += QStringLiteral("- %1 (already standard or manual review)\n").arg(analysis.nodes[object.nodeIndex].id);
+    report += QStringLiteral("\nIdentities renamed: %1\nReferences updated: %2\nFinal result: %3\n")
+                  .arg(rewriteResult.identities).arg(rewriteResult.references, 0, 10).arg(finalResult);
+    return report;
+}
+
+bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QString, QByteArray> *staged,
+             RewriteResult *totals, QStringList *files, QString *error)
+{
+    QHash<QString, QString> renames;
+    QHash<QString, QHash<QString, QString>> identities;
+    for (const RenamePlanItem &item : plan.items) {
+        if (!item.selected || item.blocked) continue;
+        const DataNode &node = analysis.nodes[item.nodeIndex];
+        renames.insert(item.oldId, item.newId);
+        identities[node.sourceFile].insert(node.originalLocation, item.newId);
+    }
+    for (const ScannedFileInfo &info : analysis.scannedFiles) {
+        if (!info.isXml) continue;
+        QByteArray bytes;
+        if (!readFile(info.filePath, &bytes, error)) return false;
+        pugi::xml_document doc;
+        const pugi::xml_parse_result parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
+        if (!parsed) { *error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description()); return false; }
+        RewriteResult fileResult;
+        rewrite(doc, info.filePath, identities.value(info.filePath), renames, &fileResult);
+        if (fileResult.identities || fileResult.references) {
+            std::ostringstream stream;
+            doc.save(stream, "  ", pugi::format_default, pugi::encoding_utf8);
+            staged->insert(info.filePath, QByteArray::fromStdString(stream.str()));
+            files->append(info.filePath);
+            totals->identities += fileResult.identities;
+            totals->references += fileResult.references;
+            totals->changes += fileResult.changes;
+        }
+    }
+    if (totals->identities != renames.size()) {
+        *error = QStringLiteral("Not every selected object identity could be located safely.");
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+RenamePreviewReport ReferenceRenamer::preview(const AnalysisResult &analysis, const RenamePlan &plan) const
+{
+    RenamePreviewReport result;
+    result.plan = plan;
+    result.conflicts = plan.conflicts;
+    result.warnings = plan.warnings;
+    QHash<QString, QByteArray> staged;
+    RewriteResult rewriteResult;
+    QString error;
+    if (plan.valid && !prepare(analysis, plan, &staged, &rewriteResult, &result.filesChanged, &error)) {
+        const QString suffix = QFileInfo(analysis.rootFolder).suffix().toLower();
+        const bool archive = suffix.startsWith(QStringLiteral("sc2"));
+        if (!archive) {
+            result.conflicts << error;
+        } else {
+            // Archive extraction is ephemeral; provide a serialized-node planning
+            // preview while keeping Apply disabled at the UI boundary.
+            QHash<QString, QString> renames;
+            for (const RenamePlanItem &item : plan.items) renames.insert(item.oldId, item.newId);
+            rewriteResult.identities = plan.items.size();
+            QSet<QString> files;
+            for (const DataNode &node : analysis.nodes) {
+                files.insert(node.sourceFile);
+                QString value = node.serializedXml;
+                int count = simultaneousReplace(&value, renames);
+                if (renames.contains(node.id) && count > 0) --count;
+                if (count > 0) rewriteResult.references += count;
+            }
+            result.filesChanged = files.values();
+            result.warnings << QStringLiteral("Archive mode is preview-only; reference locations are estimated from extracted serialized XML.");
+            error.clear();
+        }
+    }
+    result.identitiesRenamed = rewriteResult.identities;
+    result.referencesUpdated = rewriteResult.references;
+    result.referenceChanges = rewriteResult.changes;
+    result.valid = plan.valid && result.conflicts.isEmpty() && rewriteResult.identities > 0;
+    result.reportText = buildReport(analysis, plan, rewriteResult, result.filesChanged, result.warnings,
+                                    result.conflicts, QStringLiteral("Preview only; no files modified"));
+    return result;
+}
+
+RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const RenamePlan &plan,
+                                          const QString &rootFolder, const QSet<QString> &whitelistIds) const
+{
+    RenameApplyResult result;
+    const RenamePreviewReport previewResult = preview(analysis, plan);
+    if (!previewResult.valid) { result.error = previewResult.conflicts.join(QStringLiteral("; ")); return result; }
+    QHash<QString, QByteArray> staged;
+    RewriteResult rewriteResult;
+    QStringList absoluteFiles;
+    if (!prepare(analysis, plan, &staged, &rewriteResult, &absoluteFiles, &result.error)) return result;
+    QStringList relativeFiles;
+    for (const QString &file : absoluteFiles) relativeFiles << QDir(rootFolder).relativeFilePath(file);
+    std::sort(relativeFiles.begin(), relativeFiles.end());
+    BackupManager backup;
+    if (!backup.createFolderBackup(rootFolder, relativeFiles, analysis.analysisReportText,
+                                   previewResult.reportText, &result.backupFolder, &result.error)) return result;
+    if (m_failureInjectionStep == QStringLiteral("after-backup")) { result.error = QStringLiteral("Injected failure after backup."); return result; }
+    QStringList committed;
+    for (auto it = staged.cbegin(); it != staged.cend(); ++it) {
+        QSaveFile file(it.key());
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || file.write(it.value()) != it.value().size() || !file.commit()) {
+            result.error = QStringLiteral("Failed to commit %1.").arg(it.key());
+            restore(rootFolder, result.backupFolder, committed, &result.error);
+            return result;
+        }
+        committed << QDir(rootFolder).relativeFilePath(it.key());
+    }
+    if (m_failureInjectionStep == QStringLiteral("after-commit")) {
+        result.error = QStringLiteral("Injected failure after commit.");
+        restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
+    }
+    FolderAnalyzer analyzer;
+    AnalysisResult rebuilt;
+    QString verifyError;
+    if (!analyzer.analyzeFolder(rootFolder, whitelistIds, &rebuilt, &verifyError)) {
+        result.error = QStringLiteral("Re-analysis failed: %1").arg(verifyError);
+        restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
+    }
+    QSet<QString> rebuiltIds;
+    for (const DataNode &node : rebuilt.nodes) rebuiltIds.insert(node.id);
+    QSet<QString> newIds;
+    for (const RenamePlanItem &item : plan.items) newIds.insert(item.newId);
+    for (const RenamePlanItem &item : plan.items) {
+        if (!rebuiltIds.contains(item.newId) || (!newIds.contains(item.oldId) && rebuiltIds.contains(item.oldId))) {
+            result.error = QStringLiteral("Post-rename verification failed for %1 -> %2.").arg(item.oldId, item.newId);
+            restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
+            return result;
+        }
+        if (!newIds.contains(item.oldId)) {
+            for (const DataNode &node : rebuilt.nodes) if (node.referencedIds.contains(item.oldId)) {
+                result.error = QStringLiteral("A reference to old ID %1 remains.").arg(item.oldId);
+                restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
+                return result;
+            }
+        }
+    }
+    result.success = true;
+    result.changedFiles = relativeFiles;
+    result.identitiesRenamed = rewriteResult.identities;
+    result.referencesUpdated = rewriteResult.references;
+    result.finalReport = previewResult.reportText + QStringLiteral("\nFinal result after apply: success\nBackup: %1\n").arg(result.backupFolder);
+    return result;
+}

@@ -1,0 +1,710 @@
+QWidget {
+    background: transparent;
+    color: #e8f2ef;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 11pt;
+}
+
+QMainWindow,
+QWidget#workspaceRoot,
+QFrame#workspaceFrame {
+    background-color: #020507;
+}
+
+QToolBar#mainToolbar,
+QFrame#pageToolbar {
+    background-color: rgba(5, 13, 18, 235);
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    padding: 8px;
+    spacing: 0px;
+}
+
+QPushButton,
+QToolBar#mainToolbar QToolButton {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largeup_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
+    min-height: 32px;
+    padding: 3px 18px;
+    color: #d8f7dc;
+}
+
+QPushButton:focus,
+QToolBar#mainToolbar QToolButton:focus,
+QCheckBox:focus,
+QSlider:focus,
+QTabBar::tab:focus {
+    outline: none;
+}
+
+QPushButton:hover,
+QToolBar#mainToolbar QToolButton:hover {
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largeover_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
+    color: #fff1e4;
+}
+
+QPushButton:pressed,
+QToolBar#mainToolbar QToolButton:pressed {
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largedown_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
+    color: #f6e1c4;
+}
+
+QPushButton:disabled,
+QToolBar#mainToolbar QToolButton:disabled {
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largedisabled_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
+    color: #6e7d7a;
+}
+
+QToolBar#mainToolbar QToolButton {
+    min-width: 112px;
+    min-height: 34px;
+    margin: 0;
+    font-weight: 700;
+}
+
+QFrame#graphControlsFrame {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_tooltip.png) 6 6 6 6 stretch stretch;
+}
+
+QLabel#graphControlsLabel {
+    color: #86cbbb;
+    font-size: 9pt;
+    font-weight: 700;
+    padding: 0 8px;
+}
+
+QPushButton#graphControlButton {
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_normal.png) 10 24 10 24 stretch stretch;
+    min-height: 26px;
+    padding: 0 12px;
+}
+
+QPushButton#graphControlButton:hover {
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_over.png) 10 24 10 24 stretch stretch;
+}
+
+QPushButton#graphControlButton:pressed {
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_down.png) 10 24 10 24 stretch stretch;
+}
+
+QLineEdit,
+QComboBox {
+    background-color: rgba(4, 11, 15, 238);
+    border: none;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    min-height: 28px;
+    padding: 4px 10px;
+    selection-background-color: #2a8068;
+}
+
+QLineEdit:focus,
+QComboBox:focus,
+QComboBox:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+}
+
+QLineEdit#pathEdit {
+    background: transparent;
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largedown_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
+    min-height: 34px;
+    padding: 4px 16px;
+    color: #eef7ee;
+    selection-background-color: rgba(96, 214, 173, 120);
+}
+
+QLineEdit#pathEdit:focus,
+QLineEdit#pathEdit:hover {
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largedown_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 28px;
+}
+
+QComboBox::down-arrow {
+    image: url(:/textures/ui_glue_dropdownarrow_normal_terran.png);
+    width: 16px;
+    height: 16px;
+}
+
+QComboBox QAbstractItemView,
+QMenu {
+    background-color: #071016;
+    border: 1px solid #407a70;
+    selection-background-color: #174e42;
+    selection-color: white;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 7px 24px;
+}
+
+QMenu::item:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+}
+
+QCheckBox::indicator {
+    width: 24px;
+    height: 24px;
+    image: url(:/textures/ui_glue_checkbox_normal_terran.png);
+}
+
+QCheckBox::indicator:hover {
+    image: url(:/textures/ui_glue_checkbox_normalover_terran.png);
+}
+
+QCheckBox::indicator:checked {
+    image: url(:/textures/ui_glue_checkboxmark_terran.png);
+}
+
+QCheckBox {
+    spacing: 10px;
+    color: #dbeee2;
+    padding: 6px 12px;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+}
+
+QCheckBox:hover {
+    color: #f0fff6;
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+}
+
+QCheckBox:checked {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+}
+
+QTabWidget::pane {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 rgba(7, 18, 24, 235),
+                                stop:0.45 rgba(2, 8, 12, 238),
+                                stop:1 rgba(0, 3, 5, 245));
+    border: 1px solid #24443e;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    color: #c7d9d5;
+    min-height: 28px;
+    padding: 5px 12px;
+    margin-right: 0px;
+    font-weight: 700;
+}
+
+QTabBar::tab:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #fff1e4;
+}
+
+QTabBar::tab:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #fff4e9;
+}
+
+QFrame#inspectorHeader,
+QFrame#graphHeader,
+QFrame#dependenciesHeader,
+QFrame#bucketCard,
+QFrame#graphCard,
+QFrame#inspectorCard,
+QFrame#tablePane {
+    background-color: rgba(5, 13, 18, 226);
+    border: none;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+}
+
+QFrame#familySelectorCard {
+    background-color: rgba(4, 18, 22, 238);
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+}
+
+QComboBox#familySelector {
+    min-height: 38px;
+    padding: 2px 46px 2px 16px;
+    color: #eafff7;
+    background: transparent;
+    border: 8px solid transparent;
+    border-image: url(:/textures/ui_glue_dropdownbutton_normal_terran.png) 16 16 16 16 stretch stretch;
+}
+
+QComboBox#familySelector:hover {
+    color: #ffffff;
+    border-image: url(:/textures/ui_glue_dropdownbutton_over_terran.png) 16 16 16 16 stretch stretch;
+}
+
+QComboBox#familySelector:on {
+    color: #fff1df;
+    border-image: url(:/textures/ui_glue_dropdownbutton_Pressed_terran.png) 16 16 16 16 stretch stretch;
+}
+
+QComboBox#familySelector::drop-down {
+    width: 38px;
+    border: none;
+    background: transparent;
+}
+
+QComboBox#familySelector::down-arrow {
+    image: url(:/textures/ui_glue_dropdownarrow_normal_terran.png);
+    width: 22px;
+    height: 22px;
+}
+
+QComboBox#familySelector::down-arrow:hover {
+    image: url(:/textures/ui_glue_dropdownarrow_over_terran.png);
+}
+
+QAbstractItemView#familySelectorPopup {
+    color: #dcfff4;
+    padding: 8px;
+    outline: none;
+    background-color: #020b0e;
+    border: 8px solid transparent;
+    border-image: url(:/textures/ui_glue_dropdownmenuframe_terran.png) 12 12 12 12 stretch stretch;
+    selection-color: #fff3e5;
+    selection-background-color: transparent;
+}
+
+QAbstractItemView#familySelectorPopup::item {
+    min-height: 30px;
+    padding: 3px 12px;
+    border: 4px solid transparent;
+}
+
+QAbstractItemView#familySelectorPopup::item:hover,
+QAbstractItemView#familySelectorPopup::item:selected {
+    color: #ffffff;
+    border-image: url(:/textures/ui_glue_dropdownmenubutton_selected_terran.png) 5 5 5 5 stretch stretch;
+}
+
+QTreeWidget#dataCollectionFamilyTree {
+    background-color: rgba(1, 10, 14, 242);
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+}
+
+QTreeWidget#dataCollectionFamilyTree::item:has-children {
+    color: #eafff8;
+    font-weight: 700;
+}
+
+QTreeWidget#dataCollectionFamilyTree::item:selected {
+    color: #fff3e7;
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+}
+
+QTreeView,
+QTableView,
+QTableWidget,
+QListWidget,
+QPlainTextEdit,
+QGraphicsView {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 rgba(5, 14, 18, 242),
+                                stop:1 rgba(0, 4, 7, 246));
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    alternate-background-color: rgba(10, 25, 27, 220);
+    selection-background-color: transparent;
+    selection-color: white;
+    gridline-color: rgba(53, 91, 83, 120);
+    font-size: 11pt;
+}
+
+QAbstractItemView {
+    outline: 0;
+}
+
+QTreeView:focus,
+QTableView:focus,
+QTableWidget:focus,
+QListWidget:focus,
+QPlainTextEdit:focus {
+    border-image: url(:/textures/ui_nova_global_tooltip.png) 6 6 6 6 stretch stretch;
+}
+
+QScrollBar:vertical {
+    background-color: rgba(1, 8, 10, 235);
+    border: 1px solid #1d4d43;
+    width: 32px;
+    margin: 0;
+}
+
+QScrollBar:horizontal {
+    background-color: rgba(1, 8, 10, 235);
+    border: 1px solid #1d4d43;
+    height: 24px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background-color: transparent;
+    border: none;
+    min-height: 72px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: transparent;
+    border: none;
+    min-width: 88px;
+}
+
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover,
+QScrollBar::handle:vertical:pressed,
+QScrollBar::handle:horizontal:pressed {
+    background-color: rgba(75, 220, 175, 70);
+}
+
+QSlider#backgroundMusicVolume::groove:horizontal {
+    height: 6px;
+    border: 1px solid #25695a;
+    border-radius: 3px;
+    background: #061511;
+}
+
+QSlider#backgroundMusicVolume::sub-page:horizontal {
+    border: none;
+    border-radius: 3px;
+    background: #43c99e;
+}
+
+QSlider#backgroundMusicVolume::add-page:horizontal {
+    border: none;
+    border-radius: 3px;
+    background: #0b2720;
+}
+
+QSlider#backgroundMusicVolume::handle:horizontal {
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border: 2px solid #8fffd9;
+    border-radius: 7px;
+    background: #1b5f4d;
+}
+
+QSlider#backgroundMusicVolume::handle:horizontal:hover {
+    background: #35b98f;
+    border-color: #d7fff1;
+}
+
+QScrollBar::add-page,
+QScrollBar::sub-page {
+    background-color: rgba(0, 0, 0, 0);
+    border: none;
+}
+
+QScrollBar::add-line,
+QScrollBar::sub-line {
+    background: transparent;
+    border: none;
+    width: 0;
+    height: 0;
+}
+
+QScrollBar::up-arrow,
+QScrollBar::down-arrow,
+QScrollBar::left-arrow,
+QScrollBar::right-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+
+QAbstractScrollArea::corner {
+    background: transparent;
+    border: none;
+}
+
+/* The two large optimization tables keep a clearly visible, proportional
+   thumb so long lists can be dragged as well as scrolled with the wheel. */
+QTableView#cleanupTable QScrollBar:vertical,
+QTreeView#duplicatesTree QScrollBar:vertical,
+QTabWidget#optimizationSteps QScrollBar:vertical {
+    width: 22px;
+    background: transparent;
+    border: none;
+    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 22 5 22 5 stretch stretch;
+}
+
+QTableView#cleanupTable QScrollBar::handle:vertical,
+QTreeView#duplicatesTree QScrollBar::handle:vertical,
+QTabWidget#optimizationSteps QScrollBar::handle:vertical {
+    min-height: 52px;
+    background: transparent;
+    border: none;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 28 7 28 7 stretch stretch;
+    margin: 2px 3px;
+}
+
+QTableView#cleanupTable QScrollBar::handle:vertical:hover,
+QTreeView#duplicatesTree QScrollBar::handle:vertical:hover,
+QTabWidget#optimizationSteps QScrollBar::handle:vertical:hover {
+    background: transparent;
+    border: none;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 28 7 28 7 stretch stretch;
+}
+
+QTableView#cleanupTable QScrollBar:horizontal,
+QTreeView#duplicatesTree QScrollBar:horizontal,
+QTabWidget#optimizationSteps QScrollBar:horizontal {
+    height: 18px;
+}
+
+QTableView#cleanupTable QScrollBar::handle:horizontal,
+QTreeView#duplicatesTree QScrollBar::handle:horizontal,
+QTabWidget#optimizationSteps QScrollBar::handle:horizontal {
+    min-width: 72px;
+    background-color: #45c89f;
+    border: 1px solid #92ffdc;
+    border-radius: 4px;
+    margin: 3px;
+}
+
+QTableView::item:focus,
+QTreeView::item:focus,
+QTableWidget::item:focus {
+    outline: 0;
+}
+
+QTreeView::item,
+QTableView::item,
+QTableWidget::item,
+QListWidget::item {
+    background: transparent;
+    border: 3px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    padding: 6px 9px;
+}
+
+QTreeView::item:hover,
+QTableView::item:hover,
+QTableWidget::item:hover,
+QListWidget::item:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #eafff8;
+}
+
+QTreeView::item:selected,
+QTableView::item:selected,
+QTableWidget::item:selected,
+QListWidget::item:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #fff4e9;
+    font-weight: 700;
+}
+
+QTableView::item:selected,
+QTableWidget::item:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #effff9;
+}
+
+QDialog#toolDialog {
+    background: transparent;
+    border: 8px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+    padding: 8px;
+}
+
+QTreeView#fileTree::item {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    min-height: 30px;
+    padding: 4px 10px;
+}
+
+QTreeView#fileTree::item:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #fff0cf;
+}
+
+QTreeView#fileTree::item:selected,
+QTableView#archiveFileTable::item:selected {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #fff0df;
+    font-weight: 700;
+}
+
+QTreeView#fileTree::item:selected:hover,
+QTableView#archiveFileTable::item:selected:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+}
+
+QHeaderView::section {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    min-height: 30px;
+    padding: 6px 10px;
+    color: #eefdf7;
+    font-weight: 700;
+}
+
+QHeaderView::section:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+}
+
+QAbstractItemView QLineEdit {
+    border-image: url(:/textures/ui_nova_global_tooltip_orange.png) 8 8 8 8 stretch stretch;
+}
+
+QLabel#panelTitle {
+    color: #f5fffc;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QTreeView#duplicatesTree {
+    border: 1px solid #7f4b29;
+}
+
+QGraphicsView#graphView {
+    border: 1px solid #315f89;
+}
+
+QLabel#graphHintBadge {
+    background: transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #d8fff2;
+    padding: 6px 10px;
+    font-weight: 600;
+}
+
+QTableView#cleanupTable {
+    border: 1px solid #496c38;
+}
+
+QLabel#inspectorSubtitle {
+    color: #9ab8b2;
+}
+
+QLabel#modeBadge,
+QLabel#statusBadge,
+QLabel#bucketCount {
+    background-color: rgba(6, 21, 25, 220);
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_normal.png) 10 24 10 24 stretch stretch;
+    color: #dffcf4;
+    padding: 4px 12px;
+    font-weight: 600;
+}
+
+QLabel#inspectorValue {
+    color: #edf8f5;
+}
+
+QSplitter::handle {
+    background-color: #23463f;
+}
+
+QSplitter::handle:hover {
+    background-color: #55af99;
+}
+
+QStatusBar {
+    background-color: rgba(4, 11, 15, 245);
+    border-top: 1px solid #4bd7af;
+    color: #b9d8d1;
+}
+
+QDialog#analysisProgressDialog {
+    background: transparent;
+}
+
+QFrame#novaProgressFrame {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_tooltip_orange.png) 6 6 6 6 stretch stretch;
+}
+
+QFrame#novaProgressInner {
+    background: transparent;
+    border: 7px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+}
+
+QLabel#novaProgressTitle {
+    color: #ffffff;
+    font-size: 15pt;
+    font-weight: 800;
+}
+
+QLabel#novaProgressLine {
+    color: #80d2a2;
+    font-size: 11pt;
+    font-weight: 700;
+}
+
+QLabel#novaProgressDetail {
+    color: #a4cbb9;
+    font-size: 10pt;
+}
+
+QLabel#novaProgressPercent {
+    color: #9fffd8;
+    font-size: 12pt;
+    font-weight: 800;
+}
+
+QProgressBar#analysisProgressBar {
+    background: transparent;
+    border: none;
+    min-height: 48px;
+    padding: 0;
+}
+
+QProgressBar#analysisProgressBar::chunk {
+    background: transparent;
+    border: none;
+}
+
+QSlider::groove:horizontal {
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    height: 28px;
+    background: transparent;
+}
+
+QSlider::sub-page:horizontal {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 24 12 24 12 stretch stretch;
+    height: 28px;
+}
+
+QSlider::add-page:horizontal {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+}
+
+QSlider::handle:horizontal {
+    width: 34px;
+    margin: -7px -4px;
+    background: transparent;
+    border: none;
+    image: url(:/textures/ui_glue_sliderhandle_normal_terran.png);
+}
+
+QSlider::handle:horizontal:hover {
+    image: url(:/textures/ui_glue_sliderhandle_normalover_terran.png);
+}
+
+QSlider::handle:horizontal:pressed {
+    image: url(:/textures/ui_glue_sliderhandle_normalpressed_terran.png);
+}
