@@ -34,10 +34,15 @@ project-specific naming and runtime references.
 
 ### Build and update Data Collections
 
-Create `CDataCollectionUnit` entries or add missing records to an existing Data
-Collection. Existing collections, records, custom attributes, metadata, and
-unrelated XML nodes are preserved. The tool also creates or updates the archive
-`(listfile)` entry when required.
+Add objects from all supported StarCraft II Editor catalogs to Data Collections,
+not only units. This includes related Actors, Models, Sounds, Weapons, Abilities,
+Effects, Behaviors, Validators, Requirements, Upgrades, and other recognized
+data types. For a unit family, the tool creates or updates its
+`CDataCollectionUnit` container and adds the missing catalog records.
+
+Existing collections, records, custom attributes, metadata, and unrelated XML
+nodes are preserved. The tool also creates or updates the archive `(listfile)`
+entry when required.
 
 ### Analysis and inspection
 
