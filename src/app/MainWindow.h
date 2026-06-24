@@ -84,6 +84,7 @@ private:
     bool analyzeXmlFile(const QString &filePath, QString *errorMessage);
     bool analyzeArchiveFile(const QString &filePath, QString *errorMessage);
     bool materializeArchiveAnalysis(const QString &tempRoot, AnalysisResult *analysis, QString *errorMessage) const;
+    void applyArchiveReferenceSafety(AnalysisResult *analysis) const;
     void normalizeArchiveAnalysis(AnalysisResult *analysis, const QString &tempRoot, const QString &archivePath) const;
     bool commitArchiveChanges(const QString &tempRoot, const QStringList &changedFiles,
                               QString *backupPath, QString *errorMessage) const;

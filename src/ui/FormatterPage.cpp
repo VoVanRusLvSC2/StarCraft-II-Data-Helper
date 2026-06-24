@@ -73,7 +73,7 @@ private:
     {
         QTextCharFormat format;
         format.setForeground(QColor(color));
-        format.setFontWeight(bold ? QFont::Bold : QFont::Normal);
+        format.setFontWeight(bold ? QFont::Bold : QFont::DemiBold);
         auto matches = regex.globalMatch(text);
         while (matches.hasNext()) {
             const auto match = matches.next();

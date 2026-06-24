@@ -47,7 +47,7 @@ private:
     {
         QTextCharFormat format;
         format.setForeground(QColor(color));
-        format.setFontWeight(bold ? QFont::Bold : QFont::Normal);
+        format.setFontWeight(bold ? QFont::Bold : QFont::DemiBold);
         return format;
     }
 

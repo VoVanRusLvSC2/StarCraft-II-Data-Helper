@@ -50,8 +50,8 @@ void AudioManager::initialize()
     }
 
     m_runtimeTrackPath = ensureRuntimeTrackPath();
-    stopMusic();
     m_initialized = true;
+    applySettings();
 }
 
 void AudioManager::applySettings()
@@ -74,7 +74,7 @@ void AudioManager::applySettings()
 bool AudioManager::isMusicEnabled()
 {
     QSettings settings;
-    return settings.value(QStringLiteral("audio/musicEnabled"), false).toBool();
+    return settings.value(QStringLiteral("audio/musicEnabled"), true).toBool();
 }
 
 double AudioManager::musicVolume()

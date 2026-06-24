@@ -1103,6 +1103,14 @@ void MainWindow::normalizeArchiveAnalysis(AnalysisResult *analysis, const QStrin
             node.sourceFile = QDir(tempRoot).relativeFilePath(node.sourceFile);
     }
     analysis->rootFolder = archivePath;
+    applyArchiveReferenceSafety(analysis);
+    analysis->analysisReportText = m_analyzer.buildAnalysisReport(*analysis);
+    analysis->plannedChangesReportText = m_analyzer.buildDryRunReport(*analysis, QVector<int>{});
+}
+
+void MainWindow::applyArchiveReferenceSafety(AnalysisResult *analysis) const
+{
+    if (!analysis) return;
     analysis->possibleUnusedNodeIndices.clear();
     for (UnusedCandidateInfo &candidate : analysis->unusedCandidates) {
         if (candidate.state != CandidateState::Safe) continue;
@@ -1123,8 +1131,6 @@ void MainWindow::normalizeArchiveAnalysis(AnalysisResult *analysis, const QStrin
             analysis->possibleUnusedNodeIndices.append(candidate.nodeIndex);
         }
     }
-    analysis->analysisReportText = m_analyzer.buildAnalysisReport(*analysis);
-    analysis->plannedChangesReportText = m_analyzer.buildDryRunReport(*analysis, QVector<int>{});
 }
 
 bool MainWindow::materializeArchiveAnalysis(const QString &tempRoot, AnalysisResult *analysis, QString *errorMessage) const
@@ -1445,10 +1451,26 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
             QMessageBox::critical(this, QStringLiteral("Deletion failed"), error);
             return;
         }
+        QVector<WizardNodeRef> selectedRefs;
+        for (int row : rows) {
+            if (row < 0 || row >= m_result.nodes.size()) continue;
+            const DataNode &node = m_result.nodes[row];
+            selectedRefs.append({node.id, node.elementName, node.sourceFile, node.originalLocation});
+        }
+        if (!m_analyzer.analyzeFolder(workspace.path(), m_whitelistIds, &materialized, &error)) {
+            QMessageBox::critical(this, QStringLiteral("Deletion failed"), error);
+            return;
+        }
+        applyArchiveReferenceSafety(&materialized);
+        QVector<int> refreshedRows;
+        for (const WizardNodeRef &ref : selectedRefs) {
+            const int index = findNodeIndex(materialized, ref);
+            if (index >= 0) refreshedRows.append(index);
+        }
         QString workspaceBackup;
         QStringList changedFiles;
         int removed = 0, skipped = 0;
-        if (!m_analyzer.applySelectedChanges(materialized, rows, workspace.path(), m_whitelistIds,
+        if (!m_analyzer.applySelectedChanges(materialized, refreshedRows, workspace.path(), m_whitelistIds,
                                              &workspaceBackup, &error, &changedFiles, &removed, &skipped)) {
             QMessageBox::critical(this, QStringLiteral("Deletion failed"), error);
             return;
@@ -1771,7 +1793,13 @@ void MainWindow::applyOptimizationWizardPlan()
         } else {
             QStringList changedFiles;
 
-            if (!selection.unused.isEmpty()) {
+            if (!reloadWorkingAnalysis(workspace.path(), &current, &error)) {
+                failure = error;
+            } else {
+                applyArchiveReferenceSafety(&current);
+            }
+
+            if (failure.isEmpty() && !selection.unused.isEmpty()) {
                 QVector<int> unusedRows;
                 for (const WizardNodeRef &ref : selection.unused) {
                     const int index = findNodeIndex(current, ref);

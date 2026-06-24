@@ -3,6 +3,7 @@ QWidget {
     color: #e8f2ef;
     font-family: "Segoe UI", sans-serif;
     font-size: 11pt;
+    font-weight: 600;
 }
 
 QMainWindow,
@@ -27,6 +28,7 @@ QToolBar#mainToolbar QToolButton {
     min-height: 32px;
     padding: 3px 18px;
     color: #d8f7dc;
+    font-weight: 700;
 }
 
 QPushButton:focus,
@@ -40,7 +42,7 @@ QTabBar::tab:focus {
 QPushButton:hover,
 QToolBar#mainToolbar QToolButton:hover {
     border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largeover_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
-    color: #effff7;
+    color: #a9ffe1;
     font-weight: 700;
 }
 
@@ -362,7 +364,7 @@ QScrollBar:horizontal {
     background: transparent;
     border: none;
     border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 5 22 5 22 stretch stretch;
-    height: 18px;
+    height: 22px;
     margin: 0;
 }
 
@@ -379,7 +381,7 @@ QScrollBar::handle:horizontal {
     border: none;
     border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 7 28 7 28 stretch stretch;
     min-width: 72px;
-    margin: 3px;
+    margin: 2px 3px;
 }
 
 QScrollBar::handle:vertical:hover,
@@ -479,6 +481,7 @@ QListWidget::item {
     border: 3px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
     padding: 6px 9px;
+    font-weight: 600;
 }
 
 QTreeView::item:hover,
@@ -486,8 +489,8 @@ QTableView::item:hover,
 QTableWidget::item:hover,
 QListWidget::item:hover {
     border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
-    color: #ffffff;
-    font-weight: 700;
+    color: #b9ffe8;
+    font-weight: 600;
 }
 
 QTreeView::item:selected,
@@ -503,6 +506,15 @@ QTableView::item:selected,
 QTableWidget::item:selected {
     border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
     color: #effff9;
+}
+
+QLabel#objectContextLabel {
+    color: #a9d8cd;
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    padding: 5px 10px;
+    font-weight: 600;
 }
 
 QDialog#toolDialog {

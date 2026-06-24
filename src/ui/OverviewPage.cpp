@@ -127,6 +127,10 @@ OverviewPage::OverviewPage(QWidget *parent)
     m_filterEdit = new QLineEdit(tablePane);
     m_filterEdit->setPlaceholderText(QStringLiteral("Filter rows"));
 
+    m_objectContextLabel = new QLabel(QStringLiteral("Catalog entries | Source file: not selected"), tablePane);
+    m_objectContextLabel->setObjectName(QStringLiteral("objectContextLabel"));
+    m_objectContextLabel->setWordWrap(true);
+
     m_fileSummaryTable = new QTableView(tablePane);
     m_fileSummaryTable->setObjectName(QStringLiteral("archiveFileTable"));
     m_fileSummaryTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -165,6 +169,10 @@ OverviewPage::OverviewPage(QWidget *parent)
     m_objectTable->verticalHeader()->setDefaultSectionSize(32);
     m_objectTable->setAlternatingRowColors(true);
     m_objectTable->setTextElideMode(Qt::ElideNone);
+    m_objectTable->setColumnHidden(ObjectTableModel::ParentColumn, true);
+    m_objectTable->setColumnHidden(ObjectTableModel::ElementColumn, true);
+    m_objectTable->setColumnHidden(ObjectTableModel::FileColumn, true);
+    tableLayout->addWidget(m_objectContextLabel);
     tableLayout->addWidget(m_objectTable, 1);
 
     m_inspector = new ObjectInspectorWidget(centerSplitter);
@@ -344,6 +352,7 @@ void OverviewPage::showAllFileRows()
         m_fileTree->clearSelection();
     }
     m_proxy->setSourceFileFilter(QString());
+    updateObjectContext();
     selectFirstVisibleObjectRow();
 }
 
@@ -351,7 +360,32 @@ void OverviewPage::setSelectedFileFilter(const QString &filePath)
 {
     m_selectedFilePath = filePath.trimmed();
     m_proxy->setSourceFileFilter(m_selectedFilePath);
+    updateObjectContext();
     selectFirstVisibleObjectRow();
+}
+
+void OverviewPage::updateObjectContext()
+{
+    if (!m_objectContextLabel) return;
+    QSet<QString> catalogTypes;
+    int objectCount = 0;
+    for (const DataNode &node : m_result.nodes) {
+        if (!m_selectedFilePath.isEmpty()
+            && QDir::cleanPath(node.sourceFile).compare(QDir::cleanPath(m_selectedFilePath), Qt::CaseInsensitive) != 0)
+            continue;
+        if (!node.elementName.isEmpty()) catalogTypes.insert(node.elementName);
+        ++objectCount;
+    }
+    QString typeText;
+    if (catalogTypes.size() == 1)
+        typeText = QStringLiteral("Catalog type: %1").arg(*catalogTypes.cbegin());
+    else
+        typeText = QStringLiteral("Catalog types: %1").arg(catalogTypes.size());
+    const QString fileText = m_selectedFilePath.isEmpty()
+        ? QStringLiteral("all XML files")
+        : QFileInfo(m_selectedFilePath).fileName();
+    m_objectContextLabel->setText(QStringLiteral("%1  |  Source file: %2  |  Objects: %3\nParent is Catalog for these rows; repeated Parent, Element and File columns are hidden.")
+                                      .arg(typeText, fileText).arg(objectCount));
 }
 
 void OverviewPage::rebuildFileSummary()

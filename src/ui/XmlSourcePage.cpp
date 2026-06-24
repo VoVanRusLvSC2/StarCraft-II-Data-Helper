@@ -33,7 +33,7 @@ protected:
 private:
     void apply(const QString &text, const QRegularExpression &regex, const QString &color, bool bold)
     {
-        QTextCharFormat format; format.setForeground(QColor(color)); format.setFontWeight(bold ? QFont::Bold : QFont::Normal);
+        QTextCharFormat format; format.setForeground(QColor(color)); format.setFontWeight(bold ? QFont::Bold : QFont::DemiBold);
         auto matches = regex.globalMatch(text);
         while (matches.hasNext()) { const auto match = matches.next(); setFormat(match.capturedStart(), match.capturedLength(), format); }
     }

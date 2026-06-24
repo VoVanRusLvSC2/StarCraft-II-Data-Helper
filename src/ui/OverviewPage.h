@@ -50,6 +50,7 @@ private:
     void selectFirstFileItem();
     void selectFirstVisibleObjectRow();
     void setSelectedFileFilter(const QString &filePath);
+    void updateObjectContext();
 
     AnalysisResult m_result;
     QString m_folderPath;
@@ -58,6 +59,7 @@ private:
     QLineEdit *m_filterEdit = nullptr;
     QLabel *m_modeLabel = nullptr;
     QLabel *m_summaryLabel = nullptr;
+    QLabel *m_objectContextLabel = nullptr;
     QPlainTextEdit *m_reportView = nullptr;
     QTreeView *m_fileTree = nullptr;
     QTableView *m_fileSummaryTable = nullptr;
