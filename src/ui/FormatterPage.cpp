@@ -2,18 +2,22 @@
 #include "core/DataCollectionUnitBuilder.h"
 #include "core/StandardNamePlanner.h"
 #include "core/UnitFamilyDetector.h"
+#include <QFont>
 #include <QAbstractItemView>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QSyntaxHighlighter>
+#include <QTextCharFormat>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QVBoxLayout>
 
@@ -46,6 +50,37 @@ QVector<int> wizardSteps(bool duplicateMergeEnabled)
 {
     return duplicateMergeEnabled ? QVector<int>{0, 1, 2, 3, 4} : QVector<int>{0, 2, 3, 4};
 }
+
+class XmlTextHighlighter final : public QSyntaxHighlighter
+{
+public:
+    explicit XmlTextHighlighter(QTextDocument *document)
+        : QSyntaxHighlighter(document)
+    {
+    }
+
+protected:
+    void highlightBlock(const QString &text) override
+    {
+        apply(text, QRegularExpression(QStringLiteral("</?[^>\\s/]+")), QStringLiteral("#8bc5ff"), true);
+        apply(text, QRegularExpression(QStringLiteral("\\b[A-Za-z_:-]+(?=\\=)")), QStringLiteral("#ffd47a"), false);
+        apply(text, QRegularExpression(QStringLiteral("\"[^\"]*\"")), QStringLiteral("#9ef7b6"), false);
+        apply(text, QRegularExpression(QStringLiteral("<!--.*-->")), QStringLiteral("#8292a6"), false);
+    }
+
+private:
+    void apply(const QString &text, const QRegularExpression &regex, const QString &color, bool bold)
+    {
+        QTextCharFormat format;
+        format.setForeground(QColor(color));
+        format.setFontWeight(bold ? QFont::Bold : QFont::Normal);
+        auto matches = regex.globalMatch(text);
+        while (matches.hasNext()) {
+            const auto match = matches.next();
+            setFormat(match.capturedStart(), match.capturedLength(), format);
+        }
+    }
+};
 
 OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateMergeEnabled) {
     OptimizationPlanData plan;
@@ -95,11 +130,17 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_rename = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Current ID"), QStringLiteral("Proposed ID"), QStringLiteral("Risk / Conflict")});
     m_collection = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Existing records"), QStringLiteral("Can add"), QStringLiteral("Warnings")});
     m_summary = new QPlainTextEdit; m_summary->setReadOnly(true);
+    m_summary->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_summary->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
+    new XmlTextHighlighter(m_summary->document());
     m_steps->addTab(m_unused, QStringLiteral("Unused Objects")); m_steps->addTab(m_duplicates, QStringLiteral("Duplicate Merge"));
     m_steps->addTab(m_rename, QStringLiteral("Rename")); m_steps->addTab(m_collection, QStringLiteral("Data Collection")); m_steps->addTab(m_summary, QStringLiteral("Summary"));
     m_steps->tabBar()->hide();
     m_details = new QPlainTextEdit(this);
     m_details->setReadOnly(true);
+    m_details->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_details->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
+    new XmlTextHighlighter(m_details->document());
     m_details->setMinimumWidth(420);
     m_details->setPlaceholderText(QStringLiteral("Select an item to inspect its XML or compare Keep / Remove objects."));
     auto *content = new QSplitter(Qt::Horizontal, this);
@@ -425,6 +466,7 @@ QVector<MergeRequest> FormatterPage::selectedMergeRequests() const
 OptimizationWizardSelection FormatterPage::currentSelection() const
 {
     OptimizationWizardSelection result;
+    const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(m_result);
     for (int row = 0; row < m_unused->rowCount(); ++row) {
         const QTableWidgetItem *item = m_unused->item(row, 0);
         if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
@@ -449,10 +491,17 @@ OptimizationWizardSelection FormatterPage::currentSelection() const
     for (int row = 0; row < m_collection->rowCount(); ++row) {
         const QTableWidgetItem *item = m_collection->item(row, 0);
         if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
-        if (QTableWidgetItem *family = m_collection->item(row, 1))
-            result.collectionFamilyRoots.append(family->text());
+        const QString familyRootId = m_collection->item(row, 1) ? m_collection->item(row, 1)->text() : QString();
+        const auto familyIt = std::find_if(collectionFamilies.cbegin(), collectionFamilies.cend(), [&](const UnitFamily &family) {
+            return family.rootId == familyRootId;
+        });
+        if (familyIt == collectionFamilies.cend()) continue;
+        WizardCollectionSelection selection;
+        selection.familyRootId = familyRootId;
+        for (const UnitFamilyObject &object : familyIt->objects)
+            selection.nodes.append(nodeRefFromIndices(object.nodeIndex));
+        result.collection.append(selection);
     }
-    result.collectionFamilyRoots.removeDuplicates();
     return result;
 }
 

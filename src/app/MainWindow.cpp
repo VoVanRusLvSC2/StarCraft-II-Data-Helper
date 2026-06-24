@@ -1597,7 +1597,7 @@ void MainWindow::applyOptimizationWizardPlan()
 
     const OptimizationWizardSelection selection = m_dryRunPage->currentSelection();
     if (selection.unused.isEmpty() && selection.duplicates.isEmpty()
-        && selection.rename.isEmpty() && selection.collectionFamilyRoots.isEmpty()) {
+        && selection.rename.isEmpty() && selection.collection.isEmpty()) {
         QMessageBox::information(this, QStringLiteral("Optimization Wizard"),
                                  QStringLiteral("Select at least one item before applying the optimization plan."));
         return;
@@ -1693,17 +1693,21 @@ void MainWindow::applyOptimizationWizardPlan()
             for (const UnitFamily &family : families) familyByRoot.insert(family.rootId, family);
             bool collectionChanged = false;
             updateApplyProgress(65, QStringLiteral("Applying Data Collection"), QStringLiteral("Adding selected collection records"));
-            for (const QString &rootId : selection.collectionFamilyRoots) {
+            for (const WizardCollectionSelection &selectedCollection : selection.collection) {
                 if (failure.isEmpty()) {
-                    const auto match = familyByRoot.constFind(rootId);
+                    const auto match = familyByRoot.constFind(selectedCollection.familyRootId);
                     if (match == familyByRoot.cend()) {
-                        warnings << QStringLiteral("Skipped Data Collection family %1 because it is no longer present after apply.").arg(rootId);
+                        warnings << QStringLiteral("Skipped Data Collection family %1 because it is no longer present after apply.").arg(selectedCollection.familyRootId);
                         continue;
                     }
                     DataCollectionBuildRequest request;
                     request.family = match.value();
                     request.requestedUnitId = request.family.rootId;
                     request.confirmNonStandard = true;
+                    for (const WizardNodeRef &ref : selectedCollection.nodes) {
+                        const int index = findNodeIndex(current, ref);
+                        if (index >= 0) request.includedNodeIndices.insert(index);
+                    }
                     const DataCollectionApplyResult result = m_dataCollectionBuilder.apply(current, request, workspace.path(), m_whitelistIds);
                     if (!result.success) {
                         failure = result.error;
@@ -1835,17 +1839,21 @@ void MainWindow::applyOptimizationWizardPlan()
         for (const UnitFamily &family : UnitFamilyDetector().detectCollectionFamilies(current))
             collectionFamilyByRoot.insert(family.rootId, family);
         updateApplyProgress(80, QStringLiteral("Applying Data Collection"), QStringLiteral("Adding selected collection records"));
-        for (const QString &rootId : selection.collectionFamilyRoots) {
+        for (const WizardCollectionSelection &selectedCollection : selection.collection) {
             if (!failure.isEmpty()) break;
-            const auto familyIt = collectionFamilyByRoot.constFind(rootId);
+            const auto familyIt = collectionFamilyByRoot.constFind(selectedCollection.familyRootId);
             if (familyIt == collectionFamilyByRoot.cend()) {
-                warnings << QStringLiteral("Skipped Data Collection family %1 because it is no longer present after apply.").arg(rootId);
+                warnings << QStringLiteral("Skipped Data Collection family %1 because it is no longer present after apply.").arg(selectedCollection.familyRootId);
                 continue;
             }
             DataCollectionBuildRequest request;
             request.family = familyIt.value();
             request.requestedUnitId = request.family.rootId;
             request.confirmNonStandard = true;
+            for (const WizardNodeRef &ref : selectedCollection.nodes) {
+                const int index = findNodeIndex(current, ref);
+                if (index >= 0) request.includedNodeIndices.insert(index);
+            }
             const DataCollectionApplyResult result = m_dataCollectionBuilder.apply(current, request, m_rootFolder, m_whitelistIds);
             if (!result.success) {
                 failure = result.error;

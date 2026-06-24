@@ -351,36 +351,43 @@ QPlainTextEdit:focus {
 }
 
 QScrollBar:vertical {
-    background-color: rgba(1, 8, 10, 235);
-    border: 1px solid #1d4d43;
-    width: 32px;
+    background: transparent;
+    border: none;
+    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 22 5 22 5 stretch stretch;
+    width: 22px;
     margin: 0;
 }
 
 QScrollBar:horizontal {
-    background-color: rgba(1, 8, 10, 235);
-    border: 1px solid #1d4d43;
-    height: 24px;
+    background: transparent;
+    border: none;
+    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 5 22 5 22 stretch stretch;
+    height: 18px;
     margin: 0;
 }
 
 QScrollBar::handle:vertical {
-    background-color: transparent;
+    background: transparent;
     border: none;
-    min-height: 72px;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 28 7 28 7 stretch stretch;
+    min-height: 52px;
+    margin: 2px 3px;
 }
 
 QScrollBar::handle:horizontal {
-    background-color: transparent;
+    background: transparent;
     border: none;
-    min-width: 88px;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 7 28 7 28 stretch stretch;
+    min-width: 72px;
+    margin: 3px;
 }
 
 QScrollBar::handle:vertical:hover,
 QScrollBar::handle:horizontal:hover,
 QScrollBar::handle:vertical:pressed,
 QScrollBar::handle:horizontal:pressed {
-    background-color: rgba(75, 220, 175, 70);
+    background: transparent;
+    border: none;
 }
 
 QSlider#backgroundMusicVolume::groove:horizontal {
@@ -444,49 +451,18 @@ QAbstractScrollArea::corner {
     border: none;
 }
 
-/* The two large optimization tables keep a clearly visible, proportional
-   thumb so long lists can be dragged as well as scrolled with the wheel. */
-QTableView#cleanupTable QScrollBar:vertical,
-QTreeView#duplicatesTree QScrollBar:vertical,
-QTabWidget#optimizationSteps QScrollBar:vertical {
-    width: 22px;
-    background: transparent;
-    border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 22 5 22 5 stretch stretch;
-}
-
-QTableView#cleanupTable QScrollBar::handle:vertical,
-QTreeView#duplicatesTree QScrollBar::handle:vertical,
-QTabWidget#optimizationSteps QScrollBar::handle:vertical {
-    min-height: 52px;
-    background: transparent;
-    border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 28 7 28 7 stretch stretch;
-    margin: 2px 3px;
-}
-
-QTableView#cleanupTable QScrollBar::handle:vertical:hover,
-QTreeView#duplicatesTree QScrollBar::handle:vertical:hover,
-QTabWidget#optimizationSteps QScrollBar::handle:vertical:hover {
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:vertical:pressed {
     background: transparent;
     border: none;
     border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 28 7 28 7 stretch stretch;
 }
 
-QTableView#cleanupTable QScrollBar:horizontal,
-QTreeView#duplicatesTree QScrollBar:horizontal,
-QTabWidget#optimizationSteps QScrollBar:horizontal {
-    height: 18px;
-}
-
-QTableView#cleanupTable QScrollBar::handle:horizontal,
-QTreeView#duplicatesTree QScrollBar::handle:horizontal,
-QTabWidget#optimizationSteps QScrollBar::handle:horizontal {
-    min-width: 72px;
-    background-color: #45c89f;
-    border: 1px solid #92ffdc;
-    border-radius: 4px;
-    margin: 3px;
+QScrollBar::handle:horizontal:hover,
+QScrollBar::handle:horizontal:pressed {
+    background: transparent;
+    border: none;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 7 28 7 28 stretch stretch;
 }
 
 QTableView::item:focus,

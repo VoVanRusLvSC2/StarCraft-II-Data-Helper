@@ -44,12 +44,18 @@ struct WizardRenameSelection
     WizardNodeRef node;
 };
 
+struct WizardCollectionSelection
+{
+    QString familyRootId;
+    QVector<WizardNodeRef> nodes;
+};
+
 struct OptimizationWizardSelection
 {
     QVector<WizardNodeRef> unused;
     QVector<WizardMergeSelection> duplicates;
     QVector<WizardRenameSelection> rename;
-    QStringList collectionFamilyRoots;
+    QVector<WizardCollectionSelection> collection;
 };
 
 class FormatterPage : public QWidget
