@@ -24,6 +24,7 @@
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QGraphicsOpacityEffect>
@@ -84,6 +85,14 @@
 
 namespace
 {
+    DataCollectionMode configuredDataCollectionMode()
+    {
+        QSettings settings;
+        return settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("Unit")).toString()
+                       .compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
+            ? DataCollectionMode::UnitAbilWeapon : DataCollectionMode::Unit;
+    }
+
     bool isArchiveReferenceEntry(const QString &entry)
     {
         const QString normalized = QDir::cleanPath(entry).replace('\\', '/').toLower();
@@ -592,7 +601,7 @@ void MainWindow::showSettingsDialog()
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("toolDialog"));
     dialog.setWindowTitle(QStringLiteral("SC2 Data Helper Settings"));
-    dialog.setFixedSize(600, 430);
+    dialog.setFixedSize(640, 540);
     auto *layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(20, 18, 20, 18);
     layout->setSpacing(10);
@@ -626,12 +635,22 @@ void MainWindow::showSettingsDialog()
     duplicatesCheck->setChecked(settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), false).toBool());
     duplicatesCheck->setToolTip(QStringLiteral("Disabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
     duplicatesCheck->setFocusPolicy(Qt::NoFocus);
+    auto *collectionModeLabel = new QLabel(QStringLiteral("DATA COLLECTION MODE"), &dialog);
+    collectionModeLabel->setObjectName(QStringLiteral("panelTitle"));
+    auto *collectionMode = new QComboBox(&dialog);
+    collectionMode->addItem(QStringLiteral("Unit — one collection per unit family"), QStringLiteral("Unit"));
+    collectionMode->addItem(QStringLiteral("UnitAbilWeapon — separate Unit, Ability and Weapon collections"), QStringLiteral("UnitAbilWeapon"));
+    const QString savedCollectionMode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("Unit")).toString();
+    collectionMode->setCurrentIndex(qMax(0, collectionMode->findData(savedCollectionMode)));
+    collectionMode->setToolTip(QStringLiteral("Unit keeps the current behavior. UnitAbilWeapon creates separate collections like Gargantua, Gargantua_Jump and Gargantua_Weapon."));
     layout->addWidget(soundCheck);
     layout->addWidget(animationCheck);
     layout->addWidget(musicCheck);
     layout->addWidget(musicValue);
     layout->addWidget(musicSlider);
     layout->addWidget(duplicatesCheck);
+    layout->addWidget(collectionModeLabel);
+    layout->addWidget(collectionMode);
     layout->addStretch(1);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
@@ -639,8 +658,10 @@ void MainWindow::showSettingsDialog()
         settings.setValue(QStringLiteral("ui/buttonSounds"), soundCheck->isChecked());
         settings.setValue(QStringLiteral("ui/buttonAnimations"), animationCheck->isChecked());
         settings.setValue(QStringLiteral("optimization/duplicateMergeEnabled"), duplicatesCheck->isChecked());
+        settings.setValue(QStringLiteral("dataCollection/mode"), collectionMode->currentData().toString());
         AudioManager::setMusicSettings(musicCheck->isChecked(), musicSlider->value() / 100.0);
         setDuplicateMergeEnabled(duplicatesCheck->isChecked());
+        if (!m_result.nodes.isEmpty()) refreshPages();
         dialog.accept();
     });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -1635,7 +1656,7 @@ void MainWindow::applyDataCollection(const DataCollectionBuildRequest &request)
         }
         m_collectionPreviewValid = false;
         loadPathAndAnalyze(m_currentSourcePath);
-        m_dryRunPage->recordCollectionResult(result.recordsAdded);
+        m_dryRunPage->recordCollectionResult(result.recordsAdded, result.recordsRemoved);
         QMessageBox::information(this, QStringLiteral("Collection complete"),
                                  QStringLiteral("Archive backup: %1\nDataCollectionData.xml and (listfile) saved.\nRecords added: %2")
                                      .arg(archiveBackup).arg(result.recordsAdded));
@@ -1650,7 +1671,7 @@ void MainWindow::applyDataCollection(const DataCollectionBuildRequest &request)
     QSaveFile reportFile(reportPath);
     if (reportFile.open(QIODevice::WriteOnly | QIODevice::Text)) { reportFile.write(result.finalReport.toUtf8()); reportFile.commit(); }
     loadPathAndAnalyze(m_currentSourcePath);
-    m_dryRunPage->recordCollectionResult(result.recordsAdded);
+    m_dryRunPage->recordCollectionResult(result.recordsAdded, result.recordsRemoved);
     QMessageBox::information(this, QStringLiteral("Collection complete"),
                              QStringLiteral("Backup: %1\nRecords added: %2\nDuplicate records skipped: %3")
                                  .arg(result.backupFolder).arg(result.recordsAdded).arg(result.duplicatesSkipped));
@@ -1771,6 +1792,7 @@ void MainWindow::applyOptimizationWizardPlan()
     int redirectedReferences = 0;
     int renamedIds = 0;
     int collectionAdded = 0;
+    int collectionReorganized = 0;
     QStringList warnings;
     QString failure;
     QString archiveBackup;
@@ -1863,7 +1885,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 }
             }
 
-            QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(current);
+            QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(current, configuredDataCollectionMode());
             QHash<QString, UnitFamily> familyByRoot;
             for (const UnitFamily &family : families) familyByRoot.insert(family.rootId, family);
             bool collectionChanged = false;
@@ -1889,6 +1911,7 @@ void MainWindow::applyOptimizationWizardPlan()
                         break;
                     }
                     collectionAdded += result.recordsAdded;
+                    collectionReorganized += result.recordsRemoved;
                     changedFiles.append(result.changedFiles);
                     changedFiles.removeDuplicates();
                     collectionChanged = true;
@@ -2011,7 +2034,7 @@ void MainWindow::applyOptimizationWizardPlan()
         }
 
         QHash<QString, UnitFamily> collectionFamilyByRoot;
-        for (const UnitFamily &family : UnitFamilyDetector().detectCollectionFamilies(current))
+        for (const UnitFamily &family : UnitFamilyDetector().detectCollectionFamilies(current, configuredDataCollectionMode()))
             collectionFamilyByRoot.insert(family.rootId, family);
         updateApplyProgress(80, QStringLiteral("Applying Data Collection"), QStringLiteral("Adding selected collection records"));
         for (const WizardCollectionSelection &selectedCollection : selection.collection) {
@@ -2035,6 +2058,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 break;
             }
             collectionAdded += result.recordsAdded;
+            collectionReorganized += result.recordsRemoved;
         }
     }
 
@@ -2070,11 +2094,12 @@ void MainWindow::applyOptimizationWizardPlan()
     if (removedUnused > 0) m_dryRunPage->recordUnusedResult(removedUnused);
     if (removedDuplicates > 0 || redirectedReferences > 0) m_dryRunPage->recordMergeResult(removedDuplicates, redirectedReferences);
     if (renamedIds > 0) m_dryRunPage->recordRenameResult(renamedIds);
-    if (collectionAdded > 0) m_dryRunPage->recordCollectionResult(collectionAdded);
+    if (collectionAdded > 0 || collectionReorganized > 0)
+        m_dryRunPage->recordCollectionResult(collectionAdded, collectionReorganized);
     m_dryRunPage->rebuildAfterApply();
 
-    QString message = QStringLiteral("Selected optimization steps were applied and saved.\n\nUnused deleted: %1\nDuplicates deleted: %2\nReferences redirected: %3\nIDs renamed: %4\nCollection records added: %5")
-        .arg(removedUnused).arg(removedDuplicates).arg(redirectedReferences).arg(renamedIds).arg(collectionAdded);
+    QString message = QStringLiteral("Selected optimization steps were applied and saved.\n\nUnused deleted: %1\nDuplicates deleted: %2\nReferences redirected: %3\nIDs renamed: %4\nCollection records added: %5\nCollection records reorganized: %6")
+        .arg(removedUnused).arg(removedDuplicates).arg(redirectedReferences).arg(renamedIds).arg(collectionAdded).arg(collectionReorganized);
     if (!archiveBackup.isEmpty())
         message += QStringLiteral("\nArchive backup: %1").arg(archiveBackup);
     if (!warnings.isEmpty())

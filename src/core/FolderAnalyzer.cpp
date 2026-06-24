@@ -7,11 +7,47 @@
 #include <QIODevice>
 #include <QSaveFile>
 #include <QRegularExpression>
+#include <pugixml.hpp>
 
 #include <algorithm>
 
 namespace
 {
+    struct ByteArrayXmlWriter final : pugi::xml_writer
+    {
+        QByteArray bytes;
+        void write(const void *data, size_t size) override { bytes.append(static_cast<const char *>(data), qsizetype(size)); }
+    };
+
+    bool removeDataCollectionRecords(const QByteArray &source, const QSet<QString> &removedIds,
+                                     QByteArray *rewritten, QString *error)
+    {
+        pugi::xml_document document;
+        const pugi::xml_parse_result parsed = document.load_buffer(source.constData(), size_t(source.size()));
+        if (!parsed) {
+            if (error) *error = QString::fromUtf8(parsed.description());
+            return false;
+        }
+        for (pugi::xml_node collection = document.document_element().first_child(); collection;) {
+            pugi::xml_node nextCollection = collection.next_sibling();
+            const QString collectionName = QString::fromUtf8(collection.name());
+            if (collectionName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)) {
+                for (pugi::xml_node record = collection.child("DataRecord"); record;) {
+                    pugi::xml_node nextRecord = record.next_sibling("DataRecord");
+                    const QString entry = QString::fromUtf8(record.attribute("Entry").value());
+                    const QString id = entry.section(QLatin1Char(','), 1).trimmed();
+                    if (removedIds.contains(id)) collection.remove_child(record);
+                    record = nextRecord;
+                }
+            }
+            collection = nextCollection;
+        }
+        ByteArrayXmlWriter writer;
+        document.save(writer, "    ", pugi::format_default, pugi::encoding_utf8);
+        *rewritten = writer.bytes;
+        return true;
+    }
+
 
     QStringList tokenizeReferenceValue(const QString &value)
     {
@@ -234,13 +270,17 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
     }
 
     QHash<QString, int> inboundReferences;
+    QHash<QString, int> dataCollectionReferences;
     for (const DataNode &sourceNode : result->nodes)
     {
         for (const QString &reference : sourceNode.referencedIds)
         {
             if (!reference.isEmpty() && reference != sourceNode.id)
             {
-                ++inboundReferences[reference];
+                if (sourceNode.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive))
+                    ++dataCollectionReferences[reference];
+                else
+                    ++inboundReferences[reference];
             }
         }
     }
@@ -269,6 +309,7 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
         UnusedCandidateInfo info;
         info.nodeIndex = i;
         info.incomingXmlReferences = inboundReferences.value(node.id);
+        info.dataCollectionReferences = dataCollectionReferences.value(node.id);
         info.scriptReferences = scriptReferences.value(node.id);
         info.whitelisted = whitelistIds.contains(node.id);
         info.protectedObject = isProtectedObject(node);
@@ -280,6 +321,8 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
             info.reason = QStringLiteral("Has incoming XML references");
         else if (info.scriptReferences > 0)
             info.reason = QStringLiteral("Has script/text references");
+        else if (info.dataCollectionReferences > 0)
+            info.reason = QStringLiteral("Only referenced by Data Collection; links will be removed with the object");
         else
             info.reason = QStringLiteral("No incoming XML or script/text references");
 
@@ -578,9 +621,10 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
         if (info.state != CandidateState::Blocked)
             continue;
         const DataNode &node = result.nodes[info.nodeIndex];
-        report += QStringLiteral("- %1 | %2 | incoming: %3 | script: %4 | whitelist: %5 | risk: %6\n")
+        report += QStringLiteral("- %1 | %2 | gameplay incoming: %3 | collection links: %4 | script: %5 | whitelist: %6 | risk: %7\n")
                       .arg(node.id, info.reason)
                       .arg(info.incomingXmlReferences)
+                      .arg(info.dataCollectionReferences)
                       .arg(info.scriptReferences)
                       .arg(info.whitelisted ? QStringLiteral("yes") : QStringLiteral("no"), info.riskLevel);
     }
@@ -700,6 +744,7 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
     }
 
     QHash<QString, QSet<QString>> locationsByFile;
+    QSet<QString> removedIds;
     int plannedRemovals = 0;
     for (int row : selectedRows)
     {
@@ -725,6 +770,7 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
         }
         const int beforeCount = locationsByFile[node.sourceFile].size();
         locationsByFile[node.sourceFile].insert(node.originalLocation);
+        removedIds.insert(node.id);
         if (locationsByFile[node.sourceFile].size() > beforeCount)
         {
             ++plannedRemovals;
@@ -734,11 +780,24 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
     const QString analysisReport = buildAnalysisReport(result);
     const QString plannedChanges = buildPlannedChangesReport(result, selectedRows);
 
+    QSet<QString> collectionFiles;
+    for (const DataNode &node : result.nodes) {
+        if (!node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)) continue;
+        for (const QString &reference : node.referencedIds) {
+            if (removedIds.contains(reference)) {
+                collectionFiles.insert(node.sourceFile);
+                break;
+            }
+        }
+    }
+
     QStringList changedFileList;
     for (auto it = locationsByFile.cbegin(); it != locationsByFile.cend(); ++it)
     {
         changedFileList.append(relativePath(rootFolder, it.key()));
     }
+    for (const QString &file : collectionFiles)
+        if (!changedFileList.contains(relativePath(rootFolder, file))) changedFileList.append(relativePath(rootFolder, file));
     QString backupRoot;
     BackupManager backupManager;
     if (!backupManager.createFolderBackup(rootFolder, changedFileList, analysisReport, plannedChanges, &backupRoot, errorMessage))
@@ -774,6 +833,25 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
             {
                 *errorMessage = QStringLiteral("%1: %2").arg(filePath, loadError);
             }
+            return false;
+        }
+        rewrittenFiles.insert(filePath, rewritten);
+    }
+
+    for (const QString &filePath : collectionFiles) {
+        QByteArray source = rewrittenFiles.value(filePath);
+        if (source.isEmpty()) {
+            QFile file(filePath);
+            if (!file.open(QIODevice::ReadOnly)) {
+                if (errorMessage) *errorMessage = QStringLiteral("Failed to open Data Collection file: %1").arg(filePath);
+                return false;
+            }
+            source = file.readAll();
+        }
+        QByteArray rewritten;
+        QString collectionError;
+        if (!removeDataCollectionRecords(source, removedIds, &rewritten, &collectionError)) {
+            if (errorMessage) *errorMessage = QStringLiteral("Failed to remove Data Collection links in %1: %2").arg(filePath, collectionError);
             return false;
         }
         rewrittenFiles.insert(filePath, rewritten);

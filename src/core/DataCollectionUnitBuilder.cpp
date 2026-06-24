@@ -69,7 +69,7 @@ void setAttribute(pugi::xml_node node, const char *name, const QString &value)
 }
 
 void updateCollection(pugi::xml_node collection, const QString &parent, const QString &categories,
-                       const QStringList &records)
+                       const QStringList &records, bool pruneUnrelated)
 {
     if (!parent.isEmpty()) setAttribute(collection, "parent", parent);
     pugi::xml_node category = collection.child("EditorCategories");
@@ -79,7 +79,7 @@ void updateCollection(pugi::xml_node collection, const QString &parent, const QS
     for (pugi::xml_node record = collection.child("DataRecord"); record;) {
         pugi::xml_node next = record.next_sibling("DataRecord");
         const QString entry = QString::fromUtf8(record.attribute("Entry").value());
-        if (!entry.isEmpty() && existing.contains(entry)) {
+        if (!entry.isEmpty() && (existing.contains(entry) || (pruneUnrelated && !records.contains(entry)))) {
             collection.remove_child(record);
         } else if (!entry.isEmpty()) {
             existing.insert(entry);
@@ -125,6 +125,7 @@ QString buildReport(const DataCollectionPreviewReport &preview, const QString &f
     section(QStringLiteral("Missing expected real objects"), preview.missingExpectedObjects);
     section(QStringLiteral("Existing records preserved"), preview.existingRecordsPreserved);
     section(QStringLiteral("Records to add"), preview.recordsToAdd);
+    section(QStringLiteral("Records moved out of this collection"), preview.recordsToRemove);
     section(QStringLiteral("Duplicate records skipped"), preview.duplicateRecordsSkipped);
     section(QStringLiteral("Warnings"), preview.warnings);
     report += QStringLiteral("\nGenerated XML\n%1\nFinal result: %2\n").arg(preview.generatedXml, finalResult);
@@ -152,7 +153,7 @@ bool listfileContains(const QString &path, const QString &entry)
 }
 
 QByteArray buildCollectionDocument(const QString &targetFile, const QString &elementName, const QString &id, const QString &parent,
-                                   const QString &categories, const QStringList &records, QString *error)
+                                   const QString &categories, const QStringList &records, bool pruneUnrelated, QString *error)
 {
     pugi::xml_document doc;
     if (QFileInfo::exists(targetFile)) {
@@ -173,7 +174,7 @@ QByteArray buildCollectionDocument(const QString &targetFile, const QString &ele
         collection = catalog.append_child(elementName.toUtf8().constData());
         setAttribute(collection, "id", id);
     }
-    updateCollection(collection, parent, categories, records);
+    updateCollection(collection, parent, categories, records, pruneUnrelated);
     std::ostringstream stream;
     doc.save(stream, "    ", pugi::format_default, pugi::encoding_utf8);
     return QByteArray::fromStdString(stream.str());
@@ -229,7 +230,16 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     if (existingCollectionNode) {
         pugi::xml_document fragment;
         if (fragment.load_string(existingCollectionNode->serializedXml.toUtf8().constData())) {
-            existing = existingEntries(fragment.first_child(), &result.duplicateRecordsSkipped);
+            const QStringList allExisting = existingEntries(fragment.first_child(), &result.duplicateRecordsSkipped);
+            for (const QString &entry : allExisting) {
+                const QString entryId = entry.section(QLatin1Char(','), 1).trimmed();
+                if (request.family.strictOwnership
+                    && entryId.compare(root, Qt::CaseInsensitive) != 0
+                    && !entryId.startsWith(root + QLatin1Char('@'), Qt::CaseInsensitive))
+                    result.recordsToRemove << entry;
+                else
+                    existing << entry;
+            }
             result.existingRecordsPreserved = existing;
             knownAliases = QSet<QString>(existing.cbegin(), existing.cend());
         }
@@ -285,8 +295,10 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     sortEntries(&allRecords);
     QString generatedError;
     const QString elementName = existingCollectionNode ? existingCollectionNode->elementName : request.family.collectionElementName;
-    const QByteArray generated = buildCollectionDocument(result.targetFile, elementName, root, request.parent,
-                                                         request.editorCategories, allRecords, &generatedError);
+    const QString parent = request.parent.trimmed().isEmpty() ? request.family.recommendedParent : request.parent;
+    const QByteArray generated = buildCollectionDocument(result.targetFile, elementName, root, parent,
+                                                         request.editorCategories, allRecords,
+                                                         request.family.strictOwnership, &generatedError);
     result.generatedXml = QString::fromUtf8(generated);
     if (!generatedError.isEmpty()) result.warnings << generatedError;
     result.valid = nameMatchesCollection && generatedError.isEmpty()
@@ -359,11 +371,15 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
     for (const QString &entry : plan.recordsToAdd) if (!verifiedEntries.contains(entry)) {
         result.error = QStringLiteral("Collection verification failed: %1 missing.").arg(entry); rollback(); return result;
     }
+    for (const QString &entry : plan.recordsToRemove) if (verifiedEntries.contains(entry)) {
+        result.error = QStringLiteral("Collection verification failed: unrelated record %1 remains.").arg(entry); rollback(); return result;
+    }
     if (!verifyDuplicates.isEmpty()) { result.error = QStringLiteral("Collection verification failed: duplicate records remain."); rollback(); return result; }
     if (!listfileContains(plan.listfilePath, plan.archiveEntry)) {
         result.error = QStringLiteral("Collection verification failed: (listfile) entry is missing."); rollback(); return result;
     }
     result.success = true; result.changedFile = relative; result.recordsAdded = plan.recordsToAdd.size();
+    result.recordsRemoved = plan.recordsToRemove.size();
     result.changedFiles << relative;
     if (plan.listfileNeedsUpdate || !listfileExisted) result.changedFiles << listRelative;
     result.duplicatesSkipped = plan.duplicateRecordsSkipped.size();

@@ -12,6 +12,8 @@ enum class UnitFamilyRole {
     Other, ManualReview
 };
 
+enum class DataCollectionMode { Unit, UnitAbilWeapon };
+
 struct UnitFamilyObject
 {
     int nodeIndex = -1;
@@ -25,6 +27,8 @@ struct UnitFamily
     int rootNodeIndex = -1;
     QString rootId;
     QString collectionElementName = QStringLiteral("CDataCollectionUnit");
+    QString recommendedParent;
+    bool strictOwnership = false;
     QVector<UnitFamilyObject> objects;
 };
 
@@ -34,5 +38,6 @@ class UnitFamilyDetector
 {
 public:
     QVector<UnitFamily> detect(const AnalysisResult &analysis) const;
-    QVector<UnitFamily> detectCollectionFamilies(const AnalysisResult &analysis) const;
+    QVector<UnitFamily> detectCollectionFamilies(const AnalysisResult &analysis,
+                                                  DataCollectionMode mode = DataCollectionMode::Unit) const;
 };

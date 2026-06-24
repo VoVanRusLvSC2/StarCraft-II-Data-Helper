@@ -69,7 +69,7 @@ public:
     void recordUnusedResult(int removed);
     void recordMergeResult(int removed, int redirected);
     void recordRenameResult(int renamed);
-    void recordCollectionResult(int added);
+    void recordCollectionResult(int added, int reorganized = 0);
     void setApplyingState(bool applying, const QString &message = {});
     void rebuildAfterApply();
     void setDuplicateMergeEnabled(bool enabled);
@@ -117,5 +117,6 @@ private:
     bool m_planConfirmed = false;
     bool m_hasAppliedChanges = false;
     bool m_duplicateMergeEnabled = false;
-    int m_actualUnused = 0, m_actualDuplicates = 0, m_actualRedirected = 0, m_actualRenamed = 0, m_actualCollectionAdded = 0;
+    int m_actualUnused = 0, m_actualDuplicates = 0, m_actualRedirected = 0, m_actualRenamed = 0;
+    int m_actualCollectionAdded = 0, m_actualCollectionReorganized = 0;
 };

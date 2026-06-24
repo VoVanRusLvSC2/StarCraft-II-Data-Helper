@@ -36,6 +36,7 @@ struct DataCollectionPreviewReport
     QStringList missingExpectedObjects;
     QStringList existingRecordsPreserved;
     QStringList recordsToAdd;
+    QStringList recordsToRemove;
     QStringList duplicateRecordsSkipped;
     QStringList manualReviewObjects;
     QStringList warnings;
@@ -55,6 +56,7 @@ struct DataCollectionApplyResult
     QString changedFile;
     QStringList changedFiles;
     int recordsAdded = 0;
+    int recordsRemoved = 0;
     int duplicatesSkipped = 0;
     QString error;
     QString finalReport;

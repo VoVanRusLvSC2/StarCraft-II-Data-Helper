@@ -44,6 +44,7 @@ struct UnusedCandidateInfo
 {
     int nodeIndex = -1;
     int incomingXmlReferences = 0;
+    int dataCollectionReferences = 0;
     int scriptReferences = 0;
     bool whitelisted = false;
     bool protectedObject = false;

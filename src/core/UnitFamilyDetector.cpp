@@ -172,7 +172,7 @@ QVector<UnitFamily> UnitFamilyDetector::detect(const AnalysisResult &analysis) c
     return families;
 }
 
-QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisResult &analysis) const
+QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisResult &analysis, DataCollectionMode mode) const
 {
     DataCollectionAliasMapper mapper;
     QHash<QString, QVector<int>> indicesByPrefix;
@@ -192,7 +192,7 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
     }
 
     const QVector<UnitFamily> detectedFamilies = detect(analysis);
-    for (const UnitFamily &family : detectedFamilies) {
+    if (mode == DataCollectionMode::Unit) for (const UnitFamily &family : detectedFamilies) {
         if (family.rootId.isEmpty() || family.rootId.contains(QLatin1Char('@'))
             || indicesByPrefix.contains(family.rootId) || existingCollections.contains(family.rootId))
             continue;
@@ -214,16 +214,19 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             indicesByPrefix.insert(family.rootId, indices);
     }
 
-    // A map-defined unit is useful as a Data Collection even when no related
-    // Actor/Model/Button can be proven. Keep it as a one-record collection;
-    // related objects are still grouped by the stronger rules above.
+    // A map-defined root catalog object is useful as a Data Collection even
+    // when no related @ children can be proven.
     for (int index = 0; index < analysis.nodes.size(); ++index) {
         const DataNode &node = analysis.nodes[index];
-        if (node.elementName.compare(QStringLiteral("CUnit"), Qt::CaseInsensitive) != 0
+        const bool unit = node.elementName.compare(QStringLiteral("CUnit"), Qt::CaseInsensitive) == 0;
+        const bool ability = node.elementName.startsWith(QStringLiteral("CAbil"), Qt::CaseInsensitive);
+        const bool weapon = node.elementName.startsWith(QStringLiteral("CWeapon"), Qt::CaseInsensitive);
+        if ((!unit && (mode != DataCollectionMode::UnitAbilWeapon || (!ability && !weapon)))
             || node.id.isEmpty() || node.id.contains(QLatin1Char('@'))
-            || existingCollections.contains(node.id) || indicesByPrefix.contains(node.id))
+            || existingCollections.contains(node.id))
             continue;
-        indicesByPrefix.insert(node.id, QVector<int>{index});
+        QVector<int> &indices = indicesByPrefix[node.id];
+        if (!indices.contains(index)) indices.prepend(index);
     }
 
     // Existing collections are supplemented from their real DataRecord
@@ -235,6 +238,10 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             const QString entry = QString::fromUtf8(record.attribute("Entry").value());
             const QString catalog = entry.section(QLatin1Char(','), 0, 0).trimmed();
             const QString id = entry.section(QLatin1Char(','), 1).trimmed();
+            if (mode == DataCollectionMode::UnitAbilWeapon
+                && id.compare(it.key(), Qt::CaseInsensitive) != 0
+                && !id.startsWith(it.key() + QLatin1Char('@'), Qt::CaseInsensitive))
+                continue;
             const int index = nodeByRecord.value(catalog.toLower() + QChar(0x1f) + id.toLower(), -1);
             if (index >= 0 && !indicesByPrefix[it.key()].contains(index)) indicesByPrefix[it.key()].append(index);
         }
@@ -272,6 +279,16 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
                 : allAbilities ? QStringLiteral("CDataCollectionAbil")
                 : allUpgrades ? QStringLiteral("CDataCollectionUpgrade")
                               : QStringLiteral("CDataCollection");
+        }
+
+        if (mode == DataCollectionMode::UnitAbilWeapon) {
+            family.collectionElementName = QStringLiteral("CDataCollectionUnit");
+            family.strictOwnership = true;
+            const QString rootType = analysis.nodes[family.rootNodeIndex].elementName;
+            family.recommendedParent = rootType.startsWith(QStringLiteral("CAbil"), Qt::CaseInsensitive)
+                ? QStringLiteral("AbilityBase")
+                : rootType.startsWith(QStringLiteral("CWeapon"), Qt::CaseInsensitive)
+                    ? QStringLiteral("WeaponBase") : QStringLiteral("UnitBase");
         }
 
         for (int index : indices) {

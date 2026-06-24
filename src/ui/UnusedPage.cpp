@@ -134,8 +134,8 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
             const DataNode &node = m_result.nodes[index];
             const QString status = candidate.state == CandidateState::Safe ? QStringLiteral("Safe candidate")
                 : candidate.state == CandidateState::Risky ? QStringLiteral("Risky candidate") : QStringLiteral("Blocked");
-            const QString reason = QStringLiteral("%1 | incoming: %2 | script: %3 | whitelist: %4 | risk: %5")
-                                       .arg(candidate.reason).arg(candidate.incomingXmlReferences).arg(candidate.scriptReferences)
+            const QString reason = QStringLiteral("%1 | gameplay incoming: %2 | collection links: %3 | script: %4 | whitelist: %5 | risk: %6")
+                                       .arg(candidate.reason).arg(candidate.incomingXmlReferences).arg(candidate.dataCollectionReferences).arg(candidate.scriptReferences)
                                        .arg(candidate.whitelisted ? QStringLiteral("yes") : QStringLiteral("no"), candidate.riskLevel);
             QList<QStandardItem *> row = buildRow(status,
                                                   node.id,

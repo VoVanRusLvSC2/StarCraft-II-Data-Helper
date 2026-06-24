@@ -132,6 +132,7 @@ private slots:
     void mergePreviewAndApplyRedirectBeforeDelete();
     void mergeRollbackOnFailure();
     void unusedSafetyClassification();
+    void unusedDeletionRemovesDataCollectionLinks();
     void unitFamilyDetectionAndStandardPlanning();
     void renamePlannerBlocksConflicts();
     void referenceRenamePreviewAndApply();
@@ -140,6 +141,7 @@ private slots:
     void dataCollectionCreatePreviewAndApply();
     void dataCollectionOffersSingleCustomUnit();
     void dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign();
+    void dataCollectionUnitAbilWeaponModeSplitsRoots();
     void dataCollectionUpdatePreservesAndSorts();
     void dataCollectionRollback();
     void folderAnalysisStoresFullXmlSource();
@@ -283,6 +285,46 @@ void CoreTests::dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign()
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Button,ArchonButton\"")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Weapon,ArchonWeapon\"")));
     QVERIFY(preview.warnings.join(QStringLiteral(" ")).contains(QStringLiteral("non-standard")));
+}
+
+void CoreTests::dataCollectionUnitAbilWeaponModeSplitsRoots()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Gargantua.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"Gargantua\"><AbilArray Link=\"Gargantua_Jump\"/><WeaponArray Link=\"Gargantua_Weapon\"/></CUnit>"
+        "<CActorUnit id=\"Gargantua\"/><CModel id=\"Gargantua@Portrait\"/>"
+        "<CAbilEffectTarget id=\"Gargantua_Jump\"><Effect value=\"Gargantua_Jump@Damage\"/></CAbilEffectTarget>"
+        "<CEffectDamage id=\"Gargantua_Jump@Damage\"/>"
+        "<CWeaponLegacy id=\"Gargantua_Weapon\"><Effect value=\"Gargantua_Weapon@Damage\"/></CWeaponLegacy>"
+        "<CEffectDamage id=\"Gargantua_Weapon@Damage\"/>"
+        "<CDataCollectionUnit id=\"Gargantua\"><DataRecord Entry=\"Unit,Gargantua\"/>"
+        "<DataRecord Entry=\"Abil,Gargantua_Jump\"/><DataRecord Entry=\"Weapon,Gargantua_Weapon\"/></CDataCollectionUnit>"
+        "</Catalog>")));
+    FolderAnalyzer analyzer; AnalysisResult analysis; QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::UnitAbilWeapon);
+    const auto findFamily = [&](const QString &id) {
+        return std::find_if(families.cbegin(), families.cend(), [&](const UnitFamily &family) { return family.rootId == id; });
+    };
+    const auto unit = findFamily(QStringLiteral("Gargantua"));
+    const auto ability = findFamily(QStringLiteral("Gargantua_Jump"));
+    const auto weapon = findFamily(QStringLiteral("Gargantua_Weapon"));
+    QVERIFY(unit != families.cend()); QVERIFY(ability != families.cend()); QVERIFY(weapon != families.cend());
+    QCOMPARE(unit->recommendedParent, QStringLiteral("UnitBase"));
+    QCOMPARE(ability->recommendedParent, QStringLiteral("AbilityBase"));
+    QCOMPARE(weapon->recommendedParent, QStringLiteral("WeaponBase"));
+    DataCollectionBuildRequest request; request.family = *unit;
+    const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request);
+    QVERIFY(preview.recordsToRemove.contains(QStringLiteral("Abil,Gargantua_Jump")));
+    QVERIFY(preview.recordsToRemove.contains(QStringLiteral("Weapon,Gargantua_Weapon")));
+    const DataCollectionApplyResult applied = DataCollectionUnitBuilder().apply(analysis, request, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QCOMPARE(applied.recordsRemoved, 2);
+    QFile updated(path); QVERIFY(updated.open(QIODevice::ReadOnly)); const QByteArray updatedXml = updated.readAll();
+    QVERIFY(!updatedXml.contains("Entry=\"Abil,Gargantua_Jump\""));
+    QVERIFY(!updatedXml.contains("Entry=\"Weapon,Gargantua_Weapon\""));
 }
 
 void CoreTests::dataCollectionOffersSingleCustomUnit()
@@ -587,6 +629,32 @@ void CoreTests::unusedSafetyClassification()
     QVERIFY(byId[QStringLiteral("Scripted")].scriptReferences > 0);
     QCOMPARE(byId[QStringLiteral("Safe")].state, CandidateState::Safe);
     QVERIFY(analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("Safe")].nodeIndex));
+}
+
+void CoreTests::unusedDeletionRemovesDataCollectionLinks()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Data.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog><CUnit id=\"UnusedUnit\"/><CDataCollectionUnit id=\"ExistingCollection\">"
+        "<DataRecord Entry=\"Unit,UnusedUnit\"/></CDataCollectionUnit></Catalog>")));
+    FolderAnalyzer analyzer; AnalysisResult analysis; QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    int row = -1;
+    for (int index = 0; index < analysis.nodes.size(); ++index)
+        if (analysis.nodes[index].id == QStringLiteral("UnusedUnit")) row = index;
+    QVERIFY(row >= 0);
+    const auto candidate = std::find_if(analysis.unusedCandidates.cbegin(), analysis.unusedCandidates.cend(),
+                                        [row](const UnusedCandidateInfo &info) { return info.nodeIndex == row; });
+    QVERIFY(candidate != analysis.unusedCandidates.cend());
+    QCOMPARE(candidate->state, CandidateState::Safe);
+    QCOMPARE(candidate->dataCollectionReferences, 1);
+    QString backup; QStringList changed; int removed = 0; int skipped = 0;
+    QVERIFY2(analyzer.applySelectedChanges(analysis, {row}, dir.path(), {}, &backup, &error, &changed, &removed, &skipped), qPrintable(error));
+    QFile result(path); QVERIFY(result.open(QIODevice::ReadOnly)); const QByteArray xml = result.readAll();
+    QVERIFY(!xml.contains("id=\"UnusedUnit\""));
+    QVERIFY(!xml.contains("Unit,UnusedUnit"));
+    QCOMPARE(removed, 1);
 }
 
 void CoreTests::objectFileFilterUsesFullSourcePath()

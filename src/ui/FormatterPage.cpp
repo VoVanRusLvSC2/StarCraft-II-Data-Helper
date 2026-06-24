@@ -11,6 +11,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSignalBlocker>
+#include <QSettings>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -82,7 +83,14 @@ private:
     }
 };
 
-OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateMergeEnabled) {
+DataCollectionMode configuredDataCollectionMode() {
+    QSettings settings;
+    return settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("Unit")).toString()
+                   .compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
+        ? DataCollectionMode::UnitAbilWeapon : DataCollectionMode::Unit;
+}
+
+OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateMergeEnabled, DataCollectionMode collectionMode) {
     OptimizationPlanData plan;
     for (const UnusedCandidateInfo &candidate : result.unusedCandidates) {
         const DataNode &node = result.nodes[candidate.nodeIndex];
@@ -102,7 +110,7 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
                                     group.mergeCandidate, group.mergeCandidate, keep, remove});
         }
     }
-    const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(result);
+    const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(result, collectionMode);
     for (int familyIndex = 0; familyIndex < collectionFamilies.size(); ++familyIndex) {
         const UnitFamily &family = collectionFamilies[familyIndex];
         DataCollectionBuildRequest request;
@@ -111,6 +119,7 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
         plan.collection.append({{QString(), family.rootId,
                                  QString::number(collection.existingRecordsPreserved.size()),
                                  QString::number(collection.recordsToAdd.size()),
+                                 QString::number(collection.recordsToRemove.size()),
                                  collection.warnings.join(QStringLiteral("; "))},
                                 collection.valid, collection.valid, familyIndex, -1});
     }
@@ -128,7 +137,7 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_unused = makeTable({QStringLiteral("Use"), QStringLiteral("Object ID"), QStringLiteral("Type"), QStringLiteral("Reason"), QStringLiteral("Risk")});
     m_duplicates = makeTable({QStringLiteral("Use"), QStringLiteral("ID mask"), QStringLiteral("Keep"), QStringLiteral("Remove"), QStringLiteral("References redirected")});
     m_rename = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Current ID"), QStringLiteral("Proposed ID"), QStringLiteral("Risk / Conflict")});
-    m_collection = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Existing records"), QStringLiteral("Can add"), QStringLiteral("Warnings")});
+    m_collection = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Existing records"), QStringLiteral("Can add"), QStringLiteral("Move out"), QStringLiteral("Warnings")});
     m_summary = new QPlainTextEdit; m_summary->setReadOnly(true);
     m_summary->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_summary->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
@@ -137,6 +146,7 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_steps->addTab(m_rename, QStringLiteral("Rename")); m_steps->addTab(m_collection, QStringLiteral("Data Collection")); m_steps->addTab(m_summary, QStringLiteral("Summary"));
     m_steps->tabBar()->hide();
     m_details = new QPlainTextEdit(this);
+    m_details->setObjectName(QStringLiteral("optimizationDetails"));
     m_details->setReadOnly(true);
     m_details->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_details->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
@@ -210,6 +220,7 @@ void FormatterPage::startWizard() {
     m_actualRedirected = 0;
     m_actualRenamed = 0;
     m_actualCollectionAdded = 0;
+    m_actualCollectionReorganized = 0;
     for (QTableWidget *value : {m_unused, m_duplicates, m_rename, m_collection}) value->setRowCount(0);
     m_summary->setPlainText(m_duplicateMergeEnabled
         ? QStringLiteral("Optimization is open.\n\nNo heavy scan was started yet.\nPress Build Optimization Preview to calculate unused objects, duplicate merges, rename items, Data Collection additions, and the final summary.")
@@ -260,7 +271,10 @@ void FormatterPage::buildPreview() {
         emit previewBuilt();
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run([result = m_result, duplicates = m_duplicateMergeEnabled] { return calculatePlan(result, duplicates); }));
+    const DataCollectionMode collectionMode = configuredDataCollectionMode();
+    watcher->setFuture(QtConcurrent::run([result = m_result, duplicates = m_duplicateMergeEnabled, collectionMode] {
+        return calculatePlan(result, duplicates, collectionMode);
+    }));
 }
 void FormatterPage::updateNavigation() {
     const int step = m_steps->currentIndex();
@@ -366,8 +380,8 @@ QString FormatterPage::buildIdChangePreview() const
     for (int row = 0; row < m_collection->rowCount(); ++row) {
         const QTableWidgetItem *use = m_collection->item(row, 0);
         if (use && use->checkState() == Qt::Checked)
-            lines << QStringLiteral("%1 -> CDataCollectionUnit + %2 record(s)")
-                         .arg(m_collection->item(row, 1)->text(), m_collection->item(row, 3)->text());
+            lines << QStringLiteral("%1 -> CDataCollectionUnit + %2 record(s), reorganize %3")
+                         .arg(m_collection->item(row, 1)->text(), m_collection->item(row, 3)->text(), m_collection->item(row, 4)->text());
     }
     return lines.join(QLatin1Char('\n'));
 }
@@ -382,7 +396,7 @@ QVector<int> FormatterPage::selectedUnusedRows() const { QVector<int> result; fo
 MergeRequest FormatterPage::selectedMergeRequest() const { MergeRequest result; for (int index = 0; index < m_duplicates->rowCount(); ++index) {
     QTableWidgetItem *item = m_duplicates->item(index, 0); if (item->checkState() != Qt::Checked) continue; const int keep = item->data(Qt::UserRole).toInt();
     if (result.keepNodeIndex < 0) result.keepNodeIndex = keep; if (keep == result.keepNodeIndex) result.removeNodeIndices << item->data(Qt::UserRole + 1).toInt(); } return result; }
-void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collectionAdds = 0;
+void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collectionAdds = 0, collectionMoves = 0;
     int duplicateDeletes = 0;
     for (int index = 0; index < m_duplicates->rowCount(); ++index) {
         QTableWidgetItem *item = m_duplicates->item(index, 0);
@@ -398,18 +412,18 @@ void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collec
     for (int index = 0; index < m_collection->rowCount(); ++index) {
         QTableWidgetItem *item = m_collection->item(index, 0);
         if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked)
-            collectionAdds += m_collection->item(index, 3)->text().toInt();
+            collectionAdds += m_collection->item(index, 3)->text().toInt(), collectionMoves += m_collection->item(index, 4)->text().toInt();
     }
-    m_summary->setPlainText(QStringLiteral("Optimization Summary\n\nProjected:\n- unused objects to delete: %1\n- duplicate objects to delete: %2\n- references moved to kept duplicates: %3\n- IDs to rename: %4\n- Data Collection records to add: %5\n\nActually completed:\n- unused deleted: %6\n- duplicates deleted: %7\n- references redirected: %8\n- IDs renamed: %9\n- collection records added: %10\n")
-        .arg(selectedUnusedRows().size()).arg(duplicateDeletes).arg(redirects).arg(renameCount).arg(collectionAdds)
-        .arg(m_actualUnused).arg(m_actualDuplicates).arg(m_actualRedirected).arg(m_actualRenamed).arg(m_actualCollectionAdded));
+    m_summary->setPlainText(QStringLiteral("Optimization Summary\n\nProjected:\n- unused objects to delete: %1\n- duplicate objects to delete: %2\n- references moved to kept duplicates: %3\n- IDs to rename: %4\n- Data Collection records to add: %5\n- Data Collection records to reorganize: %6\n\nActually completed:\n- unused deleted: %7\n- duplicates deleted: %8\n- references redirected: %9\n- IDs renamed: %10\n- collection records added: %11\n- collection records reorganized: %12\n")
+        .arg(selectedUnusedRows().size()).arg(duplicateDeletes).arg(redirects).arg(renameCount).arg(collectionAdds).arg(collectionMoves)
+        .arg(m_actualUnused).arg(m_actualDuplicates).arg(m_actualRedirected).arg(m_actualRenamed).arg(m_actualCollectionAdded).arg(m_actualCollectionReorganized));
     if (m_steps->currentIndex() == 4) updateDetails();
 }
 void FormatterPage::setPreview(const QString &text) { m_summary->setPlainText(text); m_steps->setCurrentWidget(m_summary); updateNavigation(); }
 void FormatterPage::recordUnusedResult(int value) { m_actualUnused += value; updateSummary(); }
 void FormatterPage::recordMergeResult(int removed, int redirected) { m_actualDuplicates += removed; m_actualRedirected += redirected; updateSummary(); }
 void FormatterPage::recordRenameResult(int value) { m_actualRenamed += value; updateSummary(); }
-void FormatterPage::recordCollectionResult(int value) { m_actualCollectionAdded += value; updateSummary(); }
+void FormatterPage::recordCollectionResult(int value, int reorganized) { m_actualCollectionAdded += value; m_actualCollectionReorganized += reorganized; updateSummary(); }
 void FormatterPage::setApplyingState(bool applying, const QString &message)
 {
     m_applying = applying;
@@ -466,7 +480,7 @@ QVector<MergeRequest> FormatterPage::selectedMergeRequests() const
 OptimizationWizardSelection FormatterPage::currentSelection() const
 {
     OptimizationWizardSelection result;
-    const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(m_result);
+    const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(m_result, configuredDataCollectionMode());
     for (int row = 0; row < m_unused->rowCount(); ++row) {
         const QTableWidgetItem *item = m_unused->item(row, 0);
         if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->checkState() != Qt::Checked) continue;

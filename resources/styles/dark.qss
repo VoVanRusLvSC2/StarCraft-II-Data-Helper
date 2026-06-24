@@ -467,6 +467,27 @@ QScrollBar::handle:horizontal:pressed {
     border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 7 28 7 28 stretch stretch;
 }
 
+QPlainTextEdit#optimizationDetails QScrollBar:horizontal {
+    height: 28px;
+    background: transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 5 22 5 22 stretch stretch;
+}
+
+QPlainTextEdit#optimizationDetails QScrollBar::handle:horizontal {
+    min-width: 90px;
+    margin: 3px;
+    background: transparent;
+    border: none;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal.png) 7 14 7 14 stretch stretch;
+}
+
+QPlainTextEdit#optimizationDetails QScrollBar::handle:horizontal:hover,
+QPlainTextEdit#optimizationDetails QScrollBar::handle:horizontal:pressed {
+    background: transparent;
+    border: none;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 7 14 7 14 stretch stretch;
+}
+
 QTableView::item:focus,
 QTreeView::item:focus,
 QTableWidget::item:focus {
