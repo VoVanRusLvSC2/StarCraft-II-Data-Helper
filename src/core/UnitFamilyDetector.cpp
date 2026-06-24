@@ -214,6 +214,18 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             indicesByPrefix.insert(family.rootId, indices);
     }
 
+    // A map-defined unit is useful as a Data Collection even when no related
+    // Actor/Model/Button can be proven. Keep it as a one-record collection;
+    // related objects are still grouped by the stronger rules above.
+    for (int index = 0; index < analysis.nodes.size(); ++index) {
+        const DataNode &node = analysis.nodes[index];
+        if (node.elementName.compare(QStringLiteral("CUnit"), Qt::CaseInsensitive) != 0
+            || node.id.isEmpty() || node.id.contains(QLatin1Char('@'))
+            || existingCollections.contains(node.id) || indicesByPrefix.contains(node.id))
+            continue;
+        indicesByPrefix.insert(node.id, QVector<int>{index});
+    }
+
     // Existing collections are supplemented from their real DataRecord
     // entries. The referenced ID must already exist in the analyzed catalog.
     for (auto it = existingCollections.cbegin(); it != existingCollections.cend(); ++it) {
@@ -238,7 +250,6 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
         std::sort(indices.begin(), indices.end());
         indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
         const bool existing = existingCollections.contains(root);
-        if (!existing && indices.size() < 2) continue;
         if (indices.isEmpty()) continue;
 
         UnitFamily family;

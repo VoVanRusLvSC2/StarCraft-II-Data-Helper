@@ -386,18 +386,18 @@ void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collec
     int duplicateDeletes = 0;
     for (int index = 0; index < m_duplicates->rowCount(); ++index) {
         QTableWidgetItem *item = m_duplicates->item(index, 0);
-        if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->data(Qt::UserRole + 2).toBool() && item->checkState() == Qt::Checked) {
+        if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked) {
             redirects += m_duplicates->item(index, 4)->text().toInt();
             ++duplicateDeletes;
         }
     }
     for (int index = 0; index < m_rename->rowCount(); ++index) {
         QTableWidgetItem *item = m_rename->item(index, 0);
-        if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->data(Qt::UserRole + 2).toBool() && item->checkState() == Qt::Checked) ++renameCount;
+        if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked) ++renameCount;
     }
     for (int index = 0; index < m_collection->rowCount(); ++index) {
         QTableWidgetItem *item = m_collection->item(index, 0);
-        if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->data(Qt::UserRole + 2).toBool() && item->checkState() == Qt::Checked)
+        if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked)
             collectionAdds += m_collection->item(index, 3)->text().toInt();
     }
     m_summary->setPlainText(QStringLiteral("Optimization Summary\n\nProjected:\n- unused objects to delete: %1\n- duplicate objects to delete: %2\n- references moved to kept duplicates: %3\n- IDs to rename: %4\n- Data Collection records to add: %5\n\nActually completed:\n- unused deleted: %6\n- duplicates deleted: %7\n- references redirected: %8\n- IDs renamed: %9\n- collection records added: %10\n")
@@ -447,7 +447,7 @@ QVector<MergeRequest> FormatterPage::selectedMergeRequests() const
     QHash<int, QVector<int>> grouped;
     for (int index = 0; index < m_duplicates->rowCount(); ++index) {
         QTableWidgetItem *item = m_duplicates->item(index, 0);
-        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
+        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->checkState() != Qt::Checked) continue;
         grouped[item->data(Qt::UserRole).toInt()].append(item->data(Qt::UserRole + 1).toInt());
     }
     QVector<MergeRequest> result;
@@ -469,12 +469,12 @@ OptimizationWizardSelection FormatterPage::currentSelection() const
     const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(m_result);
     for (int row = 0; row < m_unused->rowCount(); ++row) {
         const QTableWidgetItem *item = m_unused->item(row, 0);
-        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
+        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->checkState() != Qt::Checked) continue;
         result.unused.append(nodeRefFromIndices(item->data(Qt::UserRole).toInt()));
     }
     if (m_duplicateMergeEnabled) for (int row = 0; row < m_duplicates->rowCount(); ++row) {
         const QTableWidgetItem *item = m_duplicates->item(row, 0);
-        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
+        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->checkState() != Qt::Checked) continue;
         WizardMergeSelection selection;
         selection.keep = nodeRefFromIndices(item->data(Qt::UserRole).toInt());
         selection.remove = nodeRefFromIndices(item->data(Qt::UserRole + 1).toInt());
@@ -482,7 +482,7 @@ OptimizationWizardSelection FormatterPage::currentSelection() const
     }
     for (int row = 0; row < m_rename->rowCount(); ++row) {
         const QTableWidgetItem *item = m_rename->item(row, 0);
-        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
+        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->checkState() != Qt::Checked) continue;
         WizardRenameSelection selection;
         selection.familyRootId = m_rename->item(row, 1) ? m_rename->item(row, 1)->text() : QString();
         selection.node = nodeRefFromIndices(item->data(Qt::UserRole + 1).toInt());
@@ -490,15 +490,13 @@ OptimizationWizardSelection FormatterPage::currentSelection() const
     }
     for (int row = 0; row < m_collection->rowCount(); ++row) {
         const QTableWidgetItem *item = m_collection->item(row, 0);
-        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->data(Qt::UserRole + 2).toBool() == false || item->checkState() != Qt::Checked) continue;
-        const QString familyRootId = m_collection->item(row, 1) ? m_collection->item(row, 1)->text() : QString();
-        const auto familyIt = std::find_if(collectionFamilies.cbegin(), collectionFamilies.cend(), [&](const UnitFamily &family) {
-            return family.rootId == familyRootId;
-        });
-        if (familyIt == collectionFamilies.cend()) continue;
+        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->checkState() != Qt::Checked) continue;
+        const int familyIndex = item->data(Qt::UserRole).toInt();
+        if (familyIndex < 0 || familyIndex >= collectionFamilies.size()) continue;
+        const UnitFamily &family = collectionFamilies[familyIndex];
         WizardCollectionSelection selection;
-        selection.familyRootId = familyRootId;
-        for (const UnitFamilyObject &object : familyIt->objects)
+        selection.familyRootId = family.rootId;
+        for (const UnitFamilyObject &object : family.objects)
             selection.nodes.append(nodeRefFromIndices(object.nodeIndex));
         result.collection.append(selection);
     }

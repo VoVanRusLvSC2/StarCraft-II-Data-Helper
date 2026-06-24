@@ -277,8 +277,8 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     result.familyStandardized = standardized;
     if (!standardized)
         result.warnings << QStringLiteral("Family contains existing real IDs outside CollectionID / CollectionID@Child format. They can still be linked, but naming is non-standard.");
-    if (!result.existingCollection && linkedObjectCount < 2)
-        result.warnings << QStringLiteral("A new collection requires at least two existing related objects; a single standard override is not a collection candidate.");
+    if (!result.existingCollection && linkedObjectCount < 1)
+        result.warnings << QStringLiteral("A new collection requires at least one existing catalog object.");
 
     QStringList allRecords = existing;
     for (const QString &entry : result.recordsToAdd) if (!allRecords.contains(entry)) allRecords << entry;
@@ -290,7 +290,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     result.generatedXml = QString::fromUtf8(generated);
     if (!generatedError.isEmpty()) result.warnings << generatedError;
     result.valid = nameMatchesCollection && generatedError.isEmpty()
-        && (result.existingCollection || linkedObjectCount >= 2);
+        && (result.existingCollection || linkedObjectCount >= 1);
     result.reportText = buildReport(result, QStringLiteral("Preview only; no files modified"));
     return result;
 }

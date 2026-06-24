@@ -84,6 +84,55 @@
 
 namespace
 {
+    bool isArchiveReferenceEntry(const QString &entry)
+    {
+        const QString normalized = QDir::cleanPath(entry).replace('\\', '/').toLower();
+        const QString name = normalized.section('/', -1);
+        static const QSet<QString> exactNames = {
+            QStringLiteral("objects"), QStringLiteral("units"), QStringLiteral("regions"),
+            QStringLiteral("triggers"), QStringLiteral("mapinfo"), QStringLiteral("documentinfo"),
+            QStringLiteral("preload.xml"), QStringLiteral("componentlist.sc2components")};
+        if (exactNames.contains(name)) return true;
+        static const QSet<QString> extensions = {
+            QStringLiteral("galaxy"), QStringLiteral("txt"), QStringLiteral("ini"),
+            QStringLiteral("json"), QStringLiteral("yaml"), QStringLiteral("yml"),
+            QStringLiteral("version"), QStringLiteral("sc2components")};
+        return extensions.contains(QFileInfo(name).suffix().toLower());
+    }
+
+    void collectKnownIdTokens(const QByteArray &bytes, const QSet<QString> &knownIds, QSet<QString> *found)
+    {
+        const auto isIdChar = [](uchar value) {
+            return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z')
+                || (value >= '0' && value <= '9') || value == '_' || value == '@';
+        };
+        for (qsizetype start = 0; start < bytes.size();) {
+            while (start < bytes.size() && !isIdChar(uchar(bytes[start]))) ++start;
+            qsizetype end = start;
+            while (end < bytes.size() && isIdChar(uchar(bytes[end]))) ++end;
+            if (end > start) {
+                const QString token = QString::fromLatin1(bytes.constData() + start, end - start);
+                if (knownIds.contains(token)) found->insert(token);
+            }
+            start = qMax(end, start + 1);
+        }
+        for (qsizetype start = 0; start + 1 < bytes.size();) {
+            while (start + 1 < bytes.size()
+                   && (!isIdChar(uchar(bytes[start])) || bytes[start + 1] != '\0')) ++start;
+            qsizetype end = start;
+            QByteArray tokenBytes;
+            while (end + 1 < bytes.size() && isIdChar(uchar(bytes[end])) && bytes[end + 1] == '\0') {
+                tokenBytes.append(bytes[end]);
+                end += 2;
+            }
+            if (!tokenBytes.isEmpty()) {
+                const QString token = QString::fromLatin1(tokenBytes);
+                if (knownIds.contains(token)) found->insert(token);
+            }
+            start = qMax(end, start + 1);
+        }
+    }
+
     class PersistentTabToolTipFilter final : public QObject
     {
     public:
@@ -913,6 +962,8 @@ bool MainWindow::analyzeXmlFile(const QString &filePath, QString *errorMessage)
 
 bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessage)
 {
+    m_archiveReferencedIds.clear();
+    m_archiveReferenceScanComplete = false;
     Sc2Archive archive;
     QString archiveError;
     if (!archive.load(filePath, &archiveError))
@@ -1002,6 +1053,37 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
         return false;
     }
 
+    QSet<QString> knownIds;
+    for (const DataNode &node : m_result.nodes)
+        if (!node.id.isEmpty()) knownIds.insert(node.id);
+    m_archiveReferenceScanComplete = true;
+    const QStringList archiveEntries = archive.allEntries();
+    int scannedReferenceEntries = 0;
+    for (int index = 0; index < archiveEntries.size(); ++index) {
+        const QString &entry = archiveEntries[index];
+        if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive) || !isArchiveReferenceEntry(entry))
+            continue;
+        if (m_activeProgressDialog) {
+            if (m_activeProgressDialog->isCancelled()) {
+                if (errorMessage) *errorMessage = QStringLiteral("Analysis canceled.");
+                return false;
+            }
+            m_activeProgressDialog->setProgress(86, QStringLiteral("Checking archive references"), entry);
+            QApplication::processEvents();
+        }
+        QByteArray bytes;
+        QString readError;
+        if (!archive.readEntry(entry, &bytes, &readError)) {
+            m_archiveReferenceScanComplete = false;
+            logLine(QStringLiteral("Archive reference scan failed for %1: %2").arg(entry, readError));
+            continue;
+        }
+        collectKnownIdTokens(bytes, knownIds, &m_archiveReferencedIds);
+        ++scannedReferenceEntries;
+    }
+    logLine(QStringLiteral("Archive reference-bearing entries scanned: %1; referenced IDs found: %2")
+                .arg(scannedReferenceEntries).arg(m_archiveReferencedIds.size()));
+
     normalizeArchiveAnalysis(&m_result, QString(), filePath);
     return true;
 }
@@ -1021,16 +1103,25 @@ void MainWindow::normalizeArchiveAnalysis(AnalysisResult *analysis, const QStrin
             node.sourceFile = QDir(tempRoot).relativeFilePath(node.sourceFile);
     }
     analysis->rootFolder = archivePath;
-    // Binary placement/runtime references cannot be proven unused from XML.
     analysis->possibleUnusedNodeIndices.clear();
     for (UnusedCandidateInfo &candidate : analysis->unusedCandidates) {
         if (candidate.state != CandidateState::Safe) continue;
-        candidate.state = CandidateState::Blocked;
-        candidate.protectedObject = true;
-        candidate.reason = QStringLiteral("Archive binary references cannot be verified");
-        candidate.riskLevel = QStringLiteral("high");
-        if (candidate.nodeIndex >= 0 && candidate.nodeIndex < analysis->nodes.size())
-            analysis->nodes[candidate.nodeIndex].candidateUnused = false;
+        const bool externallyReferenced = candidate.nodeIndex >= 0 && candidate.nodeIndex < analysis->nodes.size()
+            && m_archiveReferencedIds.contains(analysis->nodes[candidate.nodeIndex].id);
+        if (!m_archiveReferenceScanComplete || externallyReferenced) {
+            candidate.state = CandidateState::Blocked;
+            candidate.protectedObject = true;
+            candidate.reason = !m_archiveReferenceScanComplete
+                ? QStringLiteral("Archive reference scan was incomplete")
+                : QStringLiteral("Referenced by archive placement, trigger, or script data");
+            candidate.riskLevel = QStringLiteral("high");
+            if (candidate.nodeIndex >= 0 && candidate.nodeIndex < analysis->nodes.size())
+                analysis->nodes[candidate.nodeIndex].candidateUnused = false;
+        } else {
+            candidate.reason = QStringLiteral("No XML, script/text, placement, trigger, or archive references");
+            candidate.riskLevel = QStringLiteral("low");
+            analysis->possibleUnusedNodeIndices.append(candidate.nodeIndex);
+        }
     }
     analysis->analysisReportText = m_analyzer.buildAnalysisReport(*analysis);
     analysis->plannedChangesReportText = m_analyzer.buildDryRunReport(*analysis, QVector<int>{});
@@ -1339,8 +1430,40 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
         return;
     }
     if (m_sourceKind == SourceKind::ArchiveFile) {
-        QMessageBox::information(this, QStringLiteral("Delete Unused Objects"),
-                                 QStringLiteral("Blocked for safety: SC2 archives can contain binary placement references that cannot be verified as unused."));
+        if (!m_archiveReferenceScanComplete) {
+            QMessageBox::information(this, QStringLiteral("Delete Unused Objects"),
+                                     QStringLiteral("Blocked: the archive reference scan was incomplete."));
+            return;
+        }
+        if (QMessageBox::question(this, QStringLiteral("Delete Selected Unused Objects"),
+                                  QStringLiteral("Create an archive backup, delete the selected verified candidates, and atomically save the SC2 archive?"))
+            != QMessageBox::Yes) return;
+        QTemporaryDir workspace;
+        AnalysisResult materialized;
+        QString error;
+        if (!workspace.isValid() || !materializeArchiveAnalysis(workspace.path(), &materialized, &error)) {
+            QMessageBox::critical(this, QStringLiteral("Deletion failed"), error);
+            return;
+        }
+        QString workspaceBackup;
+        QStringList changedFiles;
+        int removed = 0, skipped = 0;
+        if (!m_analyzer.applySelectedChanges(materialized, rows, workspace.path(), m_whitelistIds,
+                                             &workspaceBackup, &error, &changedFiles, &removed, &skipped)) {
+            QMessageBox::critical(this, QStringLiteral("Deletion failed"), error);
+            return;
+        }
+        QString archiveBackup;
+        if (!commitArchiveChanges(workspace.path(), changedFiles, &archiveBackup, &error)) {
+            QMessageBox::critical(this, QStringLiteral("Deletion failed"), error + QStringLiteral("\nThe original archive was preserved."));
+            return;
+        }
+        m_previewedUnusedRows.clear();
+        loadPathAndAnalyze(m_currentSourcePath);
+        m_dryRunPage->recordUnusedResult(removed);
+        QMessageBox::information(this, QStringLiteral("Deletion complete"),
+                                 QStringLiteral("Archive backup: %1\nDeleted: %2\nSkipped: %3")
+                                     .arg(archiveBackup).arg(removed).arg(skipped));
         return;
     }
     QString backupFolder, error;
@@ -1648,8 +1771,32 @@ void MainWindow::applyOptimizationWizardPlan()
         } else {
             QStringList changedFiles;
 
-            if (!selection.unused.isEmpty())
-                warnings << QStringLiteral("Unused-object deletion was skipped: archive mode remains blocked for safety.");
+            if (!selection.unused.isEmpty()) {
+                QVector<int> unusedRows;
+                for (const WizardNodeRef &ref : selection.unused) {
+                    const int index = findNodeIndex(current, ref);
+                    if (index >= 0) unusedRows.append(index);
+                }
+                if (!unusedRows.isEmpty()) {
+                    updateApplyProgress(25, QStringLiteral("Deleting unused objects"), QStringLiteral("Rewriting verified archive XML"));
+                    QString workspaceBackup;
+                    QStringList unusedChangedFiles;
+                    int removed = 0;
+                    int skipped = 0;
+                    if (!m_analyzer.applySelectedChanges(current, unusedRows, workspace.path(), m_whitelistIds,
+                                                         &workspaceBackup, &error, &unusedChangedFiles, &removed, &skipped)) {
+                        failure = error;
+                    } else {
+                        removedUnused += removed;
+                        changedFiles.append(unusedChangedFiles);
+                        changedFiles.removeDuplicates();
+                        if (skipped > 0)
+                            warnings << QStringLiteral("Skipped %1 unused objects because they were no longer safe or available.").arg(skipped);
+                        if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                            failure = error;
+                    }
+                }
+            }
             if (!selection.rename.isEmpty())
                 warnings << QStringLiteral("Rename To Standard was skipped: archive mode stays preview-only.");
 

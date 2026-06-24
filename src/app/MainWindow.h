@@ -97,6 +97,8 @@ private:
     FolderAnalyzer m_analyzer;
     ConfigManager m_configManager;
     QSet<QString> m_whitelistIds;
+    QSet<QString> m_archiveReferencedIds;
+    bool m_archiveReferenceScanComplete = false;
     MergeService m_mergeService;
     MergeRequest m_previewedMerge;
     QVector<int> m_previewedUnusedRows;

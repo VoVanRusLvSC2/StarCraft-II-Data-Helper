@@ -138,6 +138,7 @@ private slots:
     void referenceRenameRollback();
     void dataCollectionAliasMapping();
     void dataCollectionCreatePreviewAndApply();
+    void dataCollectionOffersSingleCustomUnit();
     void dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign();
     void dataCollectionUpdatePreservesAndSorts();
     void dataCollectionRollback();
@@ -282,6 +283,33 @@ void CoreTests::dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign()
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Button,ArchonButton\"")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Weapon,ArchonWeapon\"")));
     QVERIFY(preview.warnings.join(QStringLiteral(" ")).contains(QStringLiteral("non-standard")));
+}
+
+void CoreTests::dataCollectionOffersSingleCustomUnit()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("UnitData.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog><CUnit id=\"LonelyCustomUnit\"><LifeMax value=\"125\"/></CUnit></Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis);
+    const auto family = std::find_if(families.cbegin(), families.cend(), [](const UnitFamily &value) {
+        return value.rootId == QStringLiteral("LonelyCustomUnit");
+    });
+    QVERIFY(family != families.cend());
+    QCOMPARE(family->objects.size(), 1);
+
+    DataCollectionBuildRequest request;
+    request.family = *family;
+    const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request);
+    QVERIFY2(preview.valid, qPrintable(preview.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(preview.recordsToAdd, QStringList{QStringLiteral("Unit,LonelyCustomUnit")});
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("<CDataCollectionUnit id=\"LonelyCustomUnit\"")));
 }
 
 void CoreTests::dataCollectionUpdatePreservesAndSorts()
