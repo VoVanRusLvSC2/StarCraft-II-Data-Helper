@@ -144,6 +144,7 @@ private slots:
     void dataCollectionOffersSingleCustomUnit();
     void dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign();
     void dataCollectionUnitAbilWeaponModeSplitsRoots();
+    void dataCollectionTypedPreservesLegacyNonScopedAbilityRecords();
     void dataCollectionTypedSplitPreservesEveryCatalogRecord();
     void dataCollectionTypedSplitPreservesSharedMemberships();
     void dataCollectionMigrationRollbackRestoresAllCollections();
@@ -347,6 +348,61 @@ void CoreTests::dataCollectionUnitAbilWeaponModeSplitsRoots()
     QVERIFY(updatedXml.contains("id=\"WeaponPattern_Base\""));
     QVERIFY(updatedXml.contains("Entry=\"Abil,Gargantua_Jump\""));
     QVERIFY(updatedXml.contains("Entry=\"Weapon,Gargantua_Weapon\""));
+}
+
+void CoreTests::dataCollectionTypedPreservesLegacyNonScopedAbilityRecords()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Ability.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CDataCollectionPattern id=\"AbilityPattern_Base\"/>"
+        "<CDataCollectionAbil default=\"1\" id=\"AbilityBase\"><Pattern value=\"AbilityPattern_Base\"/></CDataCollectionAbil>"
+        "<CAbilEffectTarget id=\"AdeptStage2\" refs=\"InfestedTerransCreateEgg2 LegacyMover\"/>"
+        "<CButton id=\"AdeptPassive\"/><CButton id=\"AdeptPhaseShift\"/>"
+        "<CActorUnit id=\"Adept\"/><CActorUnit id=\"Adept2\"/>"
+        "<CEffectCreateUnit id=\"InfestedTerransCreateEgg2\"/>"
+        "<CEffectDamage id=\"InfestedTerransImpact2\"/>"
+        "<CEffectSet id=\"InfestedTerransInitialSet2\"/>"
+        "<CMover id=\"LegacyMover\"/>"
+        "<CDataCollectionAbil id=\"AdeptStage2\" parent=\"AbilityBase\">"
+        "<DataRecord Entry=\"Button,AdeptPassive\"/>"
+        "<DataRecord Entry=\"Button,AdeptPhaseShift\"/>"
+        "<DataRecord Entry=\"Actor,Adept\"/>"
+        "<DataRecord Entry=\"Actor,Adept2\"/>"
+        "<DataRecord Entry=\"Abil,AdeptStage2\"/>"
+        "<DataRecord Entry=\"Effect,InfestedTerransCreateEgg2\"/>"
+        "<DataRecord Entry=\"Effect,InfestedTerransImpact2\"/>"
+        "<DataRecord Entry=\"Effect,InfestedTerransInitialSet2\"/>"
+        "<DataRecord Entry=\"Mover,LegacyMover\"/>"
+        "</CDataCollectionAbil>"
+        "</Catalog>")));
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(
+        analysis, DataCollectionMode::UnitAbilWeapon);
+    const auto family = std::find_if(families.cbegin(), families.cend(), [](const UnitFamily &value) {
+        return value.rootId == QStringLiteral("AdeptStage2")
+            && value.entityType == DataCollectionEntityType::Ability;
+    });
+    QVERIFY(family != families.cend());
+    QCOMPARE(family->recommendedParent, QStringLiteral("AbilityMisssile"));
+
+    DataCollectionBuildRequest request;
+    request.family = *family;
+    const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request, &families);
+    QVERIFY2(preview.valid, qPrintable(preview.warnings.join(QStringLiteral("; "))));
+    QVERIFY(preview.existingRecordsPreserved.contains(QStringLiteral("Button,AdeptPassive")));
+    QVERIFY(preview.existingRecordsPreserved.contains(QStringLiteral("Actor,Adept")));
+    QVERIFY(preview.existingRecordsPreserved.contains(QStringLiteral("Effect,InfestedTerransImpact2")));
+    QVERIFY(preview.existingRecordsPreserved.contains(QStringLiteral("Mover,LegacyMover")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Button,AdeptPassive\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Actor,Adept2\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Effect,InfestedTerransInitialSet2\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Mover,LegacyMover\"")));
 }
 
 void CoreTests::dataCollectionTypedSplitPreservesEveryCatalogRecord()
@@ -1093,7 +1149,7 @@ void CoreTests::unusedReachabilityDistinguishesStatesAndPaths()
     QVERIFY(byId[QStringLiteral("UsedDamage")].usagePath.join(QStringLiteral(" -> ")).contains(QStringLiteral("WeaponLegacy(UsedWeapon)")));
     QCOMPARE(byId[QStringLiteral("OrphanAbil")].usageState, UsageState::UnusedSubgraph);
     QCOMPARE(byId[QStringLiteral("OrphanAbil")].state, CandidateState::Safe);
-    QVERIFY(!analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("OrphanAbil")].nodeIndex));
+    QVERIFY(analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("OrphanAbil")].nodeIndex));
     QCOMPARE(byId[QStringLiteral("OrphanEffect")].usageState, UsageState::Risky);
     QCOMPARE(byId[QStringLiteral("DisconnectedUnit")].usageState, UsageState::Disconnected);
     QVERIFY(analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("DisconnectedUnit")].nodeIndex));

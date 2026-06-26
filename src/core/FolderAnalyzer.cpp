@@ -420,10 +420,8 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
             if (isPrimaryEntity(node)) {
                 info.state = CandidateState::Safe;
                 info.riskLevel = disconnected ? QStringLiteral("low") : QStringLiteral("medium");
-                if (disconnected) {
-                    node.candidateUnused = true;
-                    result->possibleUnusedNodeIndices.append(i);
-                }
+                node.candidateUnused = true;
+                result->possibleUnusedNodeIndices.append(i);
             } else {
                 info.state = CandidateState::Risky;
                 info.usageState = UsageState::Risky;

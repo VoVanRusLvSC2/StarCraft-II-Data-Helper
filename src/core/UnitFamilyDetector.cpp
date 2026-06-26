@@ -260,9 +260,11 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             if (owner == DataCollectionEntityType::Unit)
                 return type.startsWith(QStringLiteral("cactor")) || type.startsWith(QStringLiteral("cmodel"))
                     || type.startsWith(QStringLiteral("csound")) || type.startsWith(QStringLiteral("cbutton"))
-                    || type.startsWith(QStringLiteral("cbehavior")) || type.startsWith(QStringLiteral("cturret"))
+                    || type.startsWith(QStringLiteral("ceffect")) || type.startsWith(QStringLiteral("cbehavior"))
+                    || type.startsWith(QStringLiteral("cvalidator")) || type.startsWith(QStringLiteral("crequirement"))
+                    || type.startsWith(QStringLiteral("cmover")) || type.startsWith(QStringLiteral("cturret"))
                     || type.startsWith(QStringLiteral("cfootprint")) || type.startsWith(QStringLiteral("ctexture"))
-                    || type.startsWith(QStringLiteral("csiteop"));
+                    || type.startsWith(QStringLiteral("csiteop")) || type.startsWith(QStringLiteral("cbeam"));
             if (owner == DataCollectionEntityType::Ability)
                 return type.startsWith(QStringLiteral("cbutton")) || type.startsWith(QStringLiteral("ceffect"))
                     || type.startsWith(QStringLiteral("cbehavior")) || type.startsWith(QStringLiteral("cvalidator"))
@@ -280,6 +282,7 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
         QHash<QString, QVector<int>> incomingSourcesById;
         QVector<int> roots;
         QHash<QString, QSet<int>> rootKinds;
+        QSet<QString> primaryRootIds;
         for (int index = 0; index < analysis.nodes.size(); ++index) {
             const DataNode &node = analysis.nodes[index];
             if (!node.id.isEmpty() && !mapper.catalogType(node.elementName).isEmpty())
@@ -290,7 +293,10 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             if (!node.id.isEmpty() && entityTypeOf(node, &entityType)) {
                 roots.append(index);
                 rootKinds[node.id.toLower()].insert(int(entityType));
+                primaryRootIds.insert(node.id.toLower());
             }
+            if (!node.id.isEmpty() && node.elementName.startsWith(QStringLiteral("CUpgrade"), Qt::CaseInsensitive))
+                primaryRootIds.insert(node.id.toLower());
         }
 
         QVector<UnitFamily> result;
@@ -347,6 +353,25 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
                 }
                 }
             };
+            const auto hasForeignPrimaryOwner = [&](int target, const QString &ownerRootId) {
+                if (target < 0 || target >= analysis.nodes.size())
+                    return false;
+                const QString targetId = analysis.nodes[target].id.toLower();
+                for (int source : incomingSourcesById.value(targetId)) {
+                    if (source < 0 || source >= analysis.nodes.size())
+                        continue;
+                    const DataNode &sourceNode = analysis.nodes[source];
+                    DataCollectionEntityType sourceEntity;
+                    const bool primary = entityTypeOf(sourceNode, &sourceEntity)
+                        || sourceNode.elementName.startsWith(QStringLiteral("CUpgrade"), Qt::CaseInsensitive);
+                    if (!primary)
+                        continue;
+                    if (sourceNode.id.compare(ownerRootId, Qt::CaseInsensitive) == 0)
+                        continue;
+                    return true;
+                }
+                return false;
+            };
             processQueue();
 
             QSet<QString> processedScopes;
@@ -382,11 +407,11 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
                 processQueue();
             }
 
-            family.recommendedParent = standardDataCollectionParent(entityType, paths, analysis.nodes);
-
-            // Existing anchored membership is only supplementary evidence.  It may
-            // recover convention-driven children (notably launch/impact sounds) when
-            // the exact catalog object exists and has a strict Root@/Root_ scope.
+            // Existing membership is supplementary evidence for this exact
+            // collection.  Do not require Root@/Root_ here: old maps often contain
+            // valid related buttons, actors, effects, models and sounds with legacy
+            // IDs.  The typed boundary is still enforced by allowedFor(), so Unit
+            // collections do not silently absorb Ability/Weapon roots.
             const DataNode *legacyCollection = existingCollections.value(rootNode.id, nullptr);
             if (legacyCollection) {
                 pugi::xml_document fragment;
@@ -395,17 +420,66 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
                         const QString entry = QString::fromUtf8(record.attribute("Entry").value());
                         const QString catalog = entry.section(QLatin1Char(','), 0, 0).trimmed();
                         const QString id = entry.section(QLatin1Char(','), 1).trimmed();
-                        const bool scoped = id.compare(rootNode.id, Qt::CaseInsensitive) == 0
-                            || id.startsWith(rootNode.id + QLatin1Char('@'), Qt::CaseInsensitive)
-                            || id.startsWith(rootNode.id + QLatin1Char('_'), Qt::CaseInsensitive);
-                        if (!scoped) continue;
                         const int target = nodeByRecord.value(catalog.toLower() + QChar(0x1f) + id.toLower(), -1);
                         if (target < 0 || paths.contains(target) || !allowedFor(entityType, analysis.nodes[target])) continue;
+                        const bool scopedToRoot = id.compare(rootNode.id, Qt::CaseInsensitive) == 0
+                            || id.startsWith(rootNode.id + QLatin1Char('@'), Qt::CaseInsensitive)
+                            || id.startsWith(rootNode.id + QLatin1Char('_'), Qt::CaseInsensitive);
+                        bool scopedToForeignPrimary = false;
+                        const QString idLower = id.toLower();
+                        for (const QString &primaryRootId : primaryRootIds) {
+                            if (primaryRootId == rootNode.id.toLower())
+                                continue;
+                            if (idLower.startsWith(primaryRootId)) {
+                                scopedToForeignPrimary = true;
+                                break;
+                            }
+                        }
+                        if (!scopedToRoot && scopedToForeignPrimary)
+                            continue;
+                        if (!scopedToRoot && hasForeignPrimaryOwner(target, rootNode.id))
+                            continue;
                         paths.insert(target, {QStringLiteral("%1,%2").arg(dataCollectionEntityTypeName(entityType), rootNode.id),
-                                              QStringLiteral("anchored existing membership %1").arg(entry)});
+                                              QStringLiteral("existing DataRecord membership %1").arg(entry)});
+                        queue.enqueue(target);
                     }
                 }
             }
+            processQueue();
+
+            addedScoped = true;
+            while (addedScoped) {
+                addedScoped = false;
+                const QList<int> reached = paths.keys();
+                for (int current : reached) {
+                    const QString scope = analysis.nodes[current].id;
+                    if (scope.isEmpty() || processedScopes.contains(scope.toLower()))
+                        continue;
+                    processedScopes.insert(scope.toLower());
+                    for (int candidate = 0; candidate < analysis.nodes.size(); ++candidate) {
+                        if (paths.contains(candidate) || !allowedFor(entityType, analysis.nodes[candidate]))
+                            continue;
+                        const QString candidateId = analysis.nodes[candidate].id;
+                        if (candidateId.isEmpty())
+                            continue;
+                        const bool scoped = candidateId.compare(scope, Qt::CaseInsensitive) == 0
+                            || candidateId.startsWith(scope + QLatin1Char('@'), Qt::CaseInsensitive)
+                            || candidateId.startsWith(scope + QLatin1Char('_'), Qt::CaseInsensitive);
+                        if (!scoped)
+                            continue;
+                        QStringList path = paths.value(current);
+                        path.append(QStringLiteral("scoped catalog object %1,%2")
+                                        .arg(mapper.catalogType(analysis.nodes[candidate].elementName),
+                                             analysis.nodes[candidate].id));
+                        paths.insert(candidate, path);
+                        queue.enqueue(candidate);
+                        addedScoped = true;
+                    }
+                }
+                processQueue();
+            }
+
+            family.recommendedParent = standardDataCollectionParent(entityType, paths, analysis.nodes);
 
             QList<int> members = paths.keys();
             std::sort(members.begin(), members.end());

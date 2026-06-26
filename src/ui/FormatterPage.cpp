@@ -95,7 +95,9 @@ DataCollectionMode configuredDataCollectionMode() {
 OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateMergeEnabled, DataCollectionMode collectionMode) {
     OptimizationPlanData plan;
     for (const UnusedCandidateInfo &candidate : result.unusedCandidates) {
-        if (candidate.state != CandidateState::Safe || candidate.usageState != UsageState::Disconnected)
+        if (candidate.state != CandidateState::Safe
+            || (candidate.usageState != UsageState::Disconnected
+                && candidate.usageState != UsageState::UnusedSubgraph))
             continue;
         const DataNode &node = result.nodes[candidate.nodeIndex];
         const QString status = candidate.usageState == UsageState::Used ? QStringLiteral("Used")
@@ -126,10 +128,15 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
         const RenamePlan renamePlan = StandardNamePlanner().plan(result, family, family.rootId);
         for (const RenamePlanItem &item : renamePlan.items) {
             const bool usable = !item.blocked;
+            const QString atChange = item.newId.contains(QLatin1Char('@'))
+                ? QStringLiteral("Data Collection child ID: %1").arg(item.newId.mid(item.newId.indexOf(QLatin1Char('@'))))
+                : QStringLiteral("Root ID");
             plan.rename.append({{usable ? QString() : QStringLiteral("Blocked"),
                                  family.rootId,
+                                 unitFamilyRoleName(item.role),
                                  item.oldId,
                                  item.newId,
+                                 atChange,
                                  item.blocked ? item.conflict : item.reason},
                                 usable, usable, family.rootNodeIndex, item.nodeIndex});
         }
@@ -162,7 +169,9 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_steps->setObjectName(QStringLiteral("optimizationSteps"));
     m_unused = makeTable({QStringLiteral("Use"), QStringLiteral("Object ID"), QStringLiteral("Type"), QStringLiteral("Reason"), QStringLiteral("Risk")});
     m_duplicates = makeTable({QStringLiteral("Use"), QStringLiteral("ID mask"), QStringLiteral("Keep"), QStringLiteral("Remove"), QStringLiteral("References redirected")});
-    m_rename = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Current ID"), QStringLiteral("Proposed ID"), QStringLiteral("Risk / Conflict")});
+    m_rename = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Role"),
+                          QStringLiteral("Current ID"), QStringLiteral("Proposed ID"),
+                          QStringLiteral("@ change"), QStringLiteral("Risk / Conflict")});
     m_collection = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Existing records"), QStringLiteral("Can add"), QStringLiteral("Move out"), QStringLiteral("Warnings")});
     m_summary = new QPlainTextEdit; m_summary->setReadOnly(true);
     m_summary->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -374,9 +383,12 @@ void FormatterPage::updateDetails()
         m_details->setPlainText(QStringLiteral("KEEP OBJECT\n============\n%1\n\nREMOVE / COMPARE OBJECT\n=======================\n%2")
                                     .arg(xmlFor(primary), xmlFor(secondary)));
     } else if (step == 2) {
-        const QString oldId = table->item(row, 2) ? table->item(row, 2)->text() : QString();
-        const QString newId = table->item(row, 3) ? table->item(row, 3)->text() : QString();
-        m_details->setPlainText(QStringLiteral("RENAME PREVIEW\n\n%1 -> %2\n\n%3").arg(oldId, newId, xmlFor(secondary)));
+        const QString role = table->item(row, 2) ? table->item(row, 2)->text() : QString();
+        const QString oldId = table->item(row, 3) ? table->item(row, 3)->text() : QString();
+        const QString newId = table->item(row, 4) ? table->item(row, 4)->text() : QString();
+        const QString atChange = table->item(row, 5) ? table->item(row, 5)->text() : QString();
+        m_details->setPlainText(QStringLiteral("RENAME PREVIEW\n\nRole: %1\n%2 -> %3\n%4\n\n%5")
+                                    .arg(role, oldId, newId, atChange, xmlFor(secondary)));
     } else {
         QStringList fields;
         for (int column = 1; column < table->columnCount(); ++column)
@@ -396,7 +408,10 @@ QString FormatterPage::buildIdChangePreview() const
     for (int row = 0; row < m_rename->rowCount(); ++row) {
         const QTableWidgetItem *use = m_rename->item(row, 0);
         if (use && use->checkState() == Qt::Checked)
-            lines << QStringLiteral("%1  ->  %2  [rename]").arg(m_rename->item(row, 2)->text(), m_rename->item(row, 3)->text());
+            lines << QStringLiteral("%1  ->  %2  [rename: %3]")
+                         .arg(m_rename->item(row, 3)->text(),
+                              m_rename->item(row, 4)->text(),
+                              m_rename->item(row, 5)->text());
     }
     for (int row = 0; row < m_unused->rowCount(); ++row) {
         const QTableWidgetItem *use = m_unused->item(row, 0);

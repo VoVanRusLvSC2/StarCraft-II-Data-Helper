@@ -142,7 +142,9 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
 
     int count = 0;
     for (const UnusedCandidateInfo &candidate : m_result.unusedCandidates)
-        if (candidate.state == CandidateState::Safe && candidate.usageState == UsageState::Disconnected)
+        if (candidate.state == CandidateState::Safe
+            && (candidate.usageState == UsageState::Disconnected
+                || candidate.usageState == UsageState::UnusedSubgraph))
             ++count;
     if (count == 0)
     {
@@ -157,10 +159,12 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
     }
     else
     {
-        m_summaryLabel->setText(QStringLiteral("%1 guaranteed disconnected object(s) can be removed after manual confirmation.").arg(count));
+        m_summaryLabel->setText(QStringLiteral("%1 safe unreachable object(s) can be removed after manual confirmation.").arg(count));
         for (const UnusedCandidateInfo &candidate : m_result.unusedCandidates)
         {
-            if (candidate.state != CandidateState::Safe || candidate.usageState != UsageState::Disconnected)
+            if (candidate.state != CandidateState::Safe
+                || (candidate.usageState != UsageState::Disconnected
+                    && candidate.usageState != UsageState::UnusedSubgraph))
                 continue;
             const int index = candidate.nodeIndex;
             if (index < 0 || index >= m_result.nodes.size())
