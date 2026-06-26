@@ -25,6 +25,7 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QGraphicsOpacityEffect>
@@ -39,6 +40,7 @@
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QLabel>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QMouseEvent>
@@ -55,6 +57,7 @@
 #include <QStatusBar>
 #include <QStyle>
 #include <QSlider>
+#include <QSplitter>
 #include <QTabWidget>
 #include <QTabBar>
 #include <QToolTip>
@@ -70,6 +73,7 @@
 #include <QToolBar>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QKeyEvent>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -86,6 +90,404 @@
 
 namespace
 {
+    struct Sc2FileOpenFilter
+    {
+        QString label;
+        QStringList suffixes;
+    };
+
+    QString humanFileSize(qint64 bytes)
+    {
+        static const QStringList units{QStringLiteral("B"), QStringLiteral("KB"), QStringLiteral("MB"), QStringLiteral("GB")};
+        double value = double(bytes);
+        int unit = 0;
+        while (value >= 1024.0 && unit + 1 < units.size()) {
+            value /= 1024.0;
+            ++unit;
+        }
+        return unit == 0
+            ? QStringLiteral("%1 %2").arg(bytes).arg(units[unit])
+            : QStringLiteral("%1 %2").arg(value, 0, 'f', 1).arg(units[unit]);
+    }
+
+    bool matchesOpenFilter(const QFileInfo &info, const Sc2FileOpenFilter &filter)
+    {
+        if (info.isDir() || filter.suffixes.isEmpty())
+            return true;
+        const QString suffix = QStringLiteral(".%1").arg(info.suffix()).toLower();
+        return filter.suffixes.contains(suffix);
+    }
+
+    QString fileTypeLabel(const QFileInfo &info)
+    {
+        if (info.isDir())
+            return QStringLiteral("Folder");
+        const QString suffix = info.suffix().trimmed();
+        return suffix.isEmpty() ? QStringLiteral("File")
+                                : QStringLiteral("%1 file").arg(suffix.toUpper());
+    }
+
+    class Sc2FileOpenDialog final : public QDialog
+    {
+    public:
+        explicit Sc2FileOpenDialog(QWidget *parent, const QString &startPath)
+            : QDialog(parent)
+        {
+            setObjectName(QStringLiteral("toolDialog"));
+            setWindowTitle(QStringLiteral("Open SC2 File"));
+            setModal(true);
+            resize(1220, 780);
+            setMinimumSize(900, 560);
+
+            m_filters = {
+                {QStringLiteral("Supported (*.SC2Map, *.SC2Mod, *.SC2Components, *.SC2Campaign, *.SC2Archive, *.xml)"),
+                 {QStringLiteral(".sc2map"), QStringLiteral(".sc2mod"), QStringLiteral(".sc2components"),
+                  QStringLiteral(".sc2campaign"), QStringLiteral(".sc2archive"), QStringLiteral(".xml")}},
+                {QStringLiteral("SC2 Archives (*.SC2Map, *.SC2Mod, *.SC2Components, *.SC2Campaign, *.SC2Archive)"),
+                 {QStringLiteral(".sc2map"), QStringLiteral(".sc2mod"), QStringLiteral(".sc2components"),
+                  QStringLiteral(".sc2campaign"), QStringLiteral(".sc2archive")}},
+                {QStringLiteral("XML (*.xml)"), {QStringLiteral(".xml")}},
+                {QStringLiteral("All Files (*.*)"), {}},
+            };
+
+            auto *layout = new QVBoxLayout(this);
+            layout->setContentsMargins(18, 16, 18, 16);
+            layout->setSpacing(10);
+
+            auto *title = new QLabel(QStringLiteral("OPEN SC2 FILE"), this);
+            title->setObjectName(QStringLiteral("panelTitle"));
+            layout->addWidget(title);
+
+            m_status = new QLabel(this);
+            m_status->setObjectName(QStringLiteral("inspectorSubtitle"));
+            m_status->setWordWrap(false);
+            layout->addWidget(m_status);
+
+            m_path = new QLineEdit(this);
+            m_path->setPlaceholderText(QStringLiteral("Current folder..."));
+            layout->addWidget(m_path);
+
+            auto *searchRow = new QHBoxLayout;
+            m_search = new QLineEdit(this);
+            m_search->setPlaceholderText(QStringLiteral("Search files and folders..."));
+            m_filter = new QComboBox(this);
+            for (const Sc2FileOpenFilter &filter : m_filters)
+                m_filter->addItem(filter.label);
+            searchRow->addWidget(m_search, 1);
+            searchRow->addWidget(m_filter);
+            layout->addLayout(searchRow);
+
+            auto *splitter = new QSplitter(Qt::Horizontal, this);
+            m_places = new QListWidget(splitter);
+            m_places->setObjectName(QStringLiteral("fileOpenPlaces"));
+            m_places->setSelectionMode(QAbstractItemView::SingleSelection);
+            m_table = new QTableWidget(splitter);
+            m_table->setObjectName(QStringLiteral("fileOpenTable"));
+            m_table->setColumnCount(4);
+            m_table->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Type"),
+                                                QStringLiteral("Size"), QStringLiteral("Modified")});
+            m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+            m_table->setSelectionMode(QAbstractItemView::SingleSelection);
+            m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            m_table->setShowGrid(false);
+            m_table->verticalHeader()->hide();
+            m_table->horizontalHeader()->setStretchLastSection(true);
+            m_table->setColumnWidth(0, 470);
+            m_table->setColumnWidth(1, 130);
+            m_table->setColumnWidth(2, 110);
+            splitter->addWidget(m_places);
+            splitter->addWidget(m_table);
+            splitter->setStretchFactor(0, 1);
+            splitter->setStretchFactor(1, 4);
+            splitter->setSizes({260, 920});
+            layout->addWidget(splitter, 1);
+
+            auto *nameRow = new QHBoxLayout;
+            auto *nameLabel = new QLabel(QStringLiteral("Selected:"), this);
+            nameLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
+            m_name = new QLineEdit(this);
+            m_name->setPlaceholderText(QStringLiteral("Selected file or folder..."));
+            nameRow->addWidget(nameLabel);
+            nameRow->addWidget(m_name, 1);
+            layout->addLayout(nameRow);
+
+            m_selection = new QLabel(this);
+            m_selection->setObjectName(QStringLiteral("inspectorSubtitle"));
+            m_selection->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            layout->addWidget(m_selection);
+
+            auto *buttonRow = new QHBoxLayout;
+            buttonRow->addStretch(1);
+            m_open = new QPushButton(QStringLiteral("Open"), this);
+            m_cancel = new QPushButton(QStringLiteral("Cancel"), this);
+            m_open->setMinimumWidth(150);
+            m_cancel->setMinimumWidth(150);
+            buttonRow->addWidget(m_open);
+            buttonRow->addWidget(m_cancel);
+            layout->addLayout(buttonRow);
+
+            populatePlaces();
+            wireEvents();
+
+            QFileInfo startInfo(startPath);
+            QString initialDir;
+            QString initialFile;
+            if (startInfo.isFile()) {
+                initialDir = startInfo.absolutePath();
+                initialFile = startInfo.fileName();
+            } else if (startInfo.isDir()) {
+                initialDir = startInfo.absoluteFilePath();
+            } else {
+                initialDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+            }
+            if (initialDir.isEmpty())
+                initialDir = QDir::homePath();
+            openDirectory(initialDir, initialFile);
+        }
+
+        QString selectedFile() const { return m_selectedFile; }
+
+    protected:
+        void keyPressEvent(QKeyEvent *event) override
+        {
+            if (!event) {
+                QDialog::keyPressEvent(event);
+                return;
+            }
+            if (event->key() == Qt::Key_Escape) {
+                reject();
+                return;
+            }
+            if (event->key() == Qt::Key_F5) {
+                openDirectory(m_currentDir, m_name->text());
+                return;
+            }
+            if ((event->key() == Qt::Key_Backspace) || (event->key() == Qt::Key_Up && event->modifiers().testFlag(Qt::AltModifier))) {
+                openParent();
+                return;
+            }
+            if (event->matches(QKeySequence::Find)) {
+                m_search->setFocus();
+                m_search->selectAll();
+                return;
+            }
+            if (event->key() == Qt::Key_L && event->modifiers().testFlag(Qt::ControlModifier)) {
+                m_path->setFocus();
+                m_path->selectAll();
+                return;
+            }
+            QDialog::keyPressEvent(event);
+        }
+
+    private:
+        void wireEvents()
+        {
+            connect(m_path, &QLineEdit::returnPressed, this, [this] { handlePathEntered(); });
+            connect(m_name, &QLineEdit::returnPressed, this, [this] { confirmSelection(); });
+            connect(m_search, &QLineEdit::textChanged, this, [this] { populateFiles(); });
+            connect(m_filter, &QComboBox::currentIndexChanged, this, [this] { populateFiles(); });
+            connect(m_places, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
+                if (!item) return;
+                const QString path = item->data(Qt::UserRole).toString();
+                if (!path.isEmpty()) openDirectory(path);
+            });
+            connect(m_table, &QTableWidget::itemSelectionChanged, this, [this] {
+                const int row = m_table->currentRow();
+                if (row < 0) return;
+                QTableWidgetItem *nameItem = m_table->item(row, 0);
+                if (!nameItem) return;
+                const QString path = nameItem->data(Qt::UserRole).toString();
+                m_name->setText(QFileInfo(path).fileName());
+                m_selection->setText(QDir::toNativeSeparators(path));
+            });
+            connect(m_table, &QTableWidget::itemDoubleClicked, this, [this](QTableWidgetItem *item) {
+                if (!item) return;
+                activatePath(item->data(Qt::UserRole).toString());
+            });
+            connect(m_table, &QTableWidget::itemActivated, this, [this](QTableWidgetItem *item) {
+                if (!item) return;
+                activatePath(item->data(Qt::UserRole).toString());
+            });
+            connect(m_open, &QPushButton::clicked, this, [this] { confirmSelection(); });
+            connect(m_cancel, &QPushButton::clicked, this, &QDialog::reject);
+        }
+
+        void populatePlaces()
+        {
+            const auto addPlace = [this](const QString &title, const QString &path) {
+                if (path.isEmpty() || !QFileInfo(path).isDir()) return;
+                auto *item = new QListWidgetItem(title, m_places);
+                item->setData(Qt::UserRole, QFileInfo(path).absoluteFilePath());
+            };
+            addPlace(QStringLiteral("Home"), QDir::homePath());
+            addPlace(QStringLiteral("Desktop"), QStandardPaths::writableLocation(QStandardPaths::DesktopLocation));
+            addPlace(QStringLiteral("Documents"), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+            addPlace(QStringLiteral("Downloads"), QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
+            for (const QFileInfo &drive : QDir::drives())
+                addPlace(drive.absoluteFilePath(), drive.absoluteFilePath());
+        }
+
+        Sc2FileOpenFilter currentFilter() const
+        {
+            const int index = m_filter ? m_filter->currentIndex() : 0;
+            return m_filters.value(qBound(0, index, m_filters.size() - 1));
+        }
+
+        void openDirectory(const QString &path, const QString &suggestedFile = QString())
+        {
+            QFileInfo info(path);
+            if (!info.isDir()) {
+                setStatus(QStringLiteral("Directory not found: %1").arg(QDir::toNativeSeparators(path)));
+                return;
+            }
+            m_currentDir = info.absoluteFilePath();
+            m_path->setText(QDir::toNativeSeparators(m_currentDir));
+            m_name->setText(suggestedFile);
+            m_selection->setText(QDir::toNativeSeparators(suggestedFile.isEmpty()
+                ? m_currentDir : QDir(m_currentDir).absoluteFilePath(suggestedFile)));
+            populateFiles();
+            if (!suggestedFile.isEmpty())
+                selectFileName(suggestedFile);
+        }
+
+        void populateFiles()
+        {
+            const QDir dir(m_currentDir);
+            const QString query = m_search->text().trimmed().toLower();
+            const Sc2FileOpenFilter filter = currentFilter();
+            QFileInfoList entries = dir.entryInfoList(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot | QDir::Readable,
+                                                      QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+            m_table->setUpdatesEnabled(false);
+            m_table->setRowCount(0);
+            int folders = 0;
+            int files = 0;
+            for (const QFileInfo &entry : entries) {
+                if (!query.isEmpty() && !entry.fileName().toLower().contains(query))
+                    continue;
+                if (!matchesOpenFilter(entry, filter))
+                    continue;
+                const int row = m_table->rowCount();
+                m_table->insertRow(row);
+                auto *name = new QTableWidgetItem(entry.fileName());
+                name->setData(Qt::UserRole, entry.absoluteFilePath());
+                name->setData(Qt::UserRole + 1, entry.isDir());
+                auto *type = new QTableWidgetItem(fileTypeLabel(entry));
+                auto *size = new QTableWidgetItem(entry.isDir() ? QStringLiteral("-") : humanFileSize(entry.size()));
+                auto *modified = new QTableWidgetItem(entry.lastModified().toString(QStringLiteral("yyyy-MM-dd HH:mm")));
+                for (QTableWidgetItem *item : {name, type, size, modified})
+                    item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+                m_table->setItem(row, 0, name);
+                m_table->setItem(row, 1, type);
+                m_table->setItem(row, 2, size);
+                m_table->setItem(row, 3, modified);
+                if (entry.isDir()) ++folders; else ++files;
+            }
+            m_table->setUpdatesEnabled(true);
+            setStatus(QStringLiteral("Current folder: %1   |   folders: %2   |   files: %3")
+                          .arg(QDir::toNativeSeparators(m_currentDir)).arg(folders).arg(files));
+        }
+
+        void selectFileName(const QString &fileName)
+        {
+            for (int row = 0; row < m_table->rowCount(); ++row) {
+                QTableWidgetItem *item = m_table->item(row, 0);
+                if (item && item->text().compare(fileName, Qt::CaseInsensitive) == 0) {
+                    m_table->selectRow(row);
+                    m_table->scrollToItem(item);
+                    return;
+                }
+            }
+        }
+
+        void handlePathEntered()
+        {
+            const QString raw = m_path->text().trimmed().remove(QLatin1Char('"'));
+            QFileInfo info(raw);
+            if (info.isDir()) {
+                openDirectory(info.absoluteFilePath());
+                return;
+            }
+            if (info.isFile()) {
+                activatePath(info.absoluteFilePath());
+                return;
+            }
+            setStatus(QStringLiteral("Directory or file not found: %1").arg(QDir::toNativeSeparators(raw)));
+        }
+
+        void activatePath(const QString &path)
+        {
+            QFileInfo info(path);
+            if (info.isDir()) {
+                openDirectory(info.absoluteFilePath());
+                return;
+            }
+            if (info.isFile()) {
+                m_name->setText(info.fileName());
+                m_selection->setText(QDir::toNativeSeparators(info.absoluteFilePath()));
+                confirmSelection();
+            }
+        }
+
+        void confirmSelection()
+        {
+            QString candidate = m_name->text().trimmed().remove(QLatin1Char('"'));
+            if (candidate.isEmpty() && m_table->currentRow() >= 0) {
+                if (QTableWidgetItem *item = m_table->item(m_table->currentRow(), 0))
+                    candidate = item->data(Qt::UserRole).toString();
+            }
+            QFileInfo info(candidate);
+            if (!info.isAbsolute())
+                info = QFileInfo(QDir(m_currentDir).absoluteFilePath(candidate));
+            if (info.isDir()) {
+                openDirectory(info.absoluteFilePath());
+                return;
+            }
+            if (!info.isFile()) {
+                setStatus(QStringLiteral("Select a file."));
+                return;
+            }
+            if (!matchesOpenFilter(info, currentFilter())) {
+                setStatus(QStringLiteral("File does not match selected filter."));
+                return;
+            }
+            m_selectedFile = info.absoluteFilePath();
+            accept();
+        }
+
+        void openParent()
+        {
+            QDir dir(m_currentDir);
+            if (dir.cdUp())
+                openDirectory(dir.absolutePath());
+        }
+
+        void setStatus(const QString &text)
+        {
+            if (m_status)
+                m_status->setText(text);
+        }
+
+        QVector<Sc2FileOpenFilter> m_filters;
+        QListWidget *m_places = nullptr;
+        QTableWidget *m_table = nullptr;
+        QLineEdit *m_path = nullptr;
+        QLineEdit *m_search = nullptr;
+        QLineEdit *m_name = nullptr;
+        QComboBox *m_filter = nullptr;
+        QLabel *m_status = nullptr;
+        QLabel *m_selection = nullptr;
+        QPushButton *m_open = nullptr;
+        QPushButton *m_cancel = nullptr;
+        QString m_currentDir;
+        QString m_selectedFile;
+    };
+
+    QString openSc2FileStyled(QWidget *parent, const QString &startPath)
+    {
+        Sc2FileOpenDialog dialog(parent, startPath);
+        return dialog.exec() == QDialog::Accepted ? dialog.selectedFile() : QString();
+    }
+
     DataCollectionMode configuredDataCollectionMode()
     {
         QSettings settings;
@@ -857,34 +1259,13 @@ void MainWindow::setCurrentSourcePath(const QString &path)
 
 void MainWindow::openSc2File()
 {
-    const QString filter = QStringLiteral("SC2 Files (*.SC2Map *.SC2Mod *.SC2Components *.SC2Campaign *.SC2Archive *.xml);;All Files (*.*)");
     QSettings settings;
     const QString savedPath = settings.value(QStringLiteral("paths/lastSourcePath")).toString();
     QString startPath = !m_currentSourcePath.isEmpty() ? m_currentSourcePath : savedPath;
     if (!startPath.isEmpty() && !QFileInfo::exists(startPath))
         startPath = QFileInfo(startPath).absolutePath();
 
-    QFileDialog dialog(this, QStringLiteral("Open SC2 File"));
-    dialog.setObjectName(QStringLiteral("toolDialog"));
-    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
-    dialog.setAcceptMode(QFileDialog::AcceptOpen);
-    dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setViewMode(QFileDialog::Detail);
-    dialog.setNameFilter(filter);
-    dialog.setLabelText(QFileDialog::Accept, QStringLiteral("Open"));
-    dialog.setLabelText(QFileDialog::Reject, QStringLiteral("Cancel"));
-    if (!startPath.isEmpty()) {
-        const QFileInfo startInfo(startPath);
-        if (startInfo.isFile()) {
-            dialog.setDirectory(startInfo.absolutePath());
-            dialog.selectFile(startInfo.fileName());
-        } else {
-            dialog.setDirectory(startPath);
-        }
-    }
-    const QString selected = dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()
-        ? dialog.selectedFiles().constFirst()
-        : QString();
+    const QString selected = openSc2FileStyled(this, startPath);
     if (selected.isEmpty())
     {
         return;
