@@ -16,29 +16,49 @@
 #include <QTextEdit>
 #include <QHBoxLayout>
 
-namespace {
-
-QList<QStandardItem *> buildRow(const QString &status,
-                                const QString &id,
-                                const QString &element,
-                                const QString &file,
-                                const QString &location,
-                                const QString &line,
-                                const QString &reason)
+namespace
 {
-    auto *selectItem = new QStandardItem;
-    auto *statusItem = new QStandardItem(status);
-    auto *idItem = new QStandardItem(id);
-    auto *elementItem = new QStandardItem(element);
-    auto *fileItem = new QStandardItem(file);
-    auto *locationItem = new QStandardItem(location);
-    auto *lineItem = new QStandardItem(line);
-    auto *reasonItem = new QStandardItem(reason);
-    for (QStandardItem *item : {selectItem, statusItem, idItem, elementItem, fileItem, locationItem, lineItem, reasonItem}) {
-        item->setEditable(false);
+
+    QString usageStateName(UsageState state)
+    {
+        switch (state)
+        {
+        case UsageState::Used:
+            return QStringLiteral("Used");
+        case UsageState::Disconnected:
+            return QStringLiteral("Disconnected");
+        case UsageState::UnusedSubgraph:
+            return QStringLiteral("Unused subgraph");
+        case UsageState::Risky:
+            return QStringLiteral("Risky");
+        case UsageState::Blocked:
+            return QStringLiteral("Blocked");
+        }
+        return QStringLiteral("Blocked");
     }
-    return {selectItem, statusItem, idItem, elementItem, fileItem, locationItem, lineItem, reasonItem};
-}
+
+    QList<QStandardItem *> buildRow(const QString &status,
+                                    const QString &id,
+                                    const QString &element,
+                                    const QString &file,
+                                    const QString &location,
+                                    const QString &line,
+                                    const QString &reason)
+    {
+        auto *selectItem = new QStandardItem;
+        auto *statusItem = new QStandardItem(status);
+        auto *idItem = new QStandardItem(id);
+        auto *elementItem = new QStandardItem(element);
+        auto *fileItem = new QStandardItem(file);
+        auto *locationItem = new QStandardItem(location);
+        auto *lineItem = new QStandardItem(line);
+        auto *reasonItem = new QStandardItem(reason);
+        for (QStandardItem *item : {selectItem, statusItem, idItem, elementItem, fileItem, locationItem, lineItem, reasonItem})
+        {
+            item->setEditable(false);
+        }
+        return {selectItem, statusItem, idItem, elementItem, fileItem, locationItem, lineItem, reasonItem};
+    }
 
 } // namespace
 
@@ -100,11 +120,17 @@ UnusedPage::UnusedPage(QWidget *parent)
     buttons->addWidget(m_applyButton);
     buttons->addStretch(1);
     layout->addLayout(buttons);
-    m_preview = new QTextEdit(this); m_preview->setReadOnly(true); m_preview->setMaximumHeight(180);
-    m_preview->setPlaceholderText(QStringLiteral("Preview selected unused objects before deletion.")); layout->addWidget(m_preview);
-    connect(m_previewButton, &QPushButton::clicked, this, [this] { emit previewDeletionRequested(selectedSafeRows()); });
-    connect(m_applyButton, &QPushButton::clicked, this, [this] { emit applyDeletionRequested(selectedSafeRows()); });
-    connect(m_model, &QStandardItemModel::itemChanged, this, [this] { updateActionState(); });
+    m_preview = new QTextEdit(this);
+    m_preview->setReadOnly(true);
+    m_preview->setMaximumHeight(180);
+    m_preview->setPlaceholderText(QStringLiteral("Preview selected unused objects before deletion."));
+    layout->addWidget(m_preview);
+    connect(m_previewButton, &QPushButton::clicked, this, [this]
+            { emit previewDeletionRequested(selectedSafeRows()); });
+    connect(m_applyButton, &QPushButton::clicked, this, [this]
+            { emit applyDeletionRequested(selectedSafeRows()); });
+    connect(m_model, &QStandardItemModel::itemChanged, this, [this]
+            { updateActionState(); });
     updateActionState();
 }
 
@@ -114,8 +140,12 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
     m_result = result;
     m_model->removeRows(0, m_model->rowCount());
 
-    const int count = m_result.unusedCandidates.size();
-    if (count == 0) {
+    int count = 0;
+    for (const UnusedCandidateInfo &candidate : m_result.unusedCandidates)
+        if (candidate.state == CandidateState::Safe && candidate.usageState == UsageState::Disconnected)
+            ++count;
+    if (count == 0)
+    {
         m_summaryLabel->setText(QStringLiteral("No cleanup candidates were detected."));
         m_model->appendRow(buildRow(QStringLiteral("PASS"),
                                     QStringLiteral("-"),
@@ -124,19 +154,31 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
                                     QStringLiteral("-"),
                                     QStringLiteral("-"),
                                     QStringLiteral("No unused candidates")));
-    } else {
-        m_summaryLabel->setText(QStringLiteral("%1 candidate nodes need review. Safe only after manual confirmation.").arg(count));
-        for (const UnusedCandidateInfo &candidate : m_result.unusedCandidates) {
+    }
+    else
+    {
+        m_summaryLabel->setText(QStringLiteral("%1 guaranteed disconnected object(s) can be removed after manual confirmation.").arg(count));
+        for (const UnusedCandidateInfo &candidate : m_result.unusedCandidates)
+        {
+            if (candidate.state != CandidateState::Safe || candidate.usageState != UsageState::Disconnected)
+                continue;
             const int index = candidate.nodeIndex;
-            if (index < 0 || index >= m_result.nodes.size()) {
+            if (index < 0 || index >= m_result.nodes.size())
+            {
                 continue;
             }
             const DataNode &node = m_result.nodes[index];
-            const QString status = candidate.state == CandidateState::Safe ? QStringLiteral("Safe candidate")
-                : candidate.state == CandidateState::Risky ? QStringLiteral("Risky candidate") : QStringLiteral("Blocked");
-            const QString reason = QStringLiteral("%1 | gameplay incoming: %2 | collection links: %3 | script: %4 | whitelist: %5 | risk: %6")
-                                       .arg(candidate.reason).arg(candidate.incomingXmlReferences).arg(candidate.dataCollectionReferences).arg(candidate.scriptReferences)
-                                       .arg(candidate.whitelisted ? QStringLiteral("yes") : QStringLiteral("no"), candidate.riskLevel);
+            const QString status = usageStateName(candidate.usageState);
+            const QString reason = QStringLiteral("%1 | path: %2 | incoming XML: %3 | outgoing XML: %4 | external: %5 | collections: %6 | whitelist/protected: %7/%8 | risk: %9")
+                                       .arg(candidate.reason)
+                                       .arg(candidate.usagePath.join(QStringLiteral(" -> ")))
+                                       .arg(candidate.incomingXmlSources.join(QStringLiteral(", ")))
+                                       .arg(candidate.outgoingXmlTargets.join(QStringLiteral(", ")))
+                                       .arg(candidate.externalReferenceSources.join(QStringLiteral(", ")))
+                                       .arg(candidate.dataCollectionMemberships.join(QStringLiteral(", ")))
+                                       .arg(candidate.whitelisted ? QStringLiteral("yes") : QStringLiteral("no"))
+                                       .arg(candidate.protectedObject ? QStringLiteral("yes") : QStringLiteral("no"))
+                                       .arg(candidate.riskLevel);
             QList<QStandardItem *> row = buildRow(status,
                                                   node.id,
                                                   node.elementName,
@@ -145,8 +187,9 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
                                                   node.lineNumber > 0 ? QString::number(node.lineNumber) : QStringLiteral("N/A"),
                                                   reason);
             row.first()->setData(index, Qt::UserRole + 1);
-            if (candidate.state == CandidateState::Safe) row.first()->setCheckable(true);
-            for (QStandardItem *item : row) {
+            row.first()->setCheckable(true);
+            for (QStandardItem *item : row)
+            {
                 item->setBackground(QColor(QStringLiteral("#4a241f")));
                 item->setForeground(QColor(QStringLiteral("#ffe9dc")));
             }
@@ -162,7 +205,8 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
 QVector<int> UnusedPage::selectedSafeRows() const
 {
     QVector<int> rows;
-    for (int row = 0; row < m_model->rowCount(); ++row) {
+    for (int row = 0; row < m_model->rowCount(); ++row)
+    {
         QStandardItem *item = m_model->item(row, 0);
         if (item && item->isCheckable() && item->checkState() == Qt::Checked)
             rows << item->data(Qt::UserRole + 1).toInt();
@@ -174,9 +218,11 @@ void UnusedPage::selectRows(const QVector<int> &rows)
 {
     const QSignalBlocker blocker(m_model);
     const QSet<int> selected(rows.cbegin(), rows.cend());
-    for (int row = 0; row < m_model->rowCount(); ++row) {
+    for (int row = 0; row < m_model->rowCount(); ++row)
+    {
         QStandardItem *item = m_model->item(row, 0);
-        if (item && item->isCheckable()) item->setCheckState(selected.contains(item->data(Qt::UserRole + 1).toInt()) ? Qt::Checked : Qt::Unchecked);
+        if (item && item->isCheckable())
+            item->setCheckState(selected.contains(item->data(Qt::UserRole + 1).toInt()) ? Qt::Checked : Qt::Unchecked);
     }
     updateActionState();
 }
@@ -190,8 +236,8 @@ void UnusedPage::updateActionState()
     m_previewButton->setEnabled(available);
     m_applyButton->setEnabled(available);
     const QString hint = available
-        ? QStringLiteral("%1 safe object(s) selected").arg(count)
-        : QStringLiteral("Select at least one Safe candidate first");
+                             ? QStringLiteral("%1 safe object(s) selected").arg(count)
+                             : QStringLiteral("Select at least one Safe candidate first");
     m_previewButton->setToolTip(hint);
     m_applyButton->setToolTip(hint);
 }

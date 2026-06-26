@@ -220,8 +220,12 @@ void DataCollectionPage::setAnalysisResult(const AnalysisResult &result)
             .compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
         ? DataCollectionMode::UnitAbilWeapon : DataCollectionMode::Unit;
     m_result = result; m_families = UnitFamilyDetector().detectCollectionFamilies(result, mode);
+    m_auditSummary = auditDataCollections(result).reportText;
     const QSignalBlocker blocker(m_selector); m_selector->clear();
-    for (const UnitFamily &family : m_families) m_selector->addItem(QStringLiteral("%1 (%2 objects)").arg(family.rootId).arg(family.objects.size()));
+    for (const UnitFamily &family : m_families)
+        m_selector->addItem(QStringLiteral("%1 [%2] (%3 objects)")
+                                .arg(family.rootId, dataCollectionEntityTypeName(family.entityType))
+                                .arg(family.objects.size()));
     {
         const QSignalBlocker treeBlock(m_familyTree);
         m_familyTree->clear();
@@ -230,7 +234,9 @@ void DataCollectionPage::setAnalysisResult(const AnalysisResult &result)
             auto *root = new QTreeWidgetItem(m_familyTree);
             root->setText(0, family.rootId);
             root->setText(1, family.collectionElementName);
-            root->setText(2, QStringLiteral("Main collection"));
+            root->setText(2, QStringLiteral("%1 root%2")
+                                 .arg(dataCollectionEntityTypeName(family.entityType),
+                                      family.rootTypeConflict ? QStringLiteral(" — Root Type Conflict") : QString()));
             root->setText(4, QStringLiteral("%1 child objects").arg(family.objects.size()));
             root->setData(0, Qt::UserRole, familyIndex);
             QFont font = root->font(0); font.setBold(true); root->setFont(0, font);
@@ -252,7 +258,7 @@ void DataCollectionPage::setAnalysisResult(const AnalysisResult &result)
         for (int column = 0; column < m_familyTree->columnCount(); ++column) m_familyTree->resizeColumnToContents(column);
     }
     if (!m_families.isEmpty()) m_selector->setCurrentIndex(0);
-    m_summary->setText(QStringLiteral("%1 standardized-family candidates detected.").arg(m_families.size()));
+    m_summary->setText(QStringLiteral("%1 entity-root candidates. %2").arg(m_families.size()).arg(m_auditSummary));
     m_apply->setEnabled(false); m_xml->clear(); m_warnings->clear(); rebuildFamily();
 }
 
@@ -277,11 +283,18 @@ void DataCollectionPage::rebuildFamily()
                                    view.listfileNeedsUpdate ? QStringLiteral("will add entry") : QStringLiteral("entry found")));
     {
         const QSignalBlocker parentBlock(m_parent), categoryBlock(m_categories);
-        m_parent->clear();
-        m_categories->clear();
+        m_parent->setText(request.family.recommendedParent);
+        m_categories->setText(request.family.entityType == DataCollectionEntityType::Unit
+                                  ? QStringLiteral("DataGroup:Unit,ObjectType:Unit")
+                              : request.family.entityType == DataCollectionEntityType::Ability
+                                  ? QStringLiteral("DataGroup:Ability,ObjectType:Other")
+                                  : QStringLiteral("DataGroup:Weapon,ObjectType:Other"));
     }
     if (view.existingCollection) {
-        for (const DataNode &node : m_result.nodes) if (node.elementName == QStringLiteral("CDataCollectionUnit") && node.id == request.family.rootId) {
+        for (const DataNode &node : m_result.nodes)
+            if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)
+                && !node.elementName.startsWith(QStringLiteral("CDataCollectionPattern"), Qt::CaseInsensitive)
+                && node.id == request.family.rootId) {
             pugi::xml_document fragment;
             if (fragment.load_string(node.serializedXml.toUtf8().constData())) {
                 const pugi::xml_node collection = fragment.first_child();
@@ -341,8 +354,9 @@ void DataCollectionPage::populateTables(const DataCollectionPreviewReport &repor
     m_entryTabs->setTabText(2, QStringLiteral("Already Exists (%1)").arg(m_existingTable->rowCount()));
     m_entryTabs->setTabText(3, QStringLiteral("Recommendations / Review (%1)").arg(m_reviewTable->rowCount()));
     for (QTableWidget *table : {m_addableTable, m_existingTable, m_reviewTable}) table->resizeColumnsToContents();
-    m_summary->setText(QStringLiteral("%1 can add | %2 already exist | %3 recommendations/review")
-                           .arg(m_addableTable->rowCount()).arg(m_existingTable->rowCount()).arg(m_reviewTable->rowCount()));
+    m_summary->setText(QStringLiteral("%1 can add | %2 already exist | %3 recommendations/review\n%4")
+                           .arg(m_addableTable->rowCount()).arg(m_existingTable->rowCount()).arg(m_reviewTable->rowCount())
+                           .arg(m_auditSummary));
 }
 
 DataCollectionBuildRequest DataCollectionPage::currentRequest() const
@@ -361,9 +375,11 @@ DataCollectionBuildRequest DataCollectionPage::currentRequest() const
         const int nodeIndex = child->data(0, Qt::UserRole).toInt();
         if (detected.contains(nodeIndex)) selectedObjects << detected.value(nodeIndex);
     }
-    if (!detected.contains(request.family.rootNodeIndex)
-        || std::none_of(selectedObjects.cbegin(), selectedObjects.cend(), [&](const UnitFamilyObject &object) { return object.nodeIndex == request.family.rootNodeIndex; }))
-        selectedObjects << UnitFamilyObject{request.family.rootNodeIndex, UnitFamilyRole::Unit, QStringLiteral("High"), QStringLiteral("Root CUnit")};
+    if (std::none_of(selectedObjects.cbegin(), selectedObjects.cend(), [&](const UnitFamilyObject &object) { return object.nodeIndex == request.family.rootNodeIndex; })) {
+        if (detected.contains(request.family.rootNodeIndex)) selectedObjects << detected.value(request.family.rootNodeIndex);
+        else selectedObjects << UnitFamilyObject{request.family.rootNodeIndex, UnitFamilyRole::ManualReview,
+                                                  QStringLiteral("High"), QStringLiteral("Collection root")};
+    }
     request.family.objects = selectedObjects;
     request.confirmNonStandard = m_confirmNonStandard->isChecked();
     for (QTableWidget *table : {m_addableTable, m_reviewTable})
@@ -382,6 +398,9 @@ void DataCollectionPage::setPreviewReport(const DataCollectionPreviewReport &rep
     populateTables(report);
     m_standard->setText(QStringLiteral("Standard status: %1").arg(report.familyStandardized ? QStringLiteral("standard") : QStringLiteral("non-standard")));
     m_existing->setText(QStringLiteral("Existing collection: %1").arg(report.existingCollection ? QStringLiteral("found") : QStringLiteral("not found")));
+    m_root->setText(QStringLiteral("Root ID: %1 [%2] | Pattern: %3")
+                        .arg(report.request.family.rootId, dataCollectionEntityTypeName(report.entityType),
+                             dataCollectionPatternStateName(report.patternState)));
     m_fileStatus->setText(QStringLiteral("Target XML: %1 | Archive entry: %2 | (listfile): %3")
                               .arg(QFileInfo(report.targetFile).fileName(), report.archiveEntry,
                                    report.listfileNeedsUpdate ? QStringLiteral("will add entry") : QStringLiteral("entry found")));

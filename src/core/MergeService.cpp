@@ -18,7 +18,7 @@ namespace {
 
 QRegularExpression idExpression(const QString &id)
 {
-    return QRegularExpression(QStringLiteral("(?<![A-Za-z0-9_])%1(?![A-Za-z0-9_])")
+    return QRegularExpression(QStringLiteral("(?<![A-Za-z0-9_@])%1(?![A-Za-z0-9_@])")
                                   .arg(QRegularExpression::escape(id)));
 }
 

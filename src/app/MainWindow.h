@@ -63,11 +63,15 @@ private slots:
     void showDataCollectionTab();
     void showDuplicatesTab();
     void showCleanupTab();
-    void showDryRunTab();
+    void showDryRunTab(bool autoBuild = false);
     void applyOptimizationWizardPlan();
     void showLogsTab();
     void undoFocusedEditor();
     void redoFocusedEditor();
+    void toggleFullscreen();
+
+protected:
+    void changeEvent(QEvent *event) override;
 
 private:
     void setupUi();
@@ -91,6 +95,7 @@ private:
     int findNodeIndex(const AnalysisResult &analysis, const WizardNodeRef &ref) const;
     void showGraphForRow(int row);
     void setDuplicateMergeEnabled(bool enabled);
+    void updateFullscreenActionText();
 
     QString m_rootFolder;
     QString m_currentSourcePath;
@@ -136,6 +141,7 @@ private:
     QAction *m_openFileAction = nullptr;
     QAction *m_analyzeAction = nullptr;
     QAction *m_settingsAction = nullptr;
+    QAction *m_fullscreenAction = nullptr;
     QAction *m_dryRunAction = nullptr;
     QAction *m_applyAction = nullptr;
     QAction *m_exitAction = nullptr;

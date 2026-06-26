@@ -65,7 +65,7 @@ public:
     explicit FormatterPage(QWidget *parent = nullptr);
     void setAnalysisResult(const AnalysisResult &result);
     void setPreview(const QString &text);
-    void startWizard();
+    void startWizard(bool autoBuild = false);
     void recordUnusedResult(int removed);
     void recordMergeResult(int removed, int redirected);
     void recordRenameResult(int renamed);

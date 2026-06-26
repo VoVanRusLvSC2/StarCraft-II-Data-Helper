@@ -17,6 +17,7 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
     for (const DataNode &node : analysis.nodes) existingIds.insert(node.id);
     QHash<UnitFamilyRole, int> roleCounts;
     for (const UnitFamilyObject &object : family.objects) ++roleCounts[object.role];
+    QHash<UnitFamilyRole, int> roleOrdinals;
     QHash<QString, int> proposedCounts;
 
     for (const UnitFamilyObject &object : family.objects) {
@@ -27,18 +28,20 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
             continue;
         }
         const QString role = unitFamilyRoleName(object.role);
-        QString expected = object.role == UnitFamilyRole::Unit ? result.targetRootId : result.targetRootId + role;
-        const bool ambiguousGeneric = roleCounts.value(object.role) > 1
-            && (object.role == UnitFamilyRole::Weapon || object.role == UnitFamilyRole::Ability
-                || object.role == UnitFamilyRole::Effect || object.role == UnitFamilyRole::Behavior
-                || object.role == UnitFamilyRole::Validator || object.role == UnitFamilyRole::Requirement
-                || object.role == UnitFamilyRole::Upgrade);
-        if (ambiguousGeneric) {
-            UnitFamilyObject manual = object;
-            manual.role = UnitFamilyRole::ManualReview;
-            manual.reason += QStringLiteral("; multiple objects share this generic role");
-            result.manualReview << manual;
-            continue;
+        QString expected;
+        if (object.nodeIndex == family.rootNodeIndex) {
+            expected = result.targetRootId;
+        } else {
+            const int ordinal = ++roleOrdinals[object.role];
+            QString suffix;
+            if (node.id.startsWith(family.rootId, Qt::CaseInsensitive)) {
+                suffix = node.id.mid(family.rootId.size());
+                while (!suffix.isEmpty() && QStringLiteral("@_-").contains(suffix.front())) suffix.remove(0, 1);
+                suffix.remove(QRegularExpression(QStringLiteral("[^A-Za-z0-9_]")));
+            }
+            if (suffix.isEmpty() || suffix.compare(family.rootId, Qt::CaseInsensitive) == 0)
+                suffix = role + (roleCounts.value(object.role) > 1 && ordinal > 1 ? QString::number(ordinal) : QString());
+            expected = result.targetRootId + QLatin1Char('@') + suffix;
         }
         if (node.id == expected) continue;
         RenamePlanItem item;
@@ -49,9 +52,6 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         item.confidence = object.confidence;
         item.reason = object.reason;
         item.riskLevel = object.confidence == QStringLiteral("High") ? QStringLiteral("Low") : QStringLiteral("Medium");
-        if (item.newId.contains(QLatin1Char('@'))) {
-            item.blocked = true; item.conflict = QStringLiteral("Real XML IDs cannot contain @");
-        }
         result.items << item;
         ++proposedCounts[expected];
     }
@@ -66,7 +66,7 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         }
         if (item.blocked) result.conflicts << QStringLiteral("%1 -> %2: %3").arg(item.oldId, item.newId, item.conflict);
     }
-    if (!result.manualReview.isEmpty()) result.warnings << QStringLiteral("Ambiguous extra objects require manual review and are excluded.");
+    if (!result.manualReview.isEmpty()) result.warnings << QStringLiteral("Unsupported ambiguous objects require manual review and are excluded from renaming.");
     result.valid = result.conflicts.isEmpty() && !result.items.isEmpty();
     return result;
 }

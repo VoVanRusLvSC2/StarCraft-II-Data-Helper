@@ -12,6 +12,7 @@ public:
 
     void initialize();
     void applySettings();
+    void shutdown();
 
     static bool isMusicEnabled();
     static double musicVolume();
@@ -25,4 +26,5 @@ private:
 
     QString m_runtimeTrackPath;
     bool m_initialized = false;
+    bool m_musicOpen = false;
 };

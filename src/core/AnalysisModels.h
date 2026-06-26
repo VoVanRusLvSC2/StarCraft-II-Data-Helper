@@ -39,6 +39,7 @@ struct DuplicateContentGroup
 };
 
 enum class CandidateState { Safe, Risky, Blocked };
+enum class UsageState { Used, Disconnected, UnusedSubgraph, Risky, Blocked };
 
 struct UnusedCandidateInfo
 {
@@ -49,8 +50,14 @@ struct UnusedCandidateInfo
     bool whitelisted = false;
     bool protectedObject = false;
     CandidateState state = CandidateState::Blocked;
+    UsageState usageState = UsageState::Blocked;
     QString reason;
     QString riskLevel;
+    QStringList incomingXmlSources;
+    QStringList outgoingXmlTargets;
+    QStringList dataCollectionMemberships;
+    QStringList externalReferenceSources;
+    QStringList usagePath;
 };
 
 struct AnalysisResult

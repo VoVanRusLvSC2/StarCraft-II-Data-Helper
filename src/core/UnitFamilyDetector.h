@@ -9,10 +9,15 @@ enum class UnitFamilyRole {
     Unit, Actor, Button, Model, DeathModel, DeathFireModel, DeathDisintegrateModel,
     DeathBlastModel, PortraitModel, DeathVoice, Death, Attack, Help, Pissed, Yes,
     What, Ready, Weapon, Ability, Effect, Behavior, Validator, Requirement, Upgrade,
+    Sound, Mover, Turret, Footprint, SiteOp, Beam, Texture, RequirementNode,
     Other, ManualReview
 };
 
 enum class DataCollectionMode { Unit, UnitAbilWeapon };
+
+enum class DataCollectionEntityType { Unit, Ability, Weapon };
+
+QString dataCollectionEntityTypeName(DataCollectionEntityType type);
 
 struct UnitFamilyObject
 {
@@ -28,6 +33,8 @@ struct UnitFamily
     QString rootId;
     QString collectionElementName = QStringLiteral("CDataCollectionUnit");
     QString recommendedParent;
+    DataCollectionEntityType entityType = DataCollectionEntityType::Unit;
+    bool rootTypeConflict = false;
     bool strictOwnership = false;
     QVector<UnitFamilyObject> objects;
 };

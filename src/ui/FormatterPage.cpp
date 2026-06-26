@@ -7,28 +7,79 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QSettings>
 #include <QSplitter>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QSyntaxHighlighter>
 #include <QTextCharFormat>
+#include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QVBoxLayout>
 
 #include <algorithm>
 namespace {
+class Sc2CheckDelegate final : public QStyledItemDelegate
+{
+public:
+    explicit Sc2CheckDelegate(QObject *parent = nullptr)
+        : QStyledItemDelegate(parent)
+    {
+    }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        const bool checkable = index.flags().testFlag(Qt::ItemIsUserCheckable);
+        if (!checkable) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        QStyleOptionViewItem itemOption(option);
+        initStyleOption(&itemOption, index);
+        const QVariant checkState = index.data(Qt::CheckStateRole);
+        itemOption.features &= ~QStyleOptionViewItem::HasCheckIndicator;
+        QStyledItemDelegate::paint(painter, itemOption, index);
+
+        const bool checked = checkState.toInt() == Qt::Checked;
+        QPixmap frame(QStringLiteral(":/textures/ui_glue_checkbox_normalpressed_terran.png"));
+        if (option.state.testFlag(QStyle::State_MouseOver))
+            frame = QPixmap(QStringLiteral(":/textures/ui_glue_checkbox_normaloverpressedover_terran.png"));
+        const int frameHeight = frame.height() / 2;
+        const QRect source(0, checked ? frameHeight : 0, frame.width(), frameHeight);
+        const int size = qMin(22, qMax(16, option.rect.height() - 8));
+        QRect target(option.rect.left() + 10,
+                     option.rect.top() + (option.rect.height() - size) / 2,
+                     size,
+                     size);
+
+        painter->save();
+        painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter->drawPixmap(target, frame, source);
+        if (checked) {
+            const QPixmap mark(QStringLiteral(":/textures/ui_glue_checkboxmark_terran.png"));
+            QRect markTarget = target.adjusted(4, 4, -4, -4);
+            painter->drawPixmap(markTarget, mark);
+        }
+        painter->restore();
+    }
+};
+
 QTableWidget *makeTable(const QStringList &headers) {
     auto *value = new QTableWidget; value->setColumnCount(headers.size()); value->setHorizontalHeaderLabels(headers);
     value->setSelectionBehavior(QAbstractItemView::SelectRows); value->horizontalHeader()->setStretchLastSection(true);
     value->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn); value->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     value->setVerticalScrollMode(QAbstractItemView::ScrollPerItem); value->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    value->setMouseTracking(true);
+    value->setItemDelegate(new Sc2CheckDelegate(value));
     value->setTextElideMode(Qt::ElideNone); value->verticalHeader()->hide(); return value;
 }
 void addRow(QTableWidget *target, const OptimizationPlanRow &row) {
@@ -93,10 +144,17 @@ DataCollectionMode configuredDataCollectionMode() {
 OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateMergeEnabled, DataCollectionMode collectionMode) {
     OptimizationPlanData plan;
     for (const UnusedCandidateInfo &candidate : result.unusedCandidates) {
+        if (candidate.state != CandidateState::Safe || candidate.usageState != UsageState::Disconnected)
+            continue;
         const DataNode &node = result.nodes[candidate.nodeIndex];
-        const bool safe = candidate.state == CandidateState::Safe;
-        plan.unused.append({{safe ? QString() : QStringLiteral("Blocked"), node.id, node.elementName,
-                             candidate.reason, candidate.riskLevel}, safe, safe, candidate.nodeIndex, -1});
+        const QString status = candidate.usageState == UsageState::Used ? QStringLiteral("Used")
+            : candidate.usageState == UsageState::Disconnected ? QStringLiteral("Disconnected")
+            : candidate.usageState == UsageState::UnusedSubgraph ? QStringLiteral("Unused subgraph")
+            : candidate.usageState == UsageState::Risky ? QStringLiteral("Risky") : QStringLiteral("Blocked");
+        const QString detail = candidate.reason + (candidate.usagePath.isEmpty() ? QString()
+            : QStringLiteral(" | path: %1").arg(candidate.usagePath.join(QStringLiteral(" -> "))));
+        plan.unused.append({{status, node.id, node.elementName, detail, candidate.riskLevel},
+                            true, true, candidate.nodeIndex, -1});
     }
     if (duplicateMergeEnabled) for (const DuplicateContentGroup &group : result.duplicateContentGroups) if (group.nodeIndices.size() > 1) {
         const int keep = group.nodeIndices.front();
@@ -110,16 +168,32 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
                                     group.mergeCandidate, group.mergeCandidate, keep, remove});
         }
     }
+    const QVector<UnitFamily> renameFamilies = UnitFamilyDetector().detect(result);
+    for (const UnitFamily &family : renameFamilies) {
+        if (family.rootId.isEmpty())
+            continue;
+        const RenamePlan renamePlan = StandardNamePlanner().plan(result, family, family.rootId);
+        for (const RenamePlanItem &item : renamePlan.items) {
+            const bool usable = !item.blocked;
+            plan.rename.append({{usable ? QString() : QStringLiteral("Blocked"),
+                                 family.rootId,
+                                 item.oldId,
+                                 item.newId,
+                                 item.blocked ? item.conflict : item.reason},
+                                usable, usable, family.rootNodeIndex, item.nodeIndex});
+        }
+    }
     const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(result, collectionMode);
     for (int familyIndex = 0; familyIndex < collectionFamilies.size(); ++familyIndex) {
         const UnitFamily &family = collectionFamilies[familyIndex];
         DataCollectionBuildRequest request;
         request.family = family;
-        const DataCollectionPreviewReport collection = DataCollectionUnitBuilder().preview(result, request);
-        plan.collection.append({{QString(), family.rootId,
+        request.summaryOnly = true;
+        const DataCollectionPreviewReport collection = DataCollectionUnitBuilder().preview(result, request, &collectionFamilies);
+        plan.collection.append({{QString(), QStringLiteral("%1 [%2]").arg(family.rootId, dataCollectionEntityTypeName(family.entityType)),
                                  QString::number(collection.existingRecordsPreserved.size()),
                                  QString::number(collection.recordsToAdd.size()),
-                                 QString::number(collection.recordsToRemove.size()),
+                                 QStringLiteral("%1 remove / %2 move").arg(collection.recordsToRemove.size()).arg(collection.recordsToMove.size()),
                                  collection.warnings.join(QStringLiteral("; "))},
                                 collection.valid, collection.valid, familyIndex, -1});
     }
@@ -210,7 +284,7 @@ void FormatterPage::setAnalysisResult(const AnalysisResult &result) {
     m_details->clear();
     updateNavigation();
 }
-void FormatterPage::startWizard() {
+void FormatterPage::startWizard(bool autoBuild) {
     m_planBuilt = false;
     m_planConfirmed = false;
     m_applying = false;
@@ -228,6 +302,8 @@ void FormatterPage::startWizard() {
     m_details->setPlainText(QStringLiteral("1. Press Build Optimization Preview.\n2. Review every item and compare XML here.\n3. Keep recommendations checked or clear individual items.\n4. Apply on step 4 and close when finished."));
     m_steps->setCurrentIndex(0);
     updateNavigation();
+    if (autoBuild)
+        QTimer::singleShot(0, this, &FormatterPage::buildPreview);
 }
 void FormatterPage::buildPreview() {
     if (m_building) return;
@@ -380,7 +456,7 @@ QString FormatterPage::buildIdChangePreview() const
     for (int row = 0; row < m_collection->rowCount(); ++row) {
         const QTableWidgetItem *use = m_collection->item(row, 0);
         if (use && use->checkState() == Qt::Checked)
-            lines << QStringLiteral("%1 -> CDataCollectionUnit + %2 record(s), reorganize %3")
+            lines << QStringLiteral("%1 -> typed Data Collection + %2 record(s), reorganize %3")
                          .arg(m_collection->item(row, 1)->text(), m_collection->item(row, 3)->text(), m_collection->item(row, 4)->text());
     }
     return lines.join(QLatin1Char('\n'));

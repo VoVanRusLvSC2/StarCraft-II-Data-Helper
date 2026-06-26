@@ -37,6 +37,7 @@ private:
     AnalysisResult m_result;
     QVector<UnitFamily> m_families;
     DataCollectionPreviewReport m_previewReport;
+    QString m_auditSummary;
     QLabel *m_summary = nullptr;
     QLabel *m_root = nullptr;
     QLabel *m_standard = nullptr;
