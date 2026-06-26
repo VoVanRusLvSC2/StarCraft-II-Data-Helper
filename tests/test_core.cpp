@@ -454,6 +454,29 @@ void CoreTests::dataCollectionTypedSplitPreservesSharedMemberships()
     QVERIFY2(preview.valid, qPrintable(preview.warnings.join(QStringLiteral("; "))));
     QVERIFY(!preview.sharedObjects.isEmpty());
     QCOMPARE(preview.generatedXml.count(QStringLiteral("Entry=\"Effect,SharedEffect\"")), 0); // no silent duplicate
+
+    for (const QString &root : {QStringLiteral("SharedUnit"), QStringLiteral("AbilityOne"), QStringLiteral("AbilityTwo")}) {
+        const QVector<UnitFamily> refreshedFamilies = UnitFamilyDetector().detectCollectionFamilies(
+            analysis, DataCollectionMode::UnitAbilWeapon);
+        const auto family = std::find_if(refreshedFamilies.cbegin(), refreshedFamilies.cend(), [&](const UnitFamily &value) {
+            return value.rootId == root;
+        });
+        QVERIFY(family != refreshedFamilies.cend());
+        DataCollectionBuildRequest applyRequest;
+        applyRequest.family = *family;
+        applyRequest.requestedUnitId = root;
+        applyRequest.confirmNonStandard = true;
+        for (const UnitFamilyObject &object : family->objects)
+            applyRequest.includedNodeIndices.insert(object.nodeIndex);
+        const DataCollectionApplyResult applied = DataCollectionUnitBuilder().apply(
+            analysis, applyRequest, dir.path(), {}, true, &refreshedFamilies);
+        QVERIFY2(applied.success, qPrintable(applied.error));
+        QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    }
+    QFile updated(path);
+    QVERIFY(updated.open(QIODevice::ReadOnly));
+    const QByteArray updatedXml = updated.readAll();
+    QCOMPARE(updatedXml.count("Entry=\"Effect,SharedEffect\""), 1);
 }
 
 void CoreTests::dataCollectionMigrationRollbackRestoresAllCollections()

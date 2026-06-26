@@ -191,6 +191,44 @@ QString defaultCategoriesFor(const DataNode &root)
     return QStringLiteral("DataGroup:Unit,ObjectType:Unit");
 }
 
+bool idIsScopedToRoot(const QString &id, const QString &root)
+{
+    return id.compare(root, Qt::CaseInsensitive) == 0
+        || id.startsWith(root + QLatin1Char('@'), Qt::CaseInsensitive)
+        || id.startsWith(root + QLatin1Char('_'), Qt::CaseInsensitive);
+}
+
+int entityPriority(DataCollectionEntityType type)
+{
+    switch (type) {
+    case DataCollectionEntityType::Unit: return 0;
+    case DataCollectionEntityType::Ability: return 1;
+    case DataCollectionEntityType::Weapon: return 2;
+    }
+    return 3;
+}
+
+int ownershipPathDepth(const QString &reason)
+{
+    if (reason.isEmpty())
+        return 100000;
+    return reason.count(QStringLiteral(" -> "));
+}
+
+bool isSharedManualObject(const UnitFamilyObject &object)
+{
+    return object.role == UnitFamilyRole::ManualReview
+        && object.confidence.compare(QStringLiteral("Shared"), Qt::CaseInsensitive) == 0;
+}
+
+struct AliasOwnerCandidate
+{
+    QString rootId;
+    DataCollectionEntityType entityType = DataCollectionEntityType::Unit;
+    bool scoped = false;
+    int pathDepth = 100000;
+};
+
 bool patternMatchesEntity(const QString &pattern, DataCollectionEntityType entity)
 {
     const QString expected = entity == DataCollectionEntityType::Unit ? QStringLiteral("UnitPattern")
@@ -789,26 +827,56 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     result.listfileNeedsUpdate = !listfileContains(result.listfilePath, result.archiveEntry);
 
     DataCollectionAliasMapper mapper;
-    QSet<QString> desiredAliases;
-    for (const UnitFamilyObject &object : request.family.objects) {
-        if (object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size()
-            || object.role == UnitFamilyRole::ManualReview) continue;
-        const QString alias = mapper.aliasFor(analysis.nodes[object.nodeIndex], root, object.role);
-        if (!alias.isEmpty()) desiredAliases.insert(alias.toLower());
-    }
     QHash<QString, QSet<QString>> ownersByAlias;
+    QHash<QString, QString> canonicalOwnerByAlias;
     if (request.family.strictOwnership) {
         const QVector<UnitFamily> detectedFamilies = knownFamilies ? QVector<UnitFamily>()
             : UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::UnitAbilWeapon);
         const QVector<UnitFamily> &typedFamilies = knownFamilies ? *knownFamilies : detectedFamilies;
+        QHash<QString, QVector<AliasOwnerCandidate>> ownerCandidatesByAlias;
         for (const UnitFamily &family : typedFamilies) {
             for (const UnitFamilyObject &object : family.objects) {
                 if (object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size()
-                    || object.role == UnitFamilyRole::ManualReview) continue;
+                    || (object.role == UnitFamilyRole::ManualReview && !isSharedManualObject(object))) continue;
                 const QString alias = mapper.aliasFor(analysis.nodes[object.nodeIndex], family.rootId, object.role);
-                if (!alias.isEmpty()) ownersByAlias[alias.toLower()].insert(family.rootId);
+                if (alias.isEmpty()) continue;
+                const QString aliasKey = alias.toLower();
+                ownersByAlias[aliasKey].insert(family.rootId);
+                ownerCandidatesByAlias[aliasKey].append({
+                    family.rootId,
+                    family.entityType,
+                    idIsScopedToRoot(analysis.nodes[object.nodeIndex].id, family.rootId),
+                    ownershipPathDepth(object.reason),
+                });
             }
         }
+        for (auto it = ownerCandidatesByAlias.cbegin(); it != ownerCandidatesByAlias.cend(); ++it) {
+            QVector<AliasOwnerCandidate> candidates = it.value();
+            std::sort(candidates.begin(), candidates.end(), [](const AliasOwnerCandidate &left, const AliasOwnerCandidate &right) {
+                if (left.scoped != right.scoped) return left.scoped && !right.scoped;
+                if (left.pathDepth != right.pathDepth) return left.pathDepth < right.pathDepth;
+                const int leftPriority = entityPriority(left.entityType), rightPriority = entityPriority(right.entityType);
+                if (leftPriority != rightPriority) return leftPriority < rightPriority;
+                return left.rootId.compare(right.rootId, Qt::CaseInsensitive) < 0;
+            });
+            if (!candidates.isEmpty())
+                canonicalOwnerByAlias.insert(it.key(), candidates.front().rootId);
+        }
+    }
+    QSet<QString> desiredAliases;
+    for (const UnitFamilyObject &object : request.family.objects) {
+        if (object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size())
+            continue;
+        const QString alias = mapper.aliasFor(analysis.nodes[object.nodeIndex], root, object.role);
+        if (alias.isEmpty())
+            continue;
+        const QString aliasKey = alias.toLower();
+        if (isSharedManualObject(object)
+            && canonicalOwnerByAlias.value(aliasKey).compare(root, Qt::CaseInsensitive) != 0)
+            continue;
+        if (object.role == UnitFamilyRole::ManualReview && !isSharedManualObject(object))
+            continue;
+        desiredAliases.insert(aliasKey);
     }
     QSet<QString> knownAliases;
     QStringList existing;
@@ -818,11 +886,19 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
         if (fragment.load_string(existingCollectionNode->serializedXml.toUtf8().constData())) {
             const QStringList allExisting = existingEntries(fragment.first_child(), &result.duplicateRecordsSkipped);
             for (const QString &entry : allExisting) {
-                const QSet<QString> owners = ownersByAlias.value(entry.toLower());
+                const QString entryKey = entry.toLower();
+                const QSet<QString> owners = ownersByAlias.value(entryKey);
                 if (owners.size() > 1) {
-                    result.sharedObjects << QStringLiteral("%1 <- %2").arg(entry, QStringList(owners.cbegin(), owners.cend()).join(QStringLiteral(", ")));
+                    const QString canonicalOwner = canonicalOwnerByAlias.value(entryKey);
+                    result.sharedObjects << QStringLiteral("%1 <- %2 | owner: %3")
+                                                .arg(entry,
+                                                     QStringList(owners.cbegin(), owners.cend()).join(QStringLiteral(", ")),
+                                                     canonicalOwner.isEmpty() ? QStringLiteral("manual") : canonicalOwner);
                     result.manualReviewObjects << entry;
-                    existing << entry;
+                    if (canonicalOwner.compare(root, Qt::CaseInsensitive) == 0)
+                        existing << entry;
+                    else
+                        result.recordsToRemove << entry;
                     continue;
                 }
                 const QString owner = owners.isEmpty() ? QString() : *owners.cbegin();
@@ -867,9 +943,18 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
             standardized = false;
         } else if (object.role == UnitFamilyRole::ManualReview) {
             result.manualReviewObjects << node.id;
-            if (object.confidence == QStringLiteral("Shared"))
-                result.sharedObjects << QStringLiteral("%1 (%2)").arg(proposal.alias, object.reason);
-            if (proposal.included && request.confirmNonStandard) {
+            const QString aliasKey = proposal.alias.toLower();
+            const bool shared = isSharedManualObject(object);
+            const QString canonicalOwner = canonicalOwnerByAlias.value(aliasKey);
+            if (shared)
+                result.sharedObjects << QStringLiteral("%1 (%2) | owner: %3")
+                                            .arg(proposal.alias, object.reason,
+                                                 canonicalOwner.isEmpty() ? QStringLiteral("manual") : canonicalOwner);
+            if (shared && canonicalOwner.compare(root, Qt::CaseInsensitive) != 0) {
+                proposal.status = canonicalOwner.isEmpty()
+                    ? QStringLiteral("Shared: manual owner required")
+                    : QStringLiteral("Shared: kept in %1").arg(canonicalOwner);
+            } else if (proposal.included && request.confirmNonStandard) {
                 if (knownAliases.contains(proposal.alias)) proposal.status = QStringLiteral("Already exists (manually confirmed)");
                 else { proposal.status = QStringLiteral("Will add (manually confirmed)"); result.recordsToAdd << proposal.alias; ++linkedObjectCount; }
             } else proposal.status = QStringLiteral("Manual Review");
