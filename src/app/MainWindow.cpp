@@ -689,15 +689,20 @@ void MainWindow::showSettingsDialog()
     layout->addWidget(title);
 
     QSettings settings;
-    auto *soundCheck = new QCheckBox(QStringLiteral("Button sounds"), &dialog);
-    soundCheck->setChecked(settings.value(QStringLiteral("ui/buttonSounds"), true).toBool());
-    soundCheck->setFocusPolicy(Qt::NoFocus);
-    auto *animationCheck = new QCheckBox(QStringLiteral("Button animations"), &dialog);
-    animationCheck->setChecked(settings.value(QStringLiteral("ui/buttonAnimations"), true).toBool());
-    animationCheck->setFocusPolicy(Qt::NoFocus);
-    auto *musicCheck = new QCheckBox(QStringLiteral("Background music"), &dialog);
-    musicCheck->setChecked(AudioManager::isMusicEnabled());
-    musicCheck->setFocusPolicy(Qt::NoFocus);
+    const auto checkBoxRow = [&dialog](const QString &text, bool checked, const QString &toolTip = QString()) {
+        auto *row = new QCheckBox(text, &dialog);
+        row->setProperty("textureType", QStringLiteral("checkBoxRow"));
+        row->setChecked(checked);
+        row->setFocusPolicy(Qt::NoFocus);
+        if (!toolTip.isEmpty())
+            row->setToolTip(toolTip);
+        return row;
+    };
+    auto *soundCheck = checkBoxRow(QStringLiteral("Button sounds"),
+                                   settings.value(QStringLiteral("ui/buttonSounds"), true).toBool());
+    auto *animationCheck = checkBoxRow(QStringLiteral("Button animations"),
+                                       settings.value(QStringLiteral("ui/buttonAnimations"), true).toBool());
+    auto *musicCheck = checkBoxRow(QStringLiteral("Background music"), AudioManager::isMusicEnabled());
     auto *musicValue = new QLabel(&dialog);
     musicValue->setObjectName(QStringLiteral("inspectorSubtitle"));
     auto *musicSlider = new QSlider(Qt::Horizontal, &dialog);
@@ -708,13 +713,12 @@ void MainWindow::showSettingsDialog()
     QObject::connect(musicSlider, &QSlider::valueChanged, &dialog, [musicValue](int value)
                      { musicValue->setText(QStringLiteral("Music volume: %1%").arg(value)); });
     musicValue->setText(QStringLiteral("Music volume: %1%").arg(musicSlider->value()));
-    auto *duplicatesCheck = new QCheckBox(QStringLiteral("Enable Duplicate Merge in Optimization"), &dialog);
-    duplicatesCheck->setChecked(settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), false).toBool());
-    duplicatesCheck->setToolTip(QStringLiteral("Disabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
-    duplicatesCheck->setFocusPolicy(Qt::NoFocus);
-    auto *startFullscreenCheck = new QCheckBox(QStringLiteral("Start in full screen"), &dialog);
-    startFullscreenCheck->setChecked(settings.value(QStringLiteral("ui/startFullscreen"), true).toBool());
-    startFullscreenCheck->setFocusPolicy(Qt::NoFocus);
+    auto *duplicatesCheck = checkBoxRow(
+        QStringLiteral("Enable Duplicate Merge in Optimization"),
+        settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), false).toBool(),
+        QStringLiteral("Disabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
+    auto *startFullscreenCheck = checkBoxRow(QStringLiteral("Start in full screen"),
+                                             settings.value(QStringLiteral("ui/startFullscreen"), true).toBool());
     auto *collectionModeLabel = new QLabel(QStringLiteral("DATA COLLECTION MODE"), &dialog);
     collectionModeLabel->setObjectName(QStringLiteral("panelTitle"));
     auto *collectionMode = new QComboBox(&dialog);

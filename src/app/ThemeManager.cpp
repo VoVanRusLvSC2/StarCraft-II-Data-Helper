@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QPainter>
 #include <QProxyStyle>
+#include <QStyleOption>
 #include <QStyleOptionSlider>
 #include <QTransform>
 #include <QStringList>
@@ -55,6 +56,39 @@ void drawAxisTexture(QPainter *painter, const QRect &target, const QPixmap &sour
     }
 }
 
+void drawCheckTexture(QPainter *painter, QRect target, QStyle::State state)
+{
+    if (!painter || target.isEmpty()) {
+        return;
+    }
+
+    static const QPixmap normal(QStringLiteral(":/textures/ui_glue_checkbox_normalpressed_terran.png"));
+    static const QPixmap hover(QStringLiteral(":/textures/ui_glue_checkbox_normaloverpressedover_terran.png"));
+    static const QPixmap mark(QStringLiteral(":/textures/ui_glue_checkboxmark_terran.png"));
+    const QPixmap &frame = state.testFlag(QStyle::State_MouseOver) ? hover : normal;
+    if (frame.isNull()) {
+        return;
+    }
+
+    const int side = std::min({24, target.width(), target.height()});
+    target = QRect(target.left() + (target.width() - side) / 2,
+                   target.top() + (target.height() - side) / 2,
+                   side,
+                   side);
+    const bool checked = state.testFlag(QStyle::State_On);
+    const int frameHeight = frame.height() / 2;
+    const QRect source(0, checked ? frameHeight : 0, frame.width(), frameHeight);
+
+    painter->save();
+    painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter->setOpacity(state.testFlag(QStyle::State_Enabled) ? 1.0 : 0.45);
+    painter->drawPixmap(target, frame, source);
+    if (checked && !mark.isNull()) {
+        painter->drawPixmap(target.adjusted(4, 4, -4, -4), mark);
+    }
+    painter->restore();
+}
+
 class Sc2ProxyStyle final : public QProxyStyle
 {
 public:
@@ -68,7 +102,23 @@ public:
         if (metric == PM_ScrollBarSliderMin) {
             return 38;
         }
+        if (metric == PM_IndicatorWidth || metric == PM_IndicatorHeight) {
+            return 24;
+        }
+        if (metric == PM_CheckBoxLabelSpacing) {
+            return 10;
+        }
         return QProxyStyle::pixelMetric(metric, option, widget);
+    }
+
+    void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
+                       QPainter *painter, const QWidget *widget = nullptr) const override
+    {
+        if ((element == PE_IndicatorCheckBox || element == PE_IndicatorItemViewItemCheck) && option) {
+            drawCheckTexture(painter, option->rect, option->state);
+            return;
+        }
+        QProxyStyle::drawPrimitive(element, option, painter, widget);
     }
 
     QRect subControlRect(ComplexControl control, const QStyleOptionComplex *option,

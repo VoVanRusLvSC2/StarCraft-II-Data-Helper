@@ -830,40 +830,57 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     QHash<QString, QSet<QString>> ownersByAlias;
     QHash<QString, QString> canonicalOwnerByAlias;
     if (request.family.strictOwnership) {
-        const QVector<UnitFamily> detectedFamilies = knownFamilies ? QVector<UnitFamily>()
-            : UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::UnitAbilWeapon);
-        const QVector<UnitFamily> &typedFamilies = knownFamilies ? *knownFamilies : detectedFamilies;
-        QHash<QString, QVector<AliasOwnerCandidate>> ownerCandidatesByAlias;
-        for (const UnitFamily &family : typedFamilies) {
-            for (const UnitFamilyObject &object : family.objects) {
-                if (object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size()
-                    || (object.role == UnitFamilyRole::ManualReview && !isSharedManualObject(object))) continue;
-                const QString alias = mapper.aliasFor(analysis.nodes[object.nodeIndex], family.rootId, object.role);
-                if (alias.isEmpty()) continue;
-                const QString aliasKey = alias.toLower();
-                ownersByAlias[aliasKey].insert(family.rootId);
-                ownerCandidatesByAlias[aliasKey].append({
-                    family.rootId,
-                    family.entityType,
-                    idIsScopedToRoot(analysis.nodes[object.nodeIndex].id, family.rootId),
-                    ownershipPathDepth(object.reason),
-                });
+        const auto buildOwnershipMaps = [&](const QVector<UnitFamily> &typedFamilies,
+                                            QHash<QString, QSet<QString>> *owners,
+                                            QHash<QString, QString> *canonicalOwners) {
+            owners->clear();
+            canonicalOwners->clear();
+            QHash<QString, QVector<AliasOwnerCandidate>> ownerCandidatesByAlias;
+            for (const UnitFamily &family : typedFamilies) {
+                for (const UnitFamilyObject &object : family.objects) {
+                    if (object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size()
+                        || (object.role == UnitFamilyRole::ManualReview && !isSharedManualObject(object))) continue;
+                    const QString alias = mapper.aliasFor(analysis.nodes[object.nodeIndex], family.rootId, object.role);
+                    if (alias.isEmpty()) continue;
+                    const QString aliasKey = alias.toLower();
+                    (*owners)[aliasKey].insert(family.rootId);
+                    ownerCandidatesByAlias[aliasKey].append({
+                        family.rootId,
+                        family.entityType,
+                        idIsScopedToRoot(analysis.nodes[object.nodeIndex].id, family.rootId),
+                        ownershipPathDepth(object.reason),
+                    });
+                }
             }
-        }
-        for (auto it = ownerCandidatesByAlias.cbegin(); it != ownerCandidatesByAlias.cend(); ++it) {
-            QVector<AliasOwnerCandidate> candidates = it.value();
-            std::sort(candidates.begin(), candidates.end(), [](const AliasOwnerCandidate &left, const AliasOwnerCandidate &right) {
-                if (left.scoped != right.scoped) return left.scoped && !right.scoped;
-                if (left.pathDepth != right.pathDepth) return left.pathDepth < right.pathDepth;
-                const int leftPriority = entityPriority(left.entityType), rightPriority = entityPriority(right.entityType);
-                if (leftPriority != rightPriority) return leftPriority < rightPriority;
-                return left.rootId.compare(right.rootId, Qt::CaseInsensitive) < 0;
-            });
-            if (!candidates.isEmpty())
-                canonicalOwnerByAlias.insert(it.key(), candidates.front().rootId);
+            for (auto it = ownerCandidatesByAlias.cbegin(); it != ownerCandidatesByAlias.cend(); ++it) {
+                QVector<AliasOwnerCandidate> candidates = it.value();
+                std::sort(candidates.begin(), candidates.end(), [](const AliasOwnerCandidate &left, const AliasOwnerCandidate &right) {
+                    if (left.scoped != right.scoped) return left.scoped && !right.scoped;
+                    if (left.pathDepth != right.pathDepth) return left.pathDepth < right.pathDepth;
+                    const int leftPriority = entityPriority(left.entityType), rightPriority = entityPriority(right.entityType);
+                    if (leftPriority != rightPriority) return leftPriority < rightPriority;
+                    return left.rootId.compare(right.rootId, Qt::CaseInsensitive) < 0;
+                });
+                if (!candidates.isEmpty())
+                    canonicalOwners->insert(it.key(), candidates.front().rootId);
+            }
+        };
+        if (knownFamilies && request.summaryOnly) {
+            if (m_cachedOwnerFamilies != knownFamilies) {
+                buildOwnershipMaps(*knownFamilies, &m_cachedOwnersByAlias, &m_cachedCanonicalOwnerByAlias);
+                m_cachedOwnerFamilies = knownFamilies;
+            }
+            ownersByAlias = m_cachedOwnersByAlias;
+            canonicalOwnerByAlias = m_cachedCanonicalOwnerByAlias;
+        } else {
+            const QVector<UnitFamily> detectedFamilies = knownFamilies ? QVector<UnitFamily>()
+                : UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::UnitAbilWeapon);
+            const QVector<UnitFamily> &typedFamilies = knownFamilies ? *knownFamilies : detectedFamilies;
+            buildOwnershipMaps(typedFamilies, &ownersByAlias, &canonicalOwnerByAlias);
         }
     }
     QSet<QString> desiredAliases;
+    QHash<QString, QString> desiredAliasByKey;
     for (const UnitFamilyObject &object : request.family.objects) {
         if (object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size())
             continue;
@@ -877,6 +894,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
         if (object.role == UnitFamilyRole::ManualReview && !isSharedManualObject(object))
             continue;
         desiredAliases.insert(aliasKey);
+        desiredAliasByKey.insert(aliasKey, alias);
     }
     QSet<QString> knownAliases;
     QStringList existing;
@@ -921,6 +939,9 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
             knownAliases = QSet<QString>(existing.cbegin(), existing.cend());
         }
     }
+    QSet<QString> knownAliasKeys;
+    for (const QString &entry : existing)
+        knownAliasKeys.insert(entry.toLower());
     QSet<int> included = request.includedNodeIndices;
     if (included.isEmpty()) for (const UnitFamilyObject &object : request.family.objects)
         if (object.role != UnitFamilyRole::ManualReview) included.insert(object.nodeIndex);
@@ -997,6 +1018,12 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     if (brokenInheritance) result.warnings << result.patternDetail;
 
     if (request.summaryOnly) {
+        for (const QString &aliasKey : desiredAliases) {
+            if (!knownAliasKeys.contains(aliasKey))
+                result.recordsToAdd << desiredAliasByKey.value(aliasKey);
+        }
+        sortEntries(&result.recordsToAdd);
+        const int linkedObjectCount = result.existingRecordsPreserved.size() + result.recordsToAdd.size();
         result.valid = nameMatchesCollection && !request.family.rootTypeConflict && !brokenInheritance
             && result.falsePositiveAssociations.isEmpty()
             && (result.existingCollection || linkedObjectCount >= 1);

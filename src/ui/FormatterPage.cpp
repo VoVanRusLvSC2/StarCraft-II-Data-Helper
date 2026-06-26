@@ -7,14 +7,12 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QSettings>
 #include <QSplitter>
-#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabBar>
@@ -27,59 +25,12 @@
 
 #include <algorithm>
 namespace {
-class Sc2CheckDelegate final : public QStyledItemDelegate
-{
-public:
-    explicit Sc2CheckDelegate(QObject *parent = nullptr)
-        : QStyledItemDelegate(parent)
-    {
-    }
-
-    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
-    {
-        const bool checkable = index.flags().testFlag(Qt::ItemIsUserCheckable);
-        if (!checkable) {
-            QStyledItemDelegate::paint(painter, option, index);
-            return;
-        }
-
-        QStyleOptionViewItem itemOption(option);
-        initStyleOption(&itemOption, index);
-        const QVariant checkState = index.data(Qt::CheckStateRole);
-        itemOption.features &= ~QStyleOptionViewItem::HasCheckIndicator;
-        QStyledItemDelegate::paint(painter, itemOption, index);
-
-        const bool checked = checkState.toInt() == Qt::Checked;
-        QPixmap frame(QStringLiteral(":/textures/ui_glue_checkbox_normalpressed_terran.png"));
-        if (option.state.testFlag(QStyle::State_MouseOver))
-            frame = QPixmap(QStringLiteral(":/textures/ui_glue_checkbox_normaloverpressedover_terran.png"));
-        const int frameHeight = frame.height() / 2;
-        const QRect source(0, checked ? frameHeight : 0, frame.width(), frameHeight);
-        const int size = qMin(22, qMax(16, option.rect.height() - 8));
-        QRect target(option.rect.left() + 10,
-                     option.rect.top() + (option.rect.height() - size) / 2,
-                     size,
-                     size);
-
-        painter->save();
-        painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
-        painter->drawPixmap(target, frame, source);
-        if (checked) {
-            const QPixmap mark(QStringLiteral(":/textures/ui_glue_checkboxmark_terran.png"));
-            QRect markTarget = target.adjusted(4, 4, -4, -4);
-            painter->drawPixmap(markTarget, mark);
-        }
-        painter->restore();
-    }
-};
-
 QTableWidget *makeTable(const QStringList &headers) {
     auto *value = new QTableWidget; value->setColumnCount(headers.size()); value->setHorizontalHeaderLabels(headers);
     value->setSelectionBehavior(QAbstractItemView::SelectRows); value->horizontalHeader()->setStretchLastSection(true);
     value->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn); value->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     value->setVerticalScrollMode(QAbstractItemView::ScrollPerItem); value->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     value->setMouseTracking(true);
-    value->setItemDelegate(new Sc2CheckDelegate(value));
     value->setTextElideMode(Qt::ElideNone); value->verticalHeader()->hide(); return value;
 }
 void addRow(QTableWidget *target, const OptimizationPlanRow &row) {
@@ -184,12 +135,13 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
         }
     }
     const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(result, collectionMode);
+    DataCollectionUnitBuilder collectionBuilder;
     for (int familyIndex = 0; familyIndex < collectionFamilies.size(); ++familyIndex) {
         const UnitFamily &family = collectionFamilies[familyIndex];
         DataCollectionBuildRequest request;
         request.family = family;
         request.summaryOnly = true;
-        const DataCollectionPreviewReport collection = DataCollectionUnitBuilder().preview(result, request, &collectionFamilies);
+        const DataCollectionPreviewReport collection = collectionBuilder.preview(result, request, &collectionFamilies);
         plan.collection.append({{QString(), QStringLiteral("%1 [%2]").arg(family.rootId, dataCollectionEntityTypeName(family.entityType)),
                                  QString::number(collection.existingRecordsPreserved.size()),
                                  QString::number(collection.recordsToAdd.size()),

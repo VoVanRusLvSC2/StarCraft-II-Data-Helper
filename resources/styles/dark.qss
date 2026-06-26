@@ -169,26 +169,18 @@ QMenu::item:selected {
     border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
 }
 
-QCheckBox::indicator {
-    width: 24px;
-    height: 24px;
-    image: url(:/textures/ui_glue_checkbox_normalpressed_terran.png);
-}
-
-QCheckBox::indicator:hover {
-    image: url(:/textures/ui_glue_checkbox_normaloverpressedover_terran.png);
-}
-
-QCheckBox::indicator:checked {
-    image: url(:/textures/ui_glue_checkboxmark_terran.png);
-}
-
 QCheckBox {
     spacing: 10px;
     color: #dbeee2;
     padding: 6px 12px;
+    min-height: 28px;
     border: 4px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+}
+
+QCheckBox[textureType="checkBoxRow"] {
+    padding: 8px 14px;
+    min-height: 34px;
 }
 
 QCheckBox:hover {

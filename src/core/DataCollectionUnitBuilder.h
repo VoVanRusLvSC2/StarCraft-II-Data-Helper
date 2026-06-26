@@ -2,6 +2,7 @@
 
 #include "core/DataCollectionAliasMapper.h"
 
+#include <QHash>
 #include <QSet>
 
 struct DataCollectionEntryProposal
@@ -123,5 +124,8 @@ public:
     void setFailureInjectionStep(const QString &step) { m_failureInjectionStep = step; }
 
 private:
+    mutable const QVector<UnitFamily> *m_cachedOwnerFamilies = nullptr;
+    mutable QHash<QString, QSet<QString>> m_cachedOwnersByAlias;
+    mutable QHash<QString, QString> m_cachedCanonicalOwnerByAlias;
     QString m_failureInjectionStep;
 };
