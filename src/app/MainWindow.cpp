@@ -863,7 +863,28 @@ void MainWindow::openSc2File()
     QString startPath = !m_currentSourcePath.isEmpty() ? m_currentSourcePath : savedPath;
     if (!startPath.isEmpty() && !QFileInfo::exists(startPath))
         startPath = QFileInfo(startPath).absolutePath();
-    const QString selected = QFileDialog::getOpenFileName(this, QStringLiteral("Open SC2 File"), startPath, filter);
+
+    QFileDialog dialog(this, QStringLiteral("Open SC2 File"));
+    dialog.setObjectName(QStringLiteral("toolDialog"));
+    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setNameFilter(filter);
+    dialog.setLabelText(QFileDialog::Accept, QStringLiteral("Open"));
+    dialog.setLabelText(QFileDialog::Reject, QStringLiteral("Cancel"));
+    if (!startPath.isEmpty()) {
+        const QFileInfo startInfo(startPath);
+        if (startInfo.isFile()) {
+            dialog.setDirectory(startInfo.absolutePath());
+            dialog.selectFile(startInfo.fileName());
+        } else {
+            dialog.setDirectory(startPath);
+        }
+    }
+    const QString selected = dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()
+        ? dialog.selectedFiles().constFirst()
+        : QString();
     if (selected.isEmpty())
     {
         return;
