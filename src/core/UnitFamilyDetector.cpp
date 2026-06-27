@@ -5,10 +5,23 @@
 #include <QHash>
 #include <QQueue>
 #include <QSet>
+#include <QTextStream>
 
 #include <pugixml.hpp>
 
 namespace {
+
+void traceCollectionDetect(const QString &stage, const QString &detail = {})
+{
+    if (!qEnvironmentVariableIsSet("SC2DH_TRACE_COLLECTION_DETECT"))
+        return;
+    QTextStream err(stderr);
+    err << "dc_detect stage=" << stage;
+    if (!detail.isEmpty())
+        err << ' ' << detail;
+    err << '\n';
+    err.flush();
+}
 
 bool isCatalogType(const QString &type)
 {
@@ -30,6 +43,21 @@ QString standardDataCollectionParent(DataCollectionEntityType entityType, const 
         return QStringLiteral("Weapon_Instant");
     for (auto it = paths.cbegin(); it != paths.cend(); ++it) {
         const int index = it.key();
+        if (index >= 0 && index < nodes.size()
+            && nodes[index].elementName.startsWith(QStringLiteral("CMover"), Qt::CaseInsensitive))
+            return QStringLiteral("AbilityMisssile");
+    }
+    return QStringLiteral("AbilityBase");
+}
+
+QString standardDataCollectionParent(DataCollectionEntityType entityType, const QSet<int> &indices,
+                                     const QVector<DataNode> &nodes)
+{
+    if (entityType == DataCollectionEntityType::Unit)
+        return QStringLiteral("UnitGround");
+    if (entityType == DataCollectionEntityType::Weapon)
+        return QStringLiteral("Weapon_Instant");
+    for (int index : indices) {
         if (index >= 0 && index < nodes.size()
             && nodes[index].elementName.startsWith(QStringLiteral("CMover"), Qt::CaseInsensitive))
             return QStringLiteral("AbilityMisssile");
@@ -255,6 +283,8 @@ QVector<UnitFamily> UnitFamilyDetector::detect(const AnalysisResult &analysis) c
 
 QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisResult &analysis, DataCollectionMode mode) const
 {
+    traceCollectionDetect(QStringLiteral("start"),
+                          QStringLiteral("nodes=%1 mode=%2").arg(analysis.nodes.size()).arg(int(mode)));
     DataCollectionAliasMapper mapper;
     QHash<QString, QVector<int>> indicesByPrefix;
     QHash<QString, int> nodeByRecord;
@@ -273,6 +303,8 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             && !node.id.isEmpty())
             existingCollections.insert(node.id, &node);
     }
+    traceCollectionDetect(QStringLiteral("base_index_done"),
+                          QStringLiteral("existing_collections=%1").arg(existingCollections.size()));
 
     if (mode == DataCollectionMode::UnitAbilWeapon) {
         // Entity-root mode is deliberately graph-only.  Legacy DataRecord membership
@@ -351,207 +383,282 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             if (!node.id.isEmpty() && node.elementName.startsWith(QStringLiteral("CUpgrade"), Qt::CaseInsensitive))
                 primaryRootIds.insert(node.id.toLower());
         }
+        const auto scopedToForeignPrimary = [&](const QString &id, DataCollectionEntityType ownerType) {
+            const QString idLower = id.toLower();
+            QString bestRoot;
+            for (const QString &primaryRootId : primaryRootIds) {
+                if (primaryRootId.isEmpty() || !idLower.startsWith(primaryRootId))
+                    continue;
+                if (primaryRootId.size() > bestRoot.size())
+                    bestRoot = primaryRootId;
+            }
+            if (bestRoot.isEmpty())
+                return false;
+            const QSet<int> kinds = rootKinds.value(bestRoot);
+            return !kinds.contains(int(ownerType));
+        };
+        traceCollectionDetect(QStringLiteral("graph_index_done"),
+                              QStringLiteral("roots=%1 catalog_ids=%2 incoming_ids=%3 scopes=%4")
+                                  .arg(roots.size())
+                                  .arg(catalogById.size())
+                                  .arg(incomingSourcesById.size())
+                                  .arg(scopedCandidatesByScope.size()));
 
         QVector<UnitFamily> result;
-        for (int rootIndex : roots) {
-            const DataNode &rootNode = analysis.nodes[rootIndex];
-            DataCollectionEntityType entityType;
-            entityTypeOf(rootNode, &entityType);
-            UnitFamily family;
-            family.rootId = rootNode.id;
-            family.rootNodeIndex = rootIndex;
-            family.entityType = entityType;
-            family.collectionElementName = entityType == DataCollectionEntityType::Unit ? QStringLiteral("CDataCollectionUnit")
-                : entityType == DataCollectionEntityType::Ability ? QStringLiteral("CDataCollectionAbil")
-                                                                  : QStringLiteral("CDataCollection");
-            family.strictOwnership = true;
-            family.rootTypeConflict = rootKinds.value(rootNode.id.toLower()).size() > 1;
+        const auto acceptsIncomingLinked = [](const DataNode &node) {
+            const QString sourceType = node.elementName.toLower();
+            return sourceType.startsWith(QStringLiteral("cactor"))
+                || sourceType.startsWith(QStringLiteral("cmodel"))
+                || sourceType.startsWith(QStringLiteral("csound"))
+                || sourceType.startsWith(QStringLiteral("ceffect"))
+                || sourceType.startsWith(QStringLiteral("cbehavior"));
+        };
+        const auto mergeOwners = [](QVector<quint64> *target, const QVector<quint64> &source) {
+            bool changed = false;
+            for (int word = 0; word < target->size(); ++word) {
+                const quint64 added = source.at(word) & ~target->at(word);
+                if (!added)
+                    continue;
+                (*target)[word] |= source.at(word);
+                changed = true;
+            }
+            return changed;
+        };
+        const auto setOwner = [](QVector<quint64> *target, int owner) {
+            (*target)[owner / 64] |= (quint64(1) << (owner % 64));
+        };
+        const auto hasOwner = [](const QVector<quint64> &bits, int owner) {
+            return (bits.at(owner / 64) & (quint64(1) << (owner % 64))) != 0;
+        };
+        constexpr int kMaxOwnersForUnscopedPropagation = 64;
 
-            QHash<int, QStringList> paths;
+        const auto buildForEntity = [&](DataCollectionEntityType entityType) {
+            QVector<int> typedRoots;
+            for (int rootIndex : roots) {
+                DataCollectionEntityType rootType;
+                if (entityTypeOf(analysis.nodes[rootIndex], &rootType) && rootType == entityType)
+                    typedRoots.append(rootIndex);
+            }
+            traceCollectionDetect(QStringLiteral("entity_roots"),
+                                  QStringLiteral("entity=%1 roots=%2")
+                                      .arg(dataCollectionEntityTypeName(entityType))
+                                      .arg(typedRoots.size()));
+            if (typedRoots.isEmpty())
+                return;
+
+            QVector<QVector<int>> adjacency(analysis.nodes.size());
+            qsizetype edgeCount = 0;
+            for (int index = 0; index < analysis.nodes.size(); ++index) {
+                const DataNode &node = analysis.nodes[index];
+                for (const QString &reference : node.referencedIds) {
+                    for (int target : catalogById.value(reference.toLower())) {
+                        if (target != index && allowedFor(entityType, analysis.nodes[target]))
+                            adjacency[index].append(target);
+                    }
+                }
+                if (!node.id.isEmpty()) {
+                    const QString key = node.id.toLower();
+                    for (int source : incomingSourcesById.value(key)) {
+                        if (source != index && allowedFor(entityType, analysis.nodes[source])
+                            && acceptsIncomingLinked(analysis.nodes[source]))
+                            adjacency[index].append(source);
+                    }
+                    for (int candidate : scopedCandidatesByScope.value(key)) {
+                        if (candidate != index && allowedFor(entityType, analysis.nodes[candidate]))
+                            adjacency[index].append(candidate);
+                    }
+                }
+                auto &edges = adjacency[index];
+                std::sort(edges.begin(), edges.end());
+                edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+                edgeCount += edges.size();
+            }
+            traceCollectionDetect(QStringLiteral("adjacency_done"),
+                                  QStringLiteral("entity=%1 edges=%2")
+                                      .arg(dataCollectionEntityTypeName(entityType))
+                                      .arg(edgeCount));
+
+            const int wordCount = (typedRoots.size() + 63) / 64;
+            QVector<QVector<quint64>> owners(analysis.nodes.size(), QVector<quint64>(wordCount, 0));
+            QVector<char> queued(analysis.nodes.size(), 0);
             QQueue<int> queue;
-            paths.insert(rootIndex, {QStringLiteral("%1,%2").arg(dataCollectionEntityTypeName(entityType), rootNode.id)});
-            queue.enqueue(rootIndex);
+            for (int owner = 0; owner < typedRoots.size(); ++owner) {
+                const int rootIndex = typedRoots.at(owner);
+                setOwner(&owners[rootIndex], owner);
+                if (!queued[rootIndex]) {
+                    queued[rootIndex] = 1;
+                    queue.enqueue(rootIndex);
+                }
+            }
 
-            const auto acceptsIncomingLinked = [](const DataNode &node) {
-                const QString sourceType = node.elementName.toLower();
-                return sourceType.startsWith(QStringLiteral("cactor"))
-                    || sourceType.startsWith(QStringLiteral("cmodel"))
-                    || sourceType.startsWith(QStringLiteral("csound"))
-                    || sourceType.startsWith(QStringLiteral("ceffect"))
-                    || sourceType.startsWith(QStringLiteral("cbehavior"));
-            };
-            const auto processQueue = [&]() {
-                while (!queue.isEmpty()) {
-                    const int current = queue.dequeue();
-                    for (const QString &reference : analysis.nodes[current].referencedIds) {
-                        for (int target : catalogById.value(reference.toLower())) {
-                            if (paths.contains(target) || !allowedFor(entityType, analysis.nodes[target])) continue;
-                            QStringList path = paths.value(current);
-                            path.append(QStringLiteral("%1,%2").arg(mapper.catalogType(analysis.nodes[target].elementName),
-                                                                     analysis.nodes[target].id));
-                        paths.insert(target, path);
+            while (!queue.isEmpty()) {
+                const int current = queue.dequeue();
+                queued[current] = 0;
+                QVector<quint64> currentOwners = owners.at(current);
+                int currentOwnerCount = 0;
+                for (int owner = 0; owner < typedRoots.size(); ++owner)
+                    if (hasOwner(currentOwners, owner))
+                        ++currentOwnerCount;
+                if (currentOwnerCount > kMaxOwnersForUnscopedPropagation) {
+                    QVector<quint64> scopedOwners(currentOwners.size(), 0);
+                    const QString objectId = analysis.nodes[current].id;
+                    for (int owner = 0; owner < typedRoots.size(); ++owner) {
+                        if (!hasOwner(currentOwners, owner))
+                            continue;
+                        const int rootIndex = typedRoots.at(owner);
+                        const QString root = analysis.nodes[rootIndex].id;
+                        const bool canPropagate = current == rootIndex
+                            || objectId.compare(root, Qt::CaseInsensitive) == 0
+                            || objectId.startsWith(root + QLatin1Char('@'), Qt::CaseInsensitive)
+                            || objectId.startsWith(root + QLatin1Char('_'), Qt::CaseInsensitive);
+                        if (canPropagate)
+                            setOwner(&scopedOwners, owner);
+                    }
+                    currentOwners = scopedOwners;
+                }
+                for (int target : adjacency.at(current)) {
+                    if (!mergeOwners(&owners[target], currentOwners))
+                        continue;
+                    if (!queued[target]) {
+                        queued[target] = 1;
                         queue.enqueue(target);
                     }
                 }
-                for (int source : incomingSourcesById.value(analysis.nodes[current].id.toLower())) {
-                    if (paths.contains(source) || !allowedFor(entityType, analysis.nodes[source])
-                        || !acceptsIncomingLinked(analysis.nodes[source]))
-                        continue;
-                    QStringList path = paths.value(current);
-                    path.append(QStringLiteral("incoming linked object %1,%2")
-                                    .arg(mapper.catalogType(analysis.nodes[source].elementName),
-                                         analysis.nodes[source].id));
-                    paths.insert(source, path);
-                    queue.enqueue(source);
-                }
-                }
-            };
-            const auto hasForeignPrimaryOwner = [&](int target, const QString &ownerRootId) {
-                if (target < 0 || target >= analysis.nodes.size())
-                    return false;
-                const QString targetId = analysis.nodes[target].id.toLower();
-                for (int source : incomingSourcesById.value(targetId)) {
-                    if (source < 0 || source >= analysis.nodes.size())
-                        continue;
-                    const DataNode &sourceNode = analysis.nodes[source];
-                    DataCollectionEntityType sourceEntity;
-                    const bool primary = entityTypeOf(sourceNode, &sourceEntity)
-                        || sourceNode.elementName.startsWith(QStringLiteral("CUpgrade"), Qt::CaseInsensitive);
-                    if (!primary)
-                        continue;
-                    if (sourceNode.id.compare(ownerRootId, Qt::CaseInsensitive) == 0)
-                        continue;
-                    return true;
-                }
-                return false;
-            };
-            processQueue();
+            }
+            traceCollectionDetect(QStringLiteral("propagation_done"),
+                                  QStringLiteral("entity=%1")
+                                      .arg(dataCollectionEntityTypeName(entityType)));
 
-            QSet<QString> processedScopes;
-            const auto addScopedObjects = [&]() {
-                bool addedScoped = true;
-                while (addedScoped) {
-                    addedScoped = false;
-                    const QList<int> reached = paths.keys();
-                    for (int current : reached) {
-                        const QString scope = analysis.nodes[current].id;
-                        const QString scopeKey = scope.toLower();
-                        if (scope.isEmpty() || processedScopes.contains(scopeKey))
-                            continue;
-                        processedScopes.insert(scopeKey);
-                        for (int candidate : scopedCandidatesByScope.value(scopeKey)) {
-                            if (paths.contains(candidate) || !allowedFor(entityType, analysis.nodes[candidate]))
-                                continue;
-                            QStringList path = paths.value(current);
-                            path.append(QStringLiteral("scoped catalog object %1,%2")
-                                            .arg(mapper.catalogType(analysis.nodes[candidate].elementName),
-                                                 analysis.nodes[candidate].id));
-                            paths.insert(candidate, path);
-                            queue.enqueue(candidate);
-                            addedScoped = true;
-                        }
-                    }
-                    processQueue();
-                }
-            };
-            addScopedObjects();
-
-            // Existing membership is supplementary evidence for this exact
-            // collection.  Do not require Root@/Root_ here: old maps often contain
-            // valid related buttons, actors, effects, models and sounds with legacy
-            // IDs.  The typed boundary is still enforced by allowedFor(), so Unit
-            // collections do not silently absorb Ability/Weapon roots.
-            const DataNode *legacyCollection = existingCollections.value(rootNode.id, nullptr);
-            if (legacyCollection) {
+            for (int owner = 0; owner < typedRoots.size(); ++owner) {
+                const int rootIndex = typedRoots.at(owner);
+                const DataNode &rootNode = analysis.nodes[rootIndex];
+                const DataNode *legacyCollection = existingCollections.value(rootNode.id, nullptr);
+                if (!legacyCollection)
+                    continue;
                 pugi::xml_document fragment;
-                if (fragment.load_string(legacyCollection->serializedXml.toUtf8().constData())) {
-                    for (pugi::xml_node record : fragment.first_child().children("DataRecord")) {
-                        const QString entry = QString::fromUtf8(record.attribute("Entry").value());
-                        const QString catalog = entry.section(QLatin1Char(','), 0, 0).trimmed();
-                        const QString id = entry.section(QLatin1Char(','), 1).trimmed();
-                        const int target = nodeByRecord.value(catalog.toLower() + QChar(0x1f) + id.toLower(), -1);
-                        if (target < 0 || paths.contains(target) || !allowedFor(entityType, analysis.nodes[target])) continue;
-                        const bool scopedToRoot = id.compare(rootNode.id, Qt::CaseInsensitive) == 0
-                            || id.startsWith(rootNode.id + QLatin1Char('@'), Qt::CaseInsensitive)
-                            || id.startsWith(rootNode.id + QLatin1Char('_'), Qt::CaseInsensitive);
-                        bool scopedToForeignPrimary = false;
-                        const QString idLower = id.toLower();
-                        for (const QString &primaryRootId : primaryRootIds) {
-                            if (primaryRootId == rootNode.id.toLower())
-                                continue;
-                            if (idLower.startsWith(primaryRootId)) {
-                                scopedToForeignPrimary = true;
-                                break;
-                            }
-                        }
-                        if (!scopedToRoot && scopedToForeignPrimary)
-                            continue;
-                        if (!scopedToRoot && hasForeignPrimaryOwner(target, rootNode.id))
-                            continue;
-                        paths.insert(target, {QStringLiteral("%1,%2").arg(dataCollectionEntityTypeName(entityType), rootNode.id),
-                                              QStringLiteral("existing DataRecord membership %1").arg(entry)});
-                        queue.enqueue(target);
+                if (!fragment.load_string(legacyCollection->serializedXml.toUtf8().constData()))
+                    continue;
+                for (pugi::xml_node record : fragment.first_child().children("DataRecord")) {
+                    const QString entry = QString::fromUtf8(record.attribute("Entry").value());
+                    const QString catalog = entry.section(QLatin1Char(','), 0, 0).trimmed();
+                    const QString id = entry.section(QLatin1Char(','), 1).trimmed();
+                    const int target = nodeByRecord.value(catalog.toLower() + QChar(0x1f) + id.toLower(), -1);
+                    if (target >= 0 && allowedFor(entityType, analysis.nodes[target])
+                        && !scopedToForeignPrimary(analysis.nodes[target].id, entityType))
+                        setOwner(&owners[target], owner);
+                }
+            }
+
+            QVector<QVector<int>> membersByOwner(typedRoots.size());
+            QVector<char> sharedUnscoped(analysis.nodes.size(), 0);
+            qsizetype rawMemberships = 0;
+            qsizetype prunedMemberships = 0;
+            for (int index = 0; index < owners.size(); ++index) {
+                const QVector<quint64> &bits = owners.at(index);
+                if (bits.isEmpty())
+                    continue;
+                const QString objectId = analysis.nodes[index].id;
+                if (scopedToForeignPrimary(objectId, entityType))
+                    continue;
+                int scopedOwner = -1;
+                int longestScope = -1;
+                bool ambiguousScopedOwner = false;
+                QVector<int> ownerIndices;
+                ownerIndices.reserve(8);
+                for (int owner = 0; owner < typedRoots.size(); ++owner) {
+                    if (!hasOwner(bits, owner))
+                        continue;
+                    ownerIndices.append(owner);
+                    ++rawMemberships;
+                    const QString root = analysis.nodes[typedRoots.at(owner)].id;
+                    const bool scoped = objectId.compare(root, Qt::CaseInsensitive) == 0
+                        || objectId.startsWith(root + QLatin1Char('@'), Qt::CaseInsensitive)
+                        || objectId.startsWith(root + QLatin1Char('_'), Qt::CaseInsensitive);
+                    if (!scoped)
+                        continue;
+                    if (root.size() > longestScope) {
+                        scopedOwner = owner;
+                        longestScope = root.size();
+                        ambiguousScopedOwner = false;
+                    } else if (root.size() == longestScope) {
+                        ambiguousScopedOwner = true;
                     }
                 }
-            }
-            processQueue();
-
-            addScopedObjects();
-
-            family.recommendedParent = standardDataCollectionParent(entityType, paths, analysis.nodes);
-
-            QList<int> members = paths.keys();
-            std::sort(members.begin(), members.end());
-            for (int index : members) {
-                QString confidence = QStringLiteral("High");
-                QString reason = index == rootIndex ? QStringLiteral("Real typed gameplay root")
-                    : QStringLiteral("XML reference path: %1").arg(paths.value(index).join(QStringLiteral(" -> ")));
-                UnitFamilyRole role = roleFromNode(analysis.nodes[index], family.rootId, &confidence, &reason);
-                if (role == UnitFamilyRole::ManualReview) role = UnitFamilyRole::Other;
-                family.objects.append({index, role, confidence, reason});
-            }
-            result.append(family);
-        }
-        QHash<int, QVector<int>> ownersByNode;
-        for (int familyIndex = 0; familyIndex < result.size(); ++familyIndex)
-            for (const UnitFamilyObject &object : result[familyIndex].objects)
-                if (object.nodeIndex != result[familyIndex].rootNodeIndex) ownersByNode[object.nodeIndex].append(familyIndex);
-        for (auto it = ownersByNode.cbegin(); it != ownersByNode.cend(); ++it) {
-            if (it.value().size() < 2) continue;
-            QVector<int> scopedOwners;
-            int longestScope = -1;
-            const QString objectId = analysis.nodes[it.key()].id;
-            for (int owner : it.value()) {
-                const QString root = result[owner].rootId;
-                const bool scoped = objectId.compare(root, Qt::CaseInsensitive) == 0
-                    || objectId.startsWith(root + QLatin1Char('@'), Qt::CaseInsensitive)
-                    || objectId.startsWith(root + QLatin1Char('_'), Qt::CaseInsensitive);
-                if (!scoped) continue;
-                if (root.size() > longestScope) { scopedOwners.clear(); longestScope = root.size(); }
-                if (root.size() == longestScope) scopedOwners.append(owner);
-            }
-            if (scopedOwners.size() == 1) {
-                const int selectedOwner = scopedOwners.front();
-                for (int owner : it.value()) {
-                    if (owner == selectedOwner) continue;
-                    auto &objects = result[owner].objects;
-                    objects.erase(std::remove_if(objects.begin(), objects.end(), [&](const UnitFamilyObject &object) {
-                        return object.nodeIndex == it.key();
-                    }), objects.end());
+                if (ownerIndices.isEmpty())
+                    continue;
+                if (scopedOwner >= 0 && !ambiguousScopedOwner) {
+                    membersByOwner[scopedOwner].append(index);
+                    ++prunedMemberships;
+                    continue;
                 }
-                continue;
+                if (ownerIndices.size() > 1)
+                    sharedUnscoped[index] = 1;
+                for (int owner : ownerIndices) {
+                    membersByOwner[owner].append(index);
+                    ++prunedMemberships;
+                }
             }
-            for (int owner : it.value()) for (UnitFamilyObject &object : result[owner].objects) {
-                if (object.nodeIndex != it.key()) continue;
-                object.confidence = QStringLiteral("Shared");
-                object.reason += QStringLiteral("; reached from %1 entity roots, owner is not selected automatically")
-                                     .arg(it.value().size());
+            traceCollectionDetect(QStringLiteral("ownership_pruned"),
+                                  QStringLiteral("entity=%1 raw=%2 kept=%3")
+                                      .arg(dataCollectionEntityTypeName(entityType))
+                                      .arg(rawMemberships)
+                                      .arg(prunedMemberships));
+
+            for (int owner = 0; owner < typedRoots.size(); ++owner) {
+                const int rootIndex = typedRoots.at(owner);
+                const DataNode &rootNode = analysis.nodes[rootIndex];
+                UnitFamily family;
+                family.rootId = rootNode.id;
+                family.rootNodeIndex = rootIndex;
+                family.entityType = entityType;
+                family.collectionElementName = entityType == DataCollectionEntityType::Unit ? QStringLiteral("CDataCollectionUnit")
+                    : entityType == DataCollectionEntityType::Ability ? QStringLiteral("CDataCollectionAbil")
+                                                                      : QStringLiteral("CDataCollection");
+                family.strictOwnership = true;
+                family.rootTypeConflict = rootKinds.value(rootNode.id.toLower()).size() > 1;
+
+                QSet<int> members;
+                for (int index : membersByOwner[owner])
+                    members.insert(index);
+                family.recommendedParent = standardDataCollectionParent(entityType, members, analysis.nodes);
+
+                QList<int> sortedMembers = members.values();
+                std::sort(sortedMembers.begin(), sortedMembers.end());
+                for (int index : sortedMembers) {
+                    QString confidence = QStringLiteral("High");
+                    QString reason = index == rootIndex
+                        ? QStringLiteral("Real typed gameplay root")
+                        : QStringLiteral("XML reference graph reachability");
+                    if (index != rootIndex && sharedUnscoped.value(index)) {
+                        confidence = QStringLiteral("Shared");
+                        reason += QStringLiteral("; reached from multiple entity roots");
+                    }
+                    UnitFamilyRole role = roleFromNode(analysis.nodes[index], family.rootId, &confidence, &reason);
+                    if (role == UnitFamilyRole::ManualReview) role = UnitFamilyRole::Other;
+                    family.objects.append({index, role, confidence, reason});
+                }
+                result.append(family);
             }
-        }
+            traceCollectionDetect(QStringLiteral("families_built"),
+                                  QStringLiteral("entity=%1 total=%2")
+                                      .arg(dataCollectionEntityTypeName(entityType))
+                                      .arg(result.size()));
+        };
+
+        buildForEntity(DataCollectionEntityType::Unit);
+        buildForEntity(DataCollectionEntityType::Ability);
+        buildForEntity(DataCollectionEntityType::Weapon);
+        traceCollectionDetect(QStringLiteral("all_entities_done"),
+                              QStringLiteral("families=%1").arg(result.size()));
+        // No-loss collection generation is many-to-many by design.  If a shared
+        // catalog object is reachable from several roots, keep it in every
+        // reachable collection instead of doing an expensive single-owner pass.
         std::sort(result.begin(), result.end(), [](const UnitFamily &left, const UnitFamily &right) {
             const int idOrder = left.rootId.compare(right.rootId, Qt::CaseInsensitive);
             return idOrder != 0 ? idOrder < 0 : int(left.entityType) < int(right.entityType);
         });
+        traceCollectionDetect(QStringLiteral("done"),
+                              QStringLiteral("families=%1").arg(result.size()));
         return result;
 
 #if 0 // Previous heuristic splitter retained temporarily for history; graph-only logic above is authoritative.

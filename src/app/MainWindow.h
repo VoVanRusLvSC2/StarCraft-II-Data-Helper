@@ -9,6 +9,7 @@
 #include "core/DataCollectionUnitBuilder.h"
 
 #include <QMainWindow>
+#include <QHash>
 #include <QSet>
 #include <QStringList>
 #include <memory>
@@ -45,6 +46,7 @@ public:
 
 private slots:
     void openSc2File();
+    void openSourceFolder();
     void analyzeFolder();
     void showSettingsDialog();
     void runDryRun();
@@ -85,6 +87,7 @@ private:
     void refreshPages();
     bool loadPathAndAnalyze(const QString &path);
     bool analyzeFolderPath(const QString &folderPath, QString *errorMessage);
+    bool analyzeArchiveFolderPath(const QString &folderPath, QString *errorMessage);
     bool analyzeXmlFile(const QString &filePath, QString *errorMessage);
     bool analyzeArchiveFile(const QString &filePath, QString *errorMessage);
     bool materializeArchiveAnalysis(const QString &tempRoot, AnalysisResult *analysis, QString *errorMessage) const;
@@ -104,6 +107,8 @@ private:
     ConfigManager m_configManager;
     QSet<QString> m_whitelistIds;
     QSet<QString> m_archiveReferencedIds;
+    QHash<QString, QStringList> m_archiveStrongReferenceSources;
+    QHash<QString, QStringList> m_archiveWeakReferenceSources;
     bool m_archiveReferenceScanComplete = false;
     MergeService m_mergeService;
     MergeRequest m_previewedMerge;
@@ -118,6 +123,7 @@ private:
     std::shared_ptr<spdlog::logger> m_logger;
     enum class SourceKind {
         Folder,
+        ArchiveFolder,
         XmlFile,
         ArchiveFile,
         Unknown
@@ -139,6 +145,7 @@ private:
     QLineEdit *m_pathEdit = nullptr;
 
     QAction *m_openFileAction = nullptr;
+    QAction *m_openFolderAction = nullptr;
     QAction *m_analyzeAction = nullptr;
     QAction *m_settingsAction = nullptr;
     QAction *m_fullscreenAction = nullptr;

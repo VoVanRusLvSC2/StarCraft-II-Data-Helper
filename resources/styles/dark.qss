@@ -65,10 +65,50 @@ QToolBar#mainToolbar QToolButton:disabled {
 }
 
 QToolBar#mainToolbar QToolButton {
-    min-width: 152px;
+    min-width: 96px;
     min-height: 34px;
     margin: 0;
     font-weight: 700;
+}
+
+QToolBar#mainToolbar QToolButton#discordPromoButton {
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonup.png) 14 14 14 14 stretch stretch;
+    min-width: 48px;
+    min-height: 42px;
+    max-height: 48px;
+    padding: 0;
+    margin-left: 6px;
+    margin-right: 4px;
+}
+
+QToolBar#mainToolbar QToolButton#discordPromoButton:hover {
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonover.png) 14 14 14 14 stretch stretch;
+}
+
+QToolBar#mainToolbar QToolButton#discordPromoButton:pressed {
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonpressed.png) 14 14 14 14 stretch stretch;
+}
+
+QToolBar#mainToolbar QToolButton#boostyPromoButton {
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_mediumbutton_yellow_normal.png) 12 26 12 26 stretch stretch;
+    min-width: 92px;
+    min-height: 34px;
+    max-height: 42px;
+    padding: 1px 14px;
+    margin-left: 2px;
+    color: #fff1cb;
+}
+
+QToolBar#mainToolbar QToolButton#boostyPromoButton:hover {
+    border-image: url(:/textures/ui_nova_global_mediumbutton_yellow_over.png) 12 26 12 26 stretch stretch;
+    color: #ffffff;
+}
+
+QToolBar#mainToolbar QToolButton#boostyPromoButton:pressed {
+    border-image: url(:/textures/ui_nova_global_mediumbutton_yellow_down.png) 12 26 12 26 stretch stretch;
+    color: #ffd58c;
 }
 
 QPushButton#analysisCancelButton {

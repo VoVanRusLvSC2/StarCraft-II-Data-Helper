@@ -121,6 +121,8 @@ void rewriteNode(pugi::xml_node node,
 
 bool restoreBackup(const QString &root, const QString &backup, const QStringList &relativeFiles, QString *error)
 {
+    if (backup.startsWith(QStringLiteral("disabled"), Qt::CaseInsensitive))
+        return false;
     bool ok = true;
     for (const QString &relative : relativeFiles) {
         const QString source = QDir(backup).absoluteFilePath(relative);

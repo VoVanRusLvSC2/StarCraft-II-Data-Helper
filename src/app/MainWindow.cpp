@@ -29,9 +29,11 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDesktopServices>
 #include <QGraphicsOpacityEffect>
 #include <QGraphicsDropShadowEffect>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -65,6 +67,7 @@
 #include <QHelpEvent>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QUrl>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPixmap>
@@ -91,6 +94,9 @@
 
 namespace
 {
+    constexpr const char *kDiscordInviteUrl = "https://discord.com/invite/UKYgsB6Zrx";
+    constexpr const char *kBoostyUrl = "https://boosty.to/vovanruslvsc2/donate";
+
     struct Sc2FileOpenFilter
     {
         QString label;
@@ -534,21 +540,33 @@ namespace
                    : DataCollectionMode::Unit;
     }
 
-    bool isArchiveReferenceEntry(const QString &entry)
+    enum class ArchiveReferenceStrength
+    {
+        None,
+        Weak,
+        Strong
+    };
+
+    ArchiveReferenceStrength archiveReferenceStrength(const QString &entry)
     {
         const QString normalized = QDir::cleanPath(entry).replace('\\', '/').toLower();
         const QString name = normalized.section('/', -1);
-        static const QSet<QString> exactNames = {
-            QStringLiteral("objects"), QStringLiteral("units"), QStringLiteral("regions"),
-            QStringLiteral("triggers"), QStringLiteral("mapinfo"), QStringLiteral("documentinfo"),
+        if (name == QStringLiteral("objects") || name == QStringLiteral("units")
+            || name == QStringLiteral("triggers") || normalized.contains(QStringLiteral("trigger")))
+            return ArchiveReferenceStrength::Strong;
+        const QString suffix = QFileInfo(name).suffix().toLower();
+        if (suffix == QStringLiteral("galaxy"))
+            return ArchiveReferenceStrength::Strong;
+        static const QSet<QString> weakNames = {
+            QStringLiteral("regions"), QStringLiteral("mapinfo"), QStringLiteral("documentinfo"),
             QStringLiteral("preload.xml"), QStringLiteral("componentlist.sc2components")};
-        if (exactNames.contains(name))
-            return true;
-        static const QSet<QString> extensions = {
-            QStringLiteral("galaxy"), QStringLiteral("txt"), QStringLiteral("ini"),
-            QStringLiteral("json"), QStringLiteral("yaml"), QStringLiteral("yml"),
-            QStringLiteral("version"), QStringLiteral("sc2components")};
-        return extensions.contains(QFileInfo(name).suffix().toLower());
+        if (weakNames.contains(name))
+            return ArchiveReferenceStrength::Weak;
+        static const QSet<QString> weakExtensions = {
+            QStringLiteral("txt"), QStringLiteral("ini"), QStringLiteral("json"),
+            QStringLiteral("yaml"), QStringLiteral("yml"), QStringLiteral("version"),
+            QStringLiteral("sc2components")};
+        return weakExtensions.contains(suffix) ? ArchiveReferenceStrength::Weak : ArchiveReferenceStrength::None;
     }
 
     void collectKnownIdTokens(const QByteArray &bytes, const QSet<QString> &knownIds, QSet<QString> *found)
@@ -591,6 +609,69 @@ namespace
             }
             start = qMax(end, start + 1);
         }
+    }
+
+    void collectKnownIdTokenSources(const QByteArray &bytes, const QSet<QString> &knownIds,
+                                    const QString &source, QHash<QString, QStringList> *found)
+    {
+        QSet<QString> ids;
+        collectKnownIdTokens(bytes, knownIds, &ids);
+        if (!found)
+            return;
+        for (const QString &id : ids)
+            (*found)[id].append(source);
+    }
+
+    bool isSupportedSc2Archive(const QFileInfo &info)
+    {
+        const QString suffix = info.suffix();
+        return suffix.compare(QStringLiteral("SC2Map"), Qt::CaseInsensitive) == 0
+            || suffix.compare(QStringLiteral("SC2Mod"), Qt::CaseInsensitive) == 0
+            || suffix.compare(QStringLiteral("SC2Components"), Qt::CaseInsensitive) == 0
+            || suffix.compare(QStringLiteral("SC2Campaign"), Qt::CaseInsensitive) == 0
+            || suffix.compare(QStringLiteral("SC2Archive"), Qt::CaseInsensitive) == 0;
+    }
+
+    QStringList collectArchiveFiles(const QString &folderPath)
+    {
+        QStringList archives;
+        QDirIterator it(folderPath, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext())
+        {
+            const QString filePath = it.next();
+            const QString relative = QDir(folderPath).relativeFilePath(filePath).replace('\\', '/');
+            const QString relativeLower = relative.toLower();
+            const QString fileNameLower = QFileInfo(filePath).fileName().toLower();
+            if (relative.startsWith(QStringLiteral("backup_"), Qt::CaseInsensitive)
+                || relative.contains(QStringLiteral("/backup_"), Qt::CaseInsensitive)
+                || relativeLower.startsWith(QStringLiteral("orig/"))
+                || relativeLower.contains(QStringLiteral("/orig/"))
+                || fileNameLower.contains(QStringLiteral(".bak-"))
+                || fileNameLower.contains(QStringLiteral(".bak.")))
+                continue;
+            if (isSupportedSc2Archive(QFileInfo(filePath)))
+                archives.append(filePath);
+        }
+        std::sort(archives.begin(), archives.end(), [](const QString &left, const QString &right)
+        {
+            return QString::compare(left, right, Qt::CaseInsensitive) < 0;
+        });
+        return archives;
+    }
+
+    bool persistentBackupsEnabledForUi()
+    {
+        return QSettings().value(QStringLiteral("backup/enabled"), true).toBool();
+    }
+
+    QString backupPrompt(const QString &withBackup, const QString &withoutBackup)
+    {
+        return persistentBackupsEnabledForUi() ? withBackup : withoutBackup;
+    }
+
+    QString archiveFolderReadOnlyMessage()
+    {
+        return QStringLiteral("Archive folder mode analyzes multiple maps/mods together and is read-only. Open a single SC2Map/SC2Mod archive or an extracted folder to apply changes.");
     }
 
     class PersistentTabToolTipFilter final : public QObject
@@ -761,6 +842,117 @@ namespace
         QByteArray m_soundData;
     };
 
+    class PromoButtonAnimator final : public QObject
+    {
+    public:
+        explicit PromoButtonAnimator(QObject *parent = nullptr)
+            : QObject(parent)
+        {
+        }
+
+        void installOn(QToolButton *button, const QSize &normalIcon, const QSize &hoverIcon, const QColor &glowColor)
+        {
+            if (!button)
+                return;
+            auto *effect = new QGraphicsDropShadowEffect(button);
+            effect->setOffset(0, 0);
+            effect->setBlurRadius(0);
+            effect->setColor(QColor(glowColor.red(), glowColor.green(), glowColor.blue(), 0));
+            button->setGraphicsEffect(effect);
+
+            State state;
+            state.effect = effect;
+            state.normalIcon = normalIcon;
+            state.hoverIcon = hoverIcon;
+            state.pressIcon = !normalIcon.isEmpty()
+                                  ? QSize(qMax(1, int(normalIcon.width() * 0.88)), qMax(1, int(normalIcon.height() * 0.88)))
+                                  : QSize();
+            state.glowColor = glowColor;
+            m_states.insert(button, state);
+            button->installEventFilter(this);
+        }
+
+    protected:
+        bool eventFilter(QObject *watched, QEvent *event) override
+        {
+            auto it = m_states.find(watched);
+            if (it == m_states.end())
+                return QObject::eventFilter(watched, event);
+            auto *button = qobject_cast<QToolButton *>(watched);
+            if (!button || !button->isEnabled())
+                return QObject::eventFilter(watched, event);
+
+            State &state = it.value();
+            switch (event->type())
+            {
+            case QEvent::Enter:
+                state.hovering = true;
+                animateGlow(button, 18.0);
+                animateIcon(button, state.hoverIcon);
+                break;
+            case QEvent::Leave:
+                state.hovering = false;
+                animateGlow(button, 0.0);
+                animateIcon(button, state.normalIcon);
+                break;
+            case QEvent::MouseButtonPress:
+                animateGlow(button, 27.0);
+                animateIcon(button, state.pressIcon);
+                break;
+            case QEvent::MouseButtonRelease:
+                animateGlow(button, state.hovering ? 18.0 : 0.0);
+                animateIcon(button, state.hovering ? state.hoverIcon : state.normalIcon);
+                break;
+            default:
+                break;
+            }
+            return QObject::eventFilter(watched, event);
+        }
+
+    private:
+        struct State
+        {
+            QGraphicsDropShadowEffect *effect = nullptr;
+            QSize normalIcon;
+            QSize hoverIcon;
+            QSize pressIcon;
+            QColor glowColor;
+            bool hovering = false;
+        };
+
+        void animateGlow(QToolButton *button, qreal target)
+        {
+            State &state = m_states[button];
+            if (!state.effect)
+                return;
+            state.effect->setColor(target > 0.0
+                                       ? state.glowColor
+                                       : QColor(state.glowColor.red(), state.glowColor.green(), state.glowColor.blue(), 0));
+            auto *animation = new QPropertyAnimation(state.effect, "blurRadius", state.effect);
+            animation->setDuration(160);
+            animation->setStartValue(state.effect->blurRadius());
+            animation->setEndValue(target);
+            animation->setEasingCurve(QEasingCurve::OutCubic);
+            connect(animation, &QPropertyAnimation::finished, animation, &QObject::deleteLater);
+            animation->start();
+        }
+
+        void animateIcon(QToolButton *button, const QSize &target)
+        {
+            if (!button || target.isEmpty())
+                return;
+            auto *animation = new QPropertyAnimation(button, "iconSize", button);
+            animation->setDuration(130);
+            animation->setStartValue(button->iconSize());
+            animation->setEndValue(target);
+            animation->setEasingCurve(QEasingCurve::OutBack);
+            connect(animation, &QPropertyAnimation::finished, animation, &QObject::deleteLater);
+            animation->start();
+        }
+
+        QHash<QObject *, State> m_states;
+    };
+
     QString defaultTestFolder()
     {
         return QStringLiteral("C:/Users/Vladimir/Downloads/Regenerate_trigger/TriggerCustom/comp");
@@ -794,8 +986,10 @@ namespace
         case 0:
             return QStringLiteral("Mode: folder analysis");
         case 1:
-            return QStringLiteral("Mode: XML file analysis");
+            return QStringLiteral("Mode: archive folder analysis (read-only)");
         case 2:
+            return QStringLiteral("Mode: XML file analysis");
+        case 3:
             return QStringLiteral("Mode: archive analysis (read-only)");
         default:
             return QStringLiteral("Mode: waiting for analysis");
@@ -842,28 +1036,73 @@ void MainWindow::setupUi()
     toolbar->setIconSize(QSize(0, 0));
     toolbar->setMinimumHeight(58);
 
-    m_openFileAction = toolbar->addAction(QStringLiteral("Open SC2 File"));
-    m_analyzeAction = toolbar->addAction(QStringLiteral("Analyze"));
-    m_dryRunAction = toolbar->addAction(QStringLiteral("Optimization"));
-    m_applyAction = toolbar->addAction(QStringLiteral("Review Optimization Plan"));
-    m_settingsAction = toolbar->addAction(QStringLiteral("Settings"));
-    m_fullscreenAction = toolbar->addAction(QStringLiteral("Fullscreen"));
-    m_exitAction = toolbar->addAction(QStringLiteral("Exit"));
+    m_openFileAction = new QAction(QStringLiteral("Open SC2 File"), this);
+    m_openFolderAction = new QAction(QStringLiteral("Open Folder"), this);
+    m_analyzeAction = new QAction(QStringLiteral("Analyze"), this);
+    m_dryRunAction = new QAction(QStringLiteral("Optimization"), this);
+    m_applyAction = new QAction(QStringLiteral("Review Optimization Plan"), this);
+    m_settingsAction = new QAction(QStringLiteral("Settings"), this);
+    m_fullscreenAction = new QAction(QStringLiteral("Fullscreen"), this);
+    m_exitAction = new QAction(QStringLiteral("Exit"), this);
     m_analyzeAction->setShortcut(QKeySequence(Qt::Key_F5));
     m_analyzeAction->setShortcutContext(Qt::ApplicationShortcut);
     m_analyzeAction->setToolTip(QStringLiteral("Analyze / refresh the current project (F5)"));
     m_dryRunAction->setEnabled(false);
     m_applyAction->setEnabled(false);
 
-    m_pathEdit = new QLineEdit(toolbar);
+    m_pathEdit = new QLineEdit(this);
     m_pathEdit->setObjectName(QStringLiteral("pathEdit"));
     m_pathEdit->setPlaceholderText(QStringLiteral("Selected source path"));
-    m_pathEdit->setMinimumWidth(320);
-    m_pathEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     m_pathEdit->setReadOnly(true);
     m_pathEdit->setCursorPosition(0);
-    toolbar->addSeparator();
-    toolbar->addWidget(m_pathEdit);
+    m_pathEdit->hide();
+
+    auto *toolbarContent = new QWidget(toolbar);
+    toolbarContent->setObjectName(QStringLiteral("mainToolbarContent"));
+    toolbarContent->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    auto *toolbarLayout = new QHBoxLayout(toolbarContent);
+    toolbarLayout->setContentsMargins(0, 0, 0, 0);
+    toolbarLayout->setSpacing(0);
+    const auto addActionButton = [toolbarContent, toolbarLayout](QAction *action, int stretch)
+    {
+        auto *button = new QToolButton(toolbarContent);
+        button->setDefaultAction(action);
+        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        toolbarLayout->addWidget(button, stretch);
+        return button;
+    };
+    addActionButton(m_openFileAction, 1);
+    addActionButton(m_openFolderAction, 1);
+    addActionButton(m_analyzeAction, 1);
+    addActionButton(m_dryRunAction, 1);
+    addActionButton(m_applyAction, 2);
+    addActionButton(m_settingsAction, 1);
+    addActionButton(m_fullscreenAction, 1);
+    addActionButton(m_exitAction, 1);
+
+    auto *discordButton = new QToolButton(toolbarContent);
+    discordButton->setObjectName(QStringLiteral("discordPromoButton"));
+    discordButton->setIcon(QIcon(QStringLiteral(":/textures/Discord.png")));
+    discordButton->setIconSize(QSize(30, 30));
+    discordButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    discordButton->setToolTip(QStringLiteral("Join Discord"));
+    discordButton->setCursor(Qt::PointingHandCursor);
+    discordButton->setFocusPolicy(Qt::NoFocus);
+    discordButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    toolbarLayout->addWidget(discordButton, 1);
+
+    auto *boostyButton = new QToolButton(toolbarContent);
+    boostyButton->setObjectName(QStringLiteral("boostyPromoButton"));
+    boostyButton->setText(QStringLiteral("Boosty"));
+    boostyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    boostyButton->setToolTip(QStringLiteral("Support on Boosty"));
+    boostyButton->setCursor(Qt::PointingHandCursor);
+    boostyButton->setFocusPolicy(Qt::NoFocus);
+    boostyButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    toolbarLayout->addWidget(boostyButton, 1);
+    toolbar->addWidget(toolbarContent);
 
     auto *root = new Sc2BackgroundWidget(this);
     root->setObjectName(QStringLiteral("workspaceRoot"));
@@ -949,6 +1188,7 @@ void MainWindow::setupUi()
     rootLayout->addWidget(splitterFrame, 1);
     setCentralWidget(root);
     connect(m_openFileAction, &QAction::triggered, this, &MainWindow::openSc2File);
+    connect(m_openFolderAction, &QAction::triggered, this, &MainWindow::openSourceFolder);
     connect(m_analyzeAction, &QAction::triggered, this, &MainWindow::analyzeFolder);
     connect(m_dryRunAction, &QAction::triggered, this, &MainWindow::runDryRun);
     connect(m_applyAction, &QAction::triggered, this, &MainWindow::showDryRunTab);
@@ -959,6 +1199,17 @@ void MainWindow::setupUi()
         AudioManager::instance()->shutdown();
         QApplication::closeAllWindows();
         QCoreApplication::quit(); });
+    const auto openSupportUrl = [this](const char *url, const QString &label)
+    {
+        if (!QDesktopServices::openUrl(QUrl(QString::fromLatin1(url))))
+        {
+            QMessageBox::warning(this, label, QStringLiteral("Unable to open link: %1").arg(QString::fromLatin1(url)));
+        }
+    };
+    connect(discordButton, &QToolButton::clicked, this, [openSupportUrl]
+            { openSupportUrl(kDiscordInviteUrl, QStringLiteral("Discord")); });
+    connect(boostyButton, &QToolButton::clicked, this, [openSupportUrl]
+            { openSupportUrl(kBoostyUrl, QStringLiteral("Boosty")); });
     connect(m_duplicatesPage, &DuplicatesPage::previewMergeRequested, this, &MainWindow::previewMerge);
     connect(m_duplicatesPage, &DuplicatesPage::applyMergeRequested, this, &MainWindow::applyMerge);
     connect(m_cleanupPage, &UnusedPage::previewDeletionRequested, this, &MainWindow::previewUnusedDeletion);
@@ -1043,11 +1294,18 @@ void MainWindow::setupUi()
     {
         if (auto *toolButton = qobject_cast<QToolButton *>(button))
         {
-            const int textWidth = toolButton->fontMetrics().horizontalAdvance(toolButton->text());
-            toolButton->setMinimumWidth(qMax(toolButton->minimumWidth(), textWidth + 58));
+            const QString name = toolButton->objectName();
+            if (name != QStringLiteral("discordPromoButton") && name != QStringLiteral("boostyPromoButton"))
+            {
+                const int textWidth = toolButton->fontMetrics().horizontalAdvance(toolButton->text());
+                toolButton->setMinimumWidth(qMax(toolButton->minimumWidth(), textWidth + 58));
+            }
         }
         effects->installOn(button);
     }
+    auto *promoAnimator = new PromoButtonAnimator(this);
+    promoAnimator->installOn(discordButton, QSize(30, 30), QSize(36, 36), QColor(88, 190, 255, 220));
+    promoAnimator->installOn(boostyButton, QSize(), QSize(), QColor(255, 176, 74, 230));
 
     for (QLabel *label : findChildren<QLabel *>())
     {
@@ -1119,7 +1377,8 @@ void MainWindow::showSettingsDialog()
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("toolDialog"));
     dialog.setWindowTitle(QStringLiteral("SC2 Data Helper Settings"));
-    dialog.setFixedSize(640, 540);
+    dialog.setMinimumSize(820, 660);
+    dialog.resize(860, 700);
     auto *layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(20, 18, 20, 18);
     layout->setSpacing(10);
@@ -1158,13 +1417,17 @@ void MainWindow::showSettingsDialog()
         QStringLiteral("Enable Duplicate Merge in Optimization"),
         settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), false).toBool(),
         QStringLiteral("Disabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
+    auto *backupCheck = checkBoxRow(
+        QStringLiteral("Create backup files before applying changes"),
+        settings.value(QStringLiteral("backup/enabled"), true).toBool(),
+        QStringLiteral("When disabled, SC2 archives and folders are edited without creating persistent .bak or backup_ copies."));
     auto *startFullscreenCheck = checkBoxRow(QStringLiteral("Start in full screen"),
                                              settings.value(QStringLiteral("ui/startFullscreen"), true).toBool());
     auto *collectionModeLabel = new QLabel(QStringLiteral("DATA COLLECTION MODE"), &dialog);
     collectionModeLabel->setObjectName(QStringLiteral("panelTitle"));
     auto *collectionMode = new QComboBox(&dialog);
-    collectionMode->addItem(QStringLiteral("Unit — one collection per unit family"), QStringLiteral("Unit"));
-    collectionMode->addItem(QStringLiteral("UnitAbilWeapon — separate Unit, Ability and Weapon collections"), QStringLiteral("UnitAbilWeapon"));
+    collectionMode->addItem(QStringLiteral("Unit - one collection per unit family"), QStringLiteral("Unit"));
+    collectionMode->addItem(QStringLiteral("UnitAbilWeapon - separate Unit, Ability and Weapon collections"), QStringLiteral("UnitAbilWeapon"));
     const QString savedCollectionMode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("Unit")).toString();
     collectionMode->setCurrentIndex(qMax(0, collectionMode->findData(savedCollectionMode)));
     collectionMode->setToolTip(QStringLiteral("Unit keeps the current behavior. UnitAbilWeapon creates separate collections like Gargantua, Gargantua_Jump and Gargantua_Weapon."));
@@ -1174,6 +1437,7 @@ void MainWindow::showSettingsDialog()
     layout->addWidget(musicValue);
     layout->addWidget(musicSlider);
     layout->addWidget(duplicatesCheck);
+    layout->addWidget(backupCheck);
     layout->addWidget(startFullscreenCheck);
     layout->addWidget(collectionModeLabel);
     layout->addWidget(collectionMode);
@@ -1185,6 +1449,7 @@ void MainWindow::showSettingsDialog()
         settings.setValue(QStringLiteral("ui/buttonSounds"), soundCheck->isChecked());
         settings.setValue(QStringLiteral("ui/buttonAnimations"), animationCheck->isChecked());
         settings.setValue(QStringLiteral("optimization/duplicateMergeEnabled"), duplicatesCheck->isChecked());
+        settings.setValue(QStringLiteral("backup/enabled"), backupCheck->isChecked());
         settings.setValue(QStringLiteral("ui/startFullscreen"), startFullscreenCheck->isChecked());
         settings.setValue(QStringLiteral("dataCollection/mode"), collectionMode->currentData().toString());
         AudioManager::setMusicSettings(musicCheck->isChecked(), musicSlider->value() / 100.0);
@@ -1243,10 +1508,10 @@ void MainWindow::loadDefaultFolder()
     const QFileInfo info(folder);
     m_rootFolder = info.isDir() ? folder : info.absolutePath();
     if (info.isDir())
-        m_sourceKind = SourceKind::Folder;
+        m_sourceKind = collectArchiveFiles(folder).isEmpty() ? SourceKind::Folder : SourceKind::ArchiveFolder;
     else if (info.suffix().compare(QStringLiteral("xml"), Qt::CaseInsensitive) == 0)
         m_sourceKind = SourceKind::XmlFile;
-    else if (info.suffix().startsWith(QStringLiteral("SC2"), Qt::CaseInsensitive))
+    else if (isSupportedSc2Archive(info))
         m_sourceKind = SourceKind::ArchiveFile;
     else
         m_sourceKind = SourceKind::Folder;
@@ -1314,7 +1579,7 @@ void MainWindow::openSc2File()
     const bool previousReviewEnabled = m_applyAction && m_applyAction->isEnabled();
     if (info.suffix().compare(QStringLiteral("xml"), Qt::CaseInsensitive) == 0)
         m_sourceKind = SourceKind::XmlFile;
-    else if (info.suffix().startsWith(QStringLiteral("SC2"), Qt::CaseInsensitive))
+    else if (isSupportedSc2Archive(info))
         m_sourceKind = SourceKind::ArchiveFile;
     else
         m_sourceKind = SourceKind::Unknown;
@@ -1329,6 +1594,34 @@ void MainWindow::openSc2File()
     m_dryRunAction->setEnabled(previousOptimizationEnabled);
     m_applyAction->setEnabled(previousReviewEnabled);
     logLine(QStringLiteral("File selected without analysis: %1").arg(selected));
+}
+
+void MainWindow::openSourceFolder()
+{
+    QSettings settings;
+    const QString savedPath = settings.value(QStringLiteral("paths/lastSourcePath")).toString();
+    QString startPath = !m_currentSourcePath.isEmpty() ? m_currentSourcePath : savedPath;
+    if (!startPath.isEmpty() && !QFileInfo(startPath).isDir())
+        startPath = QFileInfo(startPath).absolutePath();
+
+    const QString selected = QFileDialog::getExistingDirectory(this, QStringLiteral("Open SC2 Folder"), startPath);
+    if (selected.isEmpty())
+        return;
+
+    const bool previousOptimizationEnabled = m_dryRunAction && m_dryRunAction->isEnabled();
+    const bool previousReviewEnabled = m_applyAction && m_applyAction->isEnabled();
+    m_rootFolder = selected;
+    m_sourceKind = collectArchiveFiles(selected).isEmpty() ? SourceKind::Folder : SourceKind::ArchiveFolder;
+    setCurrentSourcePath(selected);
+    settings.setValue(QStringLiteral("paths/lastSourcePath"), selected);
+    m_analysisPage->setFolderPath(selected);
+    m_analysisPage->setModeLabel(QStringLiteral("Mode: ready to analyze"));
+    m_analysisPage->setOutputText(QStringLiteral("Folder selected. Press Analyze to start scanning."));
+    if (m_result.nodes.isEmpty())
+        refreshPages();
+    m_dryRunAction->setEnabled(previousOptimizationEnabled);
+    m_applyAction->setEnabled(previousReviewEnabled);
+    logLine(QStringLiteral("Folder selected without analysis: %1").arg(selected));
 }
 
 void MainWindow::analyzeFolder()
@@ -1377,15 +1670,17 @@ bool MainWindow::loadPathAndAnalyze(const QString &path)
     QApplication::processEvents();
     if (info.isDir())
     {
-        m_sourceKind = SourceKind::Folder;
-        ok = analyzeFolderPath(path, &errorMessage);
+        const bool hasArchives = !collectArchiveFiles(path).isEmpty();
+        m_sourceKind = hasArchives ? SourceKind::ArchiveFolder : SourceKind::Folder;
+        ok = hasArchives ? analyzeArchiveFolderPath(path, &errorMessage)
+                         : analyzeFolderPath(path, &errorMessage);
     }
     else if (info.suffix().compare(QStringLiteral("xml"), Qt::CaseInsensitive) == 0)
     {
         m_sourceKind = SourceKind::XmlFile;
         ok = analyzeXmlFile(path, &errorMessage);
     }
-    else if (info.suffix().compare(QStringLiteral("SC2Map"), Qt::CaseInsensitive) == 0 || info.suffix().compare(QStringLiteral("SC2Mod"), Qt::CaseInsensitive) == 0 || info.suffix().compare(QStringLiteral("SC2Components"), Qt::CaseInsensitive) == 0 || info.suffix().compare(QStringLiteral("SC2Campaign"), Qt::CaseInsensitive) == 0 || info.suffix().compare(QStringLiteral("SC2Archive"), Qt::CaseInsensitive) == 0)
+    else if (isSupportedSc2Archive(info))
     {
         m_sourceKind = SourceKind::ArchiveFile;
         ok = analyzeArchiveFile(path, &errorMessage);
@@ -1484,6 +1779,10 @@ bool MainWindow::loadPathAndAnalyze(const QString &path)
 
 bool MainWindow::analyzeFolderPath(const QString &folderPath, QString *errorMessage)
 {
+    m_archiveReferencedIds.clear();
+    m_archiveStrongReferenceSources.clear();
+    m_archiveWeakReferenceSources.clear();
+    m_archiveReferenceScanComplete = false;
     return m_analyzer.analyzeFolder(folderPath, m_whitelistIds, &m_result, errorMessage, [this](int current, int total, const QString &file)
                                     {
             if (!m_activeProgressDialog) return;
@@ -1494,8 +1793,235 @@ bool MainWindow::analyzeFolderPath(const QString &folderPath, QString *errorMess
                                     { return m_activeProgressDialog && m_activeProgressDialog->isCancelled(); });
 }
 
+bool MainWindow::analyzeArchiveFolderPath(const QString &folderPath, QString *errorMessage)
+{
+    m_archiveReferencedIds.clear();
+    m_archiveStrongReferenceSources.clear();
+    m_archiveWeakReferenceSources.clear();
+    m_archiveReferenceScanComplete = false;
+
+    const QStringList archives = collectArchiveFiles(folderPath);
+    if (archives.isEmpty())
+    {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("No SC2 map/mod archives found in folder: %1").arg(folderPath);
+        return false;
+    }
+
+    m_result = AnalysisResult{};
+    m_result.rootFolder = folderPath;
+    XmlLoader loader;
+    QHash<QString, QStringList> entriesByArchive;
+    int xmlEntriesFound = 0;
+    int xmlEntriesLoaded = 0;
+
+    for (int archiveIndex = 0; archiveIndex < archives.size(); ++archiveIndex)
+    {
+        const QString &archivePath = archives[archiveIndex];
+        const QString archiveRelative = QDir(folderPath).relativeFilePath(archivePath).replace('\\', '/');
+        if (m_activeProgressDialog)
+        {
+            if (m_activeProgressDialog->isCancelled())
+            {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Analysis canceled.");
+                return false;
+            }
+            m_activeProgressDialog->setProgress(22 + (archiveIndex * 35 / qMax(1, archives.size())),
+                                                QStringLiteral("Opening SC2 archives"), archiveRelative);
+            QApplication::processEvents();
+        }
+
+        Sc2Archive archive;
+        QString archiveError;
+        if (!archive.load(archivePath, &archiveError))
+        {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("%1: %2").arg(archivePath, archiveError);
+            return false;
+        }
+
+        const QStringList entries = archive.allEntries();
+        entriesByArchive.insert(archivePath, entries);
+        logLine(QStringLiteral("Archive folder entry count: %1 -> %2").arg(archiveRelative).arg(entries.size()));
+
+        QStringList xmlEntries;
+        for (const QString &entry : entries)
+            if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive))
+                xmlEntries.append(entry);
+        xmlEntriesFound += xmlEntries.size();
+
+        for (int entryIndex = 0; entryIndex < xmlEntries.size(); ++entryIndex)
+        {
+            const QString &entryName = xmlEntries[entryIndex];
+            if (m_activeProgressDialog)
+            {
+                if (m_activeProgressDialog->isCancelled())
+                {
+                    if (errorMessage)
+                        *errorMessage = QStringLiteral("Analysis canceled.");
+                    return false;
+                }
+                m_activeProgressDialog->setProgress(30 + (archiveIndex * 40 / qMax(1, archives.size())),
+                                                    QStringLiteral("Extracting archive XML"),
+                                                    QStringLiteral("%1::%2").arg(archiveRelative, entryName));
+                QApplication::processEvents();
+            }
+
+            QByteArray xmlBytes;
+            QString readError;
+            const QString sourceName = QStringLiteral("%1::%2").arg(archiveRelative, entryName);
+            if (!archive.readEntry(entryName, &xmlBytes, &readError))
+            {
+                ParseErrorInfo error;
+                error.filePath = sourceName;
+                error.message = readError;
+                m_result.parseErrors.append(error);
+                continue;
+            }
+
+            ScannedFileInfo scanned;
+            scanned.filePath = sourceName;
+            scanned.isXml = true;
+            scanned.isSc2DataLike = true;
+            scanned.size = xmlBytes.size();
+            m_result.scannedFiles.append(scanned);
+            m_result.sourceXmlByFile.insert(sourceName, QString::fromUtf8(xmlBytes));
+
+            QVector<DataNode> fileNodes;
+            QString parseError;
+            if (!loader.extractNodes(sourceName, xmlBytes, &fileNodes, &parseError))
+            {
+                ParseErrorInfo error;
+                error.filePath = sourceName;
+                error.message = parseError;
+                m_result.parseErrors.append(error);
+                continue;
+            }
+            m_result.nodes += fileNodes;
+            ++xmlEntriesLoaded;
+        }
+    }
+
+    logLine(QStringLiteral("Archive folder scan: archives=%1, XML entries=%2, XML loaded=%3")
+                .arg(archives.size())
+                .arg(xmlEntriesFound)
+                .arg(xmlEntriesLoaded));
+    if (m_result.sourceXmlByFile.isEmpty())
+    {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("No XML files found inside SC2 archives in folder: %1").arg(folderPath);
+        return false;
+    }
+
+    if (!m_analyzer.finalizeAnalysisResult(&m_result, m_whitelistIds, errorMessage, [this]
+                                           {
+            if (!m_activeProgressDialog)
+                return;
+            m_activeProgressDialog->setProgress(82,
+                                                QStringLiteral("Analyzing extracted XML"),
+                                                QStringLiteral("Building references, duplicate groups and candidates"));
+            QApplication::processEvents(); }, [this]
+                                           { return m_activeProgressDialog && m_activeProgressDialog->isCancelled(); }))
+    {
+        return false;
+    }
+
+    QSet<QString> knownIds;
+    for (const DataNode &node : m_result.nodes)
+        if (!node.id.isEmpty())
+            knownIds.insert(node.id);
+
+    m_archiveReferenceScanComplete = true;
+    int scannedReferenceEntries = 0;
+    int strongReferenceEntries = 0;
+    int weakReferenceEntries = 0;
+    for (int archiveIndex = 0; archiveIndex < archives.size(); ++archiveIndex)
+    {
+        const QString &archivePath = archives[archiveIndex];
+        const QString archiveRelative = QDir(folderPath).relativeFilePath(archivePath).replace('\\', '/');
+        Sc2Archive archive;
+        QString archiveError;
+        if (!archive.load(archivePath, &archiveError))
+        {
+            m_archiveReferenceScanComplete = false;
+            logLine(QStringLiteral("Archive reference scan failed to reopen %1: %2").arg(archiveRelative, archiveError));
+            continue;
+        }
+
+        const QStringList entries = entriesByArchive.value(archivePath, archive.allEntries());
+        for (const QString &entry : entries)
+        {
+            const ArchiveReferenceStrength strength = archiveReferenceStrength(entry);
+            if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive) || strength == ArchiveReferenceStrength::None)
+                continue;
+            if (m_activeProgressDialog)
+            {
+                if (m_activeProgressDialog->isCancelled())
+                {
+                    if (errorMessage)
+                        *errorMessage = QStringLiteral("Analysis canceled.");
+                    return false;
+                }
+                m_activeProgressDialog->setProgress(86,
+                                                    QStringLiteral("Checking archive references"),
+                                                    QStringLiteral("%1::%2").arg(archiveRelative, entry));
+                QApplication::processEvents();
+            }
+
+            QByteArray bytes;
+            QString readError;
+            if (!archive.readEntry(entry, &bytes, &readError))
+            {
+                if (strength == ArchiveReferenceStrength::Strong)
+                    m_archiveReferenceScanComplete = false;
+                logLine(QStringLiteral("Archive reference scan failed for %1::%2: %3").arg(archiveRelative, entry, readError));
+                continue;
+            }
+            const QString sourceLabel = QStringLiteral("%1::%2 [%3]")
+                                            .arg(archiveRelative,
+                                                 entry,
+                                                 strength == ArchiveReferenceStrength::Strong
+                                                     ? QStringLiteral("map/trigger/script")
+                                                     : QStringLiteral("metadata/text"));
+            if (strength == ArchiveReferenceStrength::Strong)
+            {
+                collectKnownIdTokenSources(bytes, knownIds, sourceLabel, &m_archiveStrongReferenceSources);
+                ++strongReferenceEntries;
+            }
+            else
+            {
+                collectKnownIdTokenSources(bytes, knownIds, sourceLabel, &m_archiveWeakReferenceSources);
+                ++weakReferenceEntries;
+            }
+            ++scannedReferenceEntries;
+        }
+    }
+
+    for (auto it = m_archiveStrongReferenceSources.begin(); it != m_archiveStrongReferenceSources.end(); ++it)
+    {
+        it.value().removeDuplicates();
+        m_archiveReferencedIds.insert(it.key());
+    }
+    for (auto it = m_archiveWeakReferenceSources.begin(); it != m_archiveWeakReferenceSources.end(); ++it)
+        it.value().removeDuplicates();
+    logLine(QStringLiteral("Archive folder reference-bearing entries scanned: %1; strong entries: %2; weak entries: %3; strong IDs: %4; weak IDs: %5")
+                .arg(scannedReferenceEntries)
+                .arg(strongReferenceEntries)
+                .arg(weakReferenceEntries)
+                .arg(m_archiveStrongReferenceSources.size())
+                .arg(m_archiveWeakReferenceSources.size()));
+
+    normalizeArchiveAnalysis(&m_result, QString(), folderPath);
+    return true;
+}
+
 bool MainWindow::analyzeXmlFile(const QString &filePath, QString *errorMessage)
 {
+    m_archiveReferencedIds.clear();
+    m_archiveStrongReferenceSources.clear();
+    m_archiveWeakReferenceSources.clear();
+    m_archiveReferenceScanComplete = false;
     if (m_activeProgressDialog && m_activeProgressDialog->isCancelled())
     {
         if (errorMessage)
@@ -1552,6 +2078,8 @@ bool MainWindow::analyzeXmlFile(const QString &filePath, QString *errorMessage)
 bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessage)
 {
     m_archiveReferencedIds.clear();
+    m_archiveStrongReferenceSources.clear();
+    m_archiveWeakReferenceSources.clear();
     m_archiveReferenceScanComplete = false;
     Sc2Archive archive;
     QString archiveError;
@@ -1652,10 +2180,13 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
     m_archiveReferenceScanComplete = true;
     const QStringList archiveEntries = archive.allEntries();
     int scannedReferenceEntries = 0;
+    int strongReferenceEntries = 0;
+    int weakReferenceEntries = 0;
     for (int index = 0; index < archiveEntries.size(); ++index)
     {
         const QString &entry = archiveEntries[index];
-        if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive) || !isArchiveReferenceEntry(entry))
+        const ArchiveReferenceStrength strength = archiveReferenceStrength(entry);
+        if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive) || strength == ArchiveReferenceStrength::None)
             continue;
         if (m_activeProgressDialog)
         {
@@ -1672,16 +2203,41 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
         QString readError;
         if (!archive.readEntry(entry, &bytes, &readError))
         {
-            m_archiveReferenceScanComplete = false;
+            if (strength == ArchiveReferenceStrength::Strong)
+                m_archiveReferenceScanComplete = false;
             logLine(QStringLiteral("Archive reference scan failed for %1: %2").arg(entry, readError));
             continue;
         }
-        collectKnownIdTokens(bytes, knownIds, &m_archiveReferencedIds);
+        const QString sourceLabel = QStringLiteral("%1 [%2]")
+                                        .arg(entry,
+                                             strength == ArchiveReferenceStrength::Strong
+                                                 ? QStringLiteral("map/trigger/script")
+                                                 : QStringLiteral("metadata/text"));
+        if (strength == ArchiveReferenceStrength::Strong)
+        {
+            collectKnownIdTokenSources(bytes, knownIds, sourceLabel, &m_archiveStrongReferenceSources);
+            ++strongReferenceEntries;
+        }
+        else
+        {
+            collectKnownIdTokenSources(bytes, knownIds, sourceLabel, &m_archiveWeakReferenceSources);
+            ++weakReferenceEntries;
+        }
         ++scannedReferenceEntries;
     }
-    logLine(QStringLiteral("Archive reference-bearing entries scanned: %1; referenced IDs found: %2")
+    for (auto it = m_archiveStrongReferenceSources.begin(); it != m_archiveStrongReferenceSources.end(); ++it)
+    {
+        it.value().removeDuplicates();
+        m_archiveReferencedIds.insert(it.key());
+    }
+    for (auto it = m_archiveWeakReferenceSources.begin(); it != m_archiveWeakReferenceSources.end(); ++it)
+        it.value().removeDuplicates();
+    logLine(QStringLiteral("Archive reference-bearing entries scanned: %1; strong entries: %2; weak entries: %3; strong IDs: %4; weak IDs: %5")
                 .arg(scannedReferenceEntries)
-                .arg(m_archiveReferencedIds.size()));
+                .arg(strongReferenceEntries)
+                .arg(weakReferenceEntries)
+                .arg(m_archiveStrongReferenceSources.size())
+                .arg(m_archiveWeakReferenceSources.size()));
 
     normalizeArchiveAnalysis(&m_result, QString(), filePath);
     return true;
@@ -1718,21 +2274,39 @@ void MainWindow::applyArchiveReferenceSafety(AnalysisResult *analysis) const
     {
         if (candidate.state != CandidateState::Safe)
             continue;
-        const bool externallyReferenced = candidate.nodeIndex >= 0 && candidate.nodeIndex < analysis->nodes.size() && m_archiveReferencedIds.contains(analysis->nodes[candidate.nodeIndex].id);
-        if (!m_archiveReferenceScanComplete || externallyReferenced)
+        QString id;
+        if (candidate.nodeIndex >= 0 && candidate.nodeIndex < analysis->nodes.size())
+            id = analysis->nodes[candidate.nodeIndex].id;
+        const QStringList strongSources = m_archiveStrongReferenceSources.value(id);
+        const QStringList weakSources = m_archiveWeakReferenceSources.value(id);
+        if (!strongSources.isEmpty())
+            candidate.externalReferenceSources.append(strongSources);
+        if (!weakSources.isEmpty())
+            candidate.externalReferenceSources.append(weakSources);
+        candidate.externalReferenceSources.removeDuplicates();
+
+        if (!m_archiveReferenceScanComplete || !strongSources.isEmpty())
         {
             candidate.state = CandidateState::Blocked;
             candidate.usageState = UsageState::Blocked;
             candidate.protectedObject = true;
             candidate.reason = !m_archiveReferenceScanComplete
                                    ? QStringLiteral("Archive reference scan was incomplete")
-                                   : QStringLiteral("Referenced by archive placement, trigger, or script data");
+                                   : QStringLiteral("Referenced by archive placement, trigger, or script data: %1")
+                                         .arg(strongSources.mid(0, 6).join(QStringLiteral(", ")));
             candidate.riskLevel = QStringLiteral("high");
             if (candidate.nodeIndex >= 0 && candidate.nodeIndex < analysis->nodes.size())
                 analysis->nodes[candidate.nodeIndex].candidateUnused = false;
         }
         else
         {
+            if (!weakSources.isEmpty())
+            {
+                candidate.reason += QStringLiteral("; weak archive metadata/text token: %1")
+                                        .arg(weakSources.mid(0, 6).join(QStringLiteral(", ")));
+                if (candidate.riskLevel == QStringLiteral("low"))
+                    candidate.riskLevel = QStringLiteral("medium");
+            }
             analysis->possibleUnusedNodeIndices.append(candidate.nodeIndex);
         }
     }
@@ -1902,10 +2476,12 @@ void MainWindow::applySelectedChanges()
         return;
     }
 
-    if (m_sourceKind == SourceKind::ArchiveFile)
+    if (m_sourceKind == SourceKind::ArchiveFile || m_sourceKind == SourceKind::ArchiveFolder)
     {
         QMessageBox::information(this, QStringLiteral("Apply"),
-                                 QStringLiteral("Archive apply is not available in this build. Use folder or XML input."));
+                                 m_sourceKind == SourceKind::ArchiveFolder
+                                     ? archiveFolderReadOnlyMessage()
+                                     : QStringLiteral("Archive apply is not available in this build. Use folder or XML input."));
         return;
     }
 
@@ -1920,7 +2496,9 @@ void MainWindow::applySelectedChanges()
     m_dryRunPage->setPreview(planned);
     showDryRunTab();
 
-    const QString backupHint = QStringLiteral("This will create a backup folder before editing. Continue?");
+    const QString backupHint = backupPrompt(
+        QStringLiteral("This will create a backup folder before editing. Continue?"),
+        QStringLiteral("Backups are disabled in Settings. Apply selected changes without creating a persistent backup?"));
     if (QMessageBox::question(this, QStringLiteral("Apply Selected Changes"), backupHint) != QMessageBox::Yes)
     {
         logLine(QStringLiteral("Apply canceled by user."));
@@ -1982,6 +2560,13 @@ void MainWindow::applySelectedChanges()
 void MainWindow::previewMerge(const MergeRequest &request)
 {
     MergePreview preview;
+    if (m_sourceKind == SourceKind::ArchiveFolder)
+    {
+        m_previewedMerge = request;
+        m_mergePreviewValid = false;
+        m_duplicatesPage->setPreviewText(archiveFolderReadOnlyMessage(), false);
+        return;
+    }
     if (m_sourceKind == SourceKind::ArchiveFile)
     {
         QTemporaryDir workspace;
@@ -2011,6 +2596,11 @@ void MainWindow::previewMerge(const MergeRequest &request)
 
 void MainWindow::applyMerge(const MergeRequest &request)
 {
+    if (m_sourceKind == SourceKind::ArchiveFolder)
+    {
+        QMessageBox::information(this, QStringLiteral("Apply Merge"), archiveFolderReadOnlyMessage());
+        return;
+    }
     const bool sameRequest = request.keepNodeIndex == m_previewedMerge.keepNodeIndex && request.removeNodeIndices == m_previewedMerge.removeNodeIndices;
     if (!m_mergePreviewValid || !sameRequest)
     {
@@ -2019,7 +2609,9 @@ void MainWindow::applyMerge(const MergeRequest &request)
         return;
     }
     if (QMessageBox::question(this, QStringLiteral("Apply Merge"),
-                              QStringLiteral("Create a backup, redirect references, verify, and delete the selected duplicates?")) != QMessageBox::Yes)
+                              backupPrompt(
+                                  QStringLiteral("Create a backup, redirect references, verify, and delete the selected duplicates?"),
+                                  QStringLiteral("Backups are disabled in Settings. Redirect references, verify, and delete the selected duplicates without a persistent backup?"))) != QMessageBox::Yes)
         return;
 
     if (m_sourceKind == SourceKind::ArchiveFile)
@@ -2090,6 +2682,11 @@ void MainWindow::previewUnusedDeletion(const QVector<int> &rows)
 
 void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
 {
+    if (m_sourceKind == SourceKind::ArchiveFolder)
+    {
+        QMessageBox::information(this, QStringLiteral("Delete Unused Objects"), archiveFolderReadOnlyMessage());
+        return;
+    }
     if (rows.isEmpty() || rows != m_previewedUnusedRows)
     {
         QMessageBox::warning(this, QStringLiteral("Delete Unused Objects"),
@@ -2105,7 +2702,9 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
             return;
         }
         if (QMessageBox::question(this, QStringLiteral("Delete Selected Unused Objects"),
-                                  QStringLiteral("Create an archive backup, delete the selected verified candidates, and atomically save the SC2 archive?")) != QMessageBox::Yes)
+                                  backupPrompt(
+                                      QStringLiteral("Create an archive backup, delete the selected verified candidates, and atomically save the SC2 archive?"),
+                                      QStringLiteral("Backups are disabled in Settings. Delete the selected verified candidates and atomically save the SC2 archive without a persistent backup?"))) != QMessageBox::Yes)
             return;
         QTemporaryDir workspace;
         AnalysisResult materialized;
@@ -2165,7 +2764,9 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
     QStringList changedFiles;
     int removed = 0, skipped = 0;
     if (QMessageBox::question(this, QStringLiteral("Delete Selected Unused Objects"),
-                              QStringLiteral("A backup will be created before deleting the selected safe candidates. Continue?")) != QMessageBox::Yes)
+                              backupPrompt(
+                                  QStringLiteral("A backup will be created before deleting the selected safe candidates. Continue?"),
+                                  QStringLiteral("Backups are disabled in Settings. Delete the selected safe candidates without a persistent backup?"))) != QMessageBox::Yes)
         return;
     if (!m_analyzer.applySelectedChanges(m_result, rows, m_rootFolder, m_whitelistIds,
                                          &backupFolder, &error, &changedFiles, &removed, &skipped))
@@ -2189,7 +2790,7 @@ void MainWindow::previewStandardRename(const RenamePlan &plan)
     m_previewedRenamePlan = plan;
     m_renamePreviewValid = report.valid;
     m_renameIdsPage->setPreviewReport(report);
-    if (m_sourceKind == SourceKind::ArchiveFile)
+    if (m_sourceKind == SourceKind::ArchiveFile || m_sourceKind == SourceKind::ArchiveFolder)
         m_renameIdsPage->setApplyAvailable(false);
     logLine(QStringLiteral("Rename-to-standard preview: %1 renames, %2 reference updates, valid=%3")
                 .arg(report.identitiesRenamed)
@@ -2199,9 +2800,12 @@ void MainWindow::previewStandardRename(const RenamePlan &plan)
 
 void MainWindow::applyStandardRename(const RenamePlan &plan)
 {
-    if (m_sourceKind == SourceKind::ArchiveFile)
+    if (m_sourceKind == SourceKind::ArchiveFile || m_sourceKind == SourceKind::ArchiveFolder)
     {
-        QMessageBox::information(this, QStringLiteral("Apply Rename"), QStringLiteral("Archive mode is preview-only."));
+        QMessageBox::information(this, QStringLiteral("Apply Rename"),
+                                 m_sourceKind == SourceKind::ArchiveFolder
+                                     ? archiveFolderReadOnlyMessage()
+                                     : QStringLiteral("Archive mode is preview-only."));
         return;
     }
     const auto signature = [](const RenamePlan &value)
@@ -2219,7 +2823,9 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
         return;
     }
     if (QMessageBox::question(this, QStringLiteral("Apply Rename"),
-                              QStringLiteral("Create a backup, rename selected real XML IDs, update references, and verify?")) != QMessageBox::Yes)
+                              backupPrompt(
+                                  QStringLiteral("Create a backup, rename selected real XML IDs, update references, and verify?"),
+                                  QStringLiteral("Backups are disabled in Settings. Rename selected real XML IDs, update references, and verify without a persistent backup?"))) != QMessageBox::Yes)
         return;
     const RenameApplyResult result = m_referenceRenamer.apply(m_result, plan, m_rootFolder, m_whitelistIds);
     if (!result.success)
@@ -2256,7 +2862,14 @@ void MainWindow::exportStandardRenameReport(const QString &reportText)
 void MainWindow::previewDataCollection(const DataCollectionBuildRequest &request)
 {
     DataCollectionPreviewReport report;
-    if (m_sourceKind == SourceKind::ArchiveFile)
+    if (m_sourceKind == SourceKind::ArchiveFolder)
+    {
+        report.valid = false;
+        report.request = request;
+        report.warnings << archiveFolderReadOnlyMessage();
+        report.reportText = archiveFolderReadOnlyMessage();
+    }
+    else if (m_sourceKind == SourceKind::ArchiveFile)
     {
         QTemporaryDir workspace;
         AnalysisResult materialized;
@@ -2285,6 +2898,11 @@ void MainWindow::previewDataCollection(const DataCollectionBuildRequest &request
 
 void MainWindow::applyDataCollection(const DataCollectionBuildRequest &request)
 {
+    if (m_sourceKind == SourceKind::ArchiveFolder)
+    {
+        QMessageBox::information(this, QStringLiteral("Apply Collection"), archiveFolderReadOnlyMessage());
+        return;
+    }
     const auto signature = [](const DataCollectionBuildRequest &value)
     {
         QList<int> indices = value.includedNodeIndices.values();
@@ -2301,7 +2919,9 @@ void MainWindow::applyDataCollection(const DataCollectionBuildRequest &request)
         return;
     }
     if (QMessageBox::question(this, QStringLiteral("Apply Collection"),
-                              QStringLiteral("Create a backup and create or update the typed Data Collection?")) != QMessageBox::Yes)
+                              backupPrompt(
+                                  QStringLiteral("Create a backup and create or update the typed Data Collection?"),
+                                  QStringLiteral("Backups are disabled in Settings. Create or update the typed Data Collection without a persistent backup?"))) != QMessageBox::Yes)
         return;
     if (m_sourceKind == SourceKind::ArchiveFile)
     {
@@ -2460,6 +3080,11 @@ void MainWindow::applyOptimizationWizardPlan()
     {
         QMessageBox::information(this, QStringLiteral("Optimization Wizard"),
                                  QStringLiteral("Select at least one item before applying the optimization plan."));
+        return;
+    }
+    if (m_sourceKind == SourceKind::ArchiveFolder)
+    {
+        QMessageBox::information(this, QStringLiteral("Optimization Wizard"), archiveFolderReadOnlyMessage());
         return;
     }
 

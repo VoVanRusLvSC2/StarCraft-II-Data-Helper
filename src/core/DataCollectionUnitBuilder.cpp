@@ -1123,6 +1123,7 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
     if (m_failureInjectionStep == QStringLiteral("after-backup")) { result.error = QStringLiteral("Injected failure after backup."); return result; }
     const auto rollback = [&]() {
         if (transientWorkspace) return;
+        if (result.backupFolder.startsWith(QStringLiteral("disabled"), Qt::CaseInsensitive)) return;
         if (targetExisted) restore(rootFolder, result.backupFolder, relative, &result.error); else QFile::remove(plan.targetFile);
         if (listfileExisted) restore(rootFolder, result.backupFolder, listRelative, &result.error); else QFile::remove(plan.listfilePath);
     };

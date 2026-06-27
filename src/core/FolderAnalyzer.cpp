@@ -958,6 +958,8 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
 
     QStringList committedFiles;
     const auto rollbackCommitted = [&]() {
+        if (backupRoot.startsWith(QStringLiteral("disabled"), Qt::CaseInsensitive))
+            return;
         for (const QString &committed : committedFiles) {
             const QString backupPath = QDir(backupRoot).absoluteFilePath(relativePath(rootFolder, committed));
             QFile::remove(committed);

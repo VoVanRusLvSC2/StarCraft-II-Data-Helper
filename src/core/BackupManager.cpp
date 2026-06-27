@@ -4,6 +4,16 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSettings>
+
+namespace {
+
+bool persistentBackupsEnabled()
+{
+    return QSettings().value(QStringLiteral("backup/enabled"), true).toBool();
+}
+
+}
 
 bool BackupManager::createBackup(const QString &filePath, QString *backupPath, QString *errorMessage) const
 {
@@ -13,6 +23,11 @@ bool BackupManager::createBackup(const QString &filePath, QString *backupPath, Q
             *errorMessage = QStringLiteral("File does not exist: %1").arg(filePath);
         }
         return false;
+    }
+    if (!persistentBackupsEnabled()) {
+        if (backupPath)
+            *backupPath = QStringLiteral("disabled in Settings");
+        return true;
     }
 
     const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
@@ -51,6 +66,11 @@ bool BackupManager::createFolderBackup(const QString &rootFolder,
             *errorMessage = QStringLiteral("Folder does not exist: %1").arg(rootFolder);
         }
         return false;
+    }
+    if (!persistentBackupsEnabled()) {
+        if (backupFolder)
+            *backupFolder = QStringLiteral("disabled in Settings");
+        return true;
     }
 
     const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
