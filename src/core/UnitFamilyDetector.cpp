@@ -144,11 +144,51 @@ QString dataCollectionEntityTypeName(DataCollectionEntityType type)
 QVector<UnitFamily> UnitFamilyDetector::detect(const AnalysisResult &analysis) const
 {
     QHash<QString, int> byId;
-    for (int i = 0; i < analysis.nodes.size(); ++i) if (!analysis.nodes[i].id.isEmpty()) byId.insert(analysis.nodes[i].id, i);
+    QVector<int> rootIndices;
+    QSet<QString> rootIds;
+    QSet<int> rootIdLengths;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (!analysis.nodes[i].id.isEmpty())
+            byId.insert(analysis.nodes[i].id, i);
+        if (analysis.nodes[i].elementName.compare(QStringLiteral("CUnit"), Qt::CaseInsensitive) == 0) {
+            rootIndices.append(i);
+            if (!analysis.nodes[i].id.isEmpty()) {
+                rootIds.insert(analysis.nodes[i].id.toLower());
+                rootIdLengths.insert(analysis.nodes[i].id.size());
+            }
+        }
+    }
+    QHash<QString, QSet<int>> actorSeedsByRoot;
+    QHash<QString, QSet<int>> sameNameSeedsByRoot;
+    for (int index = 0; index < analysis.nodes.size(); ++index) {
+        const DataNode &node = analysis.nodes[index];
+        if (node.elementName.startsWith(QStringLiteral("CActorUnit"), Qt::CaseInsensitive)) {
+            const QString unitName = node.attributes.value(QStringLiteral("unitName")).toLower();
+            if (rootIds.contains(unitName))
+                actorSeedsByRoot[unitName].insert(index);
+            for (const QString &reference : node.referencedIds) {
+                const QString key = reference.toLower();
+                if (rootIds.contains(key))
+                    actorSeedsByRoot[key].insert(index);
+            }
+        }
+        if (!isCatalogType(node.elementName) || node.id.isEmpty())
+            continue;
+        const QString id = node.id.toLower();
+        for (int length : rootIdLengths) {
+            if (length > id.size())
+                continue;
+            const QString prefix = id.left(length);
+            if (rootIds.contains(prefix))
+                sameNameSeedsByRoot[prefix].insert(index);
+            const QString suffix = id.right(length);
+            if (rootIds.contains(suffix))
+                sameNameSeedsByRoot[suffix].insert(index);
+        }
+    }
     QVector<UnitFamily> families;
-    for (int rootIndex = 0; rootIndex < analysis.nodes.size(); ++rootIndex) {
+    for (int rootIndex : rootIndices) {
         const DataNode &root = analysis.nodes[rootIndex];
-        if (root.elementName.compare(QStringLiteral("CUnit"), Qt::CaseInsensitive) != 0) continue;
         UnitFamily family;
         family.rootNodeIndex = rootIndex;
         family.rootId = root.id;
@@ -157,17 +197,16 @@ QVector<UnitFamily> UnitFamilyDetector::detect(const AnalysisResult &analysis) c
         evidence[rootIndex] = QStringLiteral("Root CUnit");
 
         // Proven inbound actor relation and same-root names establish seeds.
-        for (int i = 0; i < analysis.nodes.size(); ++i) {
+        const QString rootKey = root.id.toLower();
+        for (int i : sameNameSeedsByRoot.value(rootKey)) {
             if (i == rootIndex) continue;
-            const DataNode &node = analysis.nodes[i];
-            const bool actorLink = node.elementName.startsWith(QStringLiteral("CActorUnit"), Qt::CaseInsensitive)
-                && (node.attributes.value(QStringLiteral("unitName")) == root.id || node.referencedIds.contains(root.id));
-            const bool sameName = isCatalogType(node.elementName)
-                && (node.id.startsWith(root.id, Qt::CaseInsensitive) || node.id.endsWith(root.id, Qt::CaseInsensitive));
-            if (actorLink || sameName) {
-                included.insert(i);
-                evidence[i] = actorLink ? QStringLiteral("Proven actor field references root unit") : QStringLiteral("Name similarity only (same-root naming)");
-            }
+            included.insert(i);
+            evidence[i] = QStringLiteral("Name similarity only (same-root naming)");
+        }
+        for (int i : actorSeedsByRoot.value(rootKey)) {
+            if (i == rootIndex) continue;
+            included.insert(i);
+            evidence[i] = QStringLiteral("Proven actor field references root unit");
         }
 
         // Follow outgoing graph edges from root and established family objects.
@@ -280,13 +319,27 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
 
         QHash<QString, QVector<int>> catalogById;
         QHash<QString, QVector<int>> incomingSourcesById;
+        QHash<QString, QVector<int>> scopedCandidatesByScope;
+        const auto addScopedCandidate = [&scopedCandidatesByScope](const QString &scope, int index) {
+            if (scope.isEmpty())
+                return;
+            scopedCandidatesByScope[scope.toLower()].append(index);
+        };
         QVector<int> roots;
         QHash<QString, QSet<int>> rootKinds;
         QSet<QString> primaryRootIds;
         for (int index = 0; index < analysis.nodes.size(); ++index) {
             const DataNode &node = analysis.nodes[index];
-            if (!node.id.isEmpty() && !mapper.catalogType(node.elementName).isEmpty())
+            const QString catalogType = mapper.catalogType(node.elementName);
+            if (!node.id.isEmpty() && !catalogType.isEmpty()) {
                 catalogById[node.id.toLower()].append(index);
+                addScopedCandidate(node.id, index);
+                for (int position = 0; position < node.id.size(); ++position) {
+                    const QChar value = node.id.at(position);
+                    if (position > 0 && (value == QLatin1Char('@') || value == QLatin1Char('_')))
+                        addScopedCandidate(node.id.left(position), index);
+                }
+            }
             for (const QString &reference : node.referencedIds)
                 incomingSourcesById[reference.toLower()].append(index);
             DataCollectionEntityType entityType;
@@ -375,37 +428,33 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             processQueue();
 
             QSet<QString> processedScopes;
-            bool addedScoped = true;
-            while (addedScoped) {
-                addedScoped = false;
-                const QList<int> reached = paths.keys();
-                for (int current : reached) {
-                    const QString scope = analysis.nodes[current].id;
-                    if (scope.isEmpty() || processedScopes.contains(scope.toLower()))
-                        continue;
-                    processedScopes.insert(scope.toLower());
-                    for (int candidate = 0; candidate < analysis.nodes.size(); ++candidate) {
-                        if (paths.contains(candidate) || !allowedFor(entityType, analysis.nodes[candidate]))
+            const auto addScopedObjects = [&]() {
+                bool addedScoped = true;
+                while (addedScoped) {
+                    addedScoped = false;
+                    const QList<int> reached = paths.keys();
+                    for (int current : reached) {
+                        const QString scope = analysis.nodes[current].id;
+                        const QString scopeKey = scope.toLower();
+                        if (scope.isEmpty() || processedScopes.contains(scopeKey))
                             continue;
-                        const QString candidateId = analysis.nodes[candidate].id;
-                        if (candidateId.isEmpty())
-                            continue;
-                        const bool scoped = candidateId.compare(scope, Qt::CaseInsensitive) == 0
-                            || candidateId.startsWith(scope + QLatin1Char('@'), Qt::CaseInsensitive)
-                            || candidateId.startsWith(scope + QLatin1Char('_'), Qt::CaseInsensitive);
-                        if (!scoped)
-                            continue;
-                        QStringList path = paths.value(current);
-                        path.append(QStringLiteral("scoped catalog object %1,%2")
-                                        .arg(mapper.catalogType(analysis.nodes[candidate].elementName),
-                                             analysis.nodes[candidate].id));
-                        paths.insert(candidate, path);
-                        queue.enqueue(candidate);
-                        addedScoped = true;
+                        processedScopes.insert(scopeKey);
+                        for (int candidate : scopedCandidatesByScope.value(scopeKey)) {
+                            if (paths.contains(candidate) || !allowedFor(entityType, analysis.nodes[candidate]))
+                                continue;
+                            QStringList path = paths.value(current);
+                            path.append(QStringLiteral("scoped catalog object %1,%2")
+                                            .arg(mapper.catalogType(analysis.nodes[candidate].elementName),
+                                                 analysis.nodes[candidate].id));
+                            paths.insert(candidate, path);
+                            queue.enqueue(candidate);
+                            addedScoped = true;
+                        }
                     }
+                    processQueue();
                 }
-                processQueue();
-            }
+            };
+            addScopedObjects();
 
             // Existing membership is supplementary evidence for this exact
             // collection.  Do not require Root@/Root_ here: old maps often contain
@@ -447,37 +496,7 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             }
             processQueue();
 
-            addedScoped = true;
-            while (addedScoped) {
-                addedScoped = false;
-                const QList<int> reached = paths.keys();
-                for (int current : reached) {
-                    const QString scope = analysis.nodes[current].id;
-                    if (scope.isEmpty() || processedScopes.contains(scope.toLower()))
-                        continue;
-                    processedScopes.insert(scope.toLower());
-                    for (int candidate = 0; candidate < analysis.nodes.size(); ++candidate) {
-                        if (paths.contains(candidate) || !allowedFor(entityType, analysis.nodes[candidate]))
-                            continue;
-                        const QString candidateId = analysis.nodes[candidate].id;
-                        if (candidateId.isEmpty())
-                            continue;
-                        const bool scoped = candidateId.compare(scope, Qt::CaseInsensitive) == 0
-                            || candidateId.startsWith(scope + QLatin1Char('@'), Qt::CaseInsensitive)
-                            || candidateId.startsWith(scope + QLatin1Char('_'), Qt::CaseInsensitive);
-                        if (!scoped)
-                            continue;
-                        QStringList path = paths.value(current);
-                        path.append(QStringLiteral("scoped catalog object %1,%2")
-                                        .arg(mapper.catalogType(analysis.nodes[candidate].elementName),
-                                             analysis.nodes[candidate].id));
-                        paths.insert(candidate, path);
-                        queue.enqueue(candidate);
-                        addedScoped = true;
-                    }
-                }
-                processQueue();
-            }
+            addScopedObjects();
 
             family.recommendedParent = standardDataCollectionParent(entityType, paths, analysis.nodes);
 
@@ -524,7 +543,6 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
             }
             for (int owner : it.value()) for (UnitFamilyObject &object : result[owner].objects) {
                 if (object.nodeIndex != it.key()) continue;
-                object.role = UnitFamilyRole::ManualReview;
                 object.confidence = QStringLiteral("Shared");
                 object.reason += QStringLiteral("; reached from %1 entity roots, owner is not selected automatically")
                                      .arg(it.value().size());

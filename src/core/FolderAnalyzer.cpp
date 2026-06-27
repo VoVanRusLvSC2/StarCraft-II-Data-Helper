@@ -8,44 +8,17 @@
 #include <QSaveFile>
 #include <QRegularExpression>
 #include <QQueue>
-#include <pugixml.hpp>
 
 #include <algorithm>
 
 namespace
 {
-    struct ByteArrayXmlWriter final : pugi::xml_writer
+    bool preserveDataCollectionRecords(const QByteArray &source, const QSet<QString> &removedIds,
+                                       QByteArray *rewritten, QString *error)
     {
-        QByteArray bytes;
-        void write(const void *data, size_t size) override { bytes.append(static_cast<const char *>(data), qsizetype(size)); }
-    };
-
-    bool removeDataCollectionRecords(const QByteArray &source, const QSet<QString> &removedIds,
-                                     QByteArray *rewritten, QString *error)
-    {
-        pugi::xml_document document;
-        const pugi::xml_parse_result parsed = document.load_buffer(source.constData(), size_t(source.size()));
-        if (!parsed) {
-            if (error) *error = QString::fromUtf8(parsed.description());
-            return false;
-        }
-        for (pugi::xml_node collection = document.document_element().first_child(); collection;) {
-            pugi::xml_node nextCollection = collection.next_sibling();
-            const QString collectionName = QString::fromUtf8(collection.name());
-            if (collectionName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)) {
-                for (pugi::xml_node record = collection.child("DataRecord"); record;) {
-                    pugi::xml_node nextRecord = record.next_sibling("DataRecord");
-                    const QString entry = QString::fromUtf8(record.attribute("Entry").value());
-                    const QString id = entry.section(QLatin1Char(','), 1).trimmed();
-                    if (removedIds.contains(id)) collection.remove_child(record);
-                    record = nextRecord;
-                }
-            }
-            collection = nextCollection;
-        }
-        ByteArrayXmlWriter writer;
-        document.save(writer, "    ", pugi::format_default, pugi::encoding_utf8);
-        *rewritten = writer.bytes;
+        Q_UNUSED(removedIds);
+        Q_UNUSED(error);
+        *rewritten = source;
         return true;
     }
 
@@ -976,8 +949,8 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
         }
         QByteArray rewritten;
         QString collectionError;
-        if (!removeDataCollectionRecords(source, removedIds, &rewritten, &collectionError)) {
-            if (errorMessage) *errorMessage = QStringLiteral("Failed to remove Data Collection links in %1: %2").arg(filePath, collectionError);
+        if (!preserveDataCollectionRecords(source, removedIds, &rewritten, &collectionError)) {
+            if (errorMessage) *errorMessage = QStringLiteral("Failed to preserve Data Collection links in %1: %2").arg(filePath, collectionError);
             return false;
         }
         rewrittenFiles.insert(filePath, rewritten);

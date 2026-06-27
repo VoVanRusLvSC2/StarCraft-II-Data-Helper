@@ -4,8 +4,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QSaveFile>
-#include <QIODevice>
 
 bool BackupManager::createBackup(const QString &filePath, QString *backupPath, QString *errorMessage) const
 {
@@ -44,6 +42,9 @@ bool BackupManager::createFolderBackup(const QString &rootFolder,
                                        QString *backupFolder,
                                        QString *errorMessage) const
 {
+    Q_UNUSED(analysisReportText);
+    Q_UNUSED(plannedChangesText);
+
     const QFileInfo rootInfo(rootFolder);
     if (!rootInfo.exists() || !rootInfo.isDir()) {
         if (errorMessage) {
@@ -73,40 +74,6 @@ bool BackupManager::createFolderBackup(const QString &rootFolder,
         if (!QFile::copy(sourcePath, targetPath)) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("Failed to copy backup file: %1").arg(sourcePath);
-            }
-            return false;
-        }
-    }
-
-    {
-        QSaveFile analysisFile(QDir(backupRoot).absoluteFilePath(QStringLiteral("analysis_report.txt")));
-        if (!analysisFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("Failed to write analysis report into backup.");
-            }
-            return false;
-        }
-        analysisFile.write(analysisReportText.toUtf8());
-        if (!analysisFile.commit()) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("Failed to commit analysis report into backup.");
-            }
-            return false;
-        }
-    }
-
-    {
-        QSaveFile plannedFile(QDir(backupRoot).absoluteFilePath(QStringLiteral("planned_changes_report.txt")));
-        if (!plannedFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("Failed to write planned changes report into backup.");
-            }
-            return false;
-        }
-        plannedFile.write(plannedChangesText.toUtf8());
-        if (!plannedFile.commit()) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("Failed to commit planned changes report into backup.");
             }
             return false;
         }

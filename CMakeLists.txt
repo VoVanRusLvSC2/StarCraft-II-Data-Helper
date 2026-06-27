@@ -76,6 +76,8 @@ target_sources(SC2DataHelper PRIVATE
     src/core/ReferenceRenamer.cpp
     src/core/DataCollectionAliasMapper.h
     src/core/DataCollectionAliasMapper.cpp
+    src/core/DataCollectionPreservation.h
+    src/core/DataCollectionPreservation.cpp
     src/core/DataCollectionUnitBuilder.h
     src/core/DataCollectionUnitBuilder.cpp
     src/core/ConfigManager.h
@@ -171,6 +173,7 @@ add_executable(SC2DataHelperTests
     src/core/StandardNamePlanner.cpp
     src/core/ReferenceRenamer.cpp
     src/core/DataCollectionAliasMapper.cpp
+    src/core/DataCollectionPreservation.cpp
     src/core/DataCollectionUnitBuilder.cpp
     src/ui/ObjectTableModel.cpp
     src/ui/ObjectFilterProxyModel.cpp
@@ -215,3 +218,38 @@ target_link_libraries(SC2OptimizeFolder PRIVATE
     pugixml
     nlohmann_json::nlohmann_json
 )
+
+add_executable(SC2DataCollectionProbe
+    src/tools/DataCollectionProbe.cpp
+    src/core/AnalysisModels.cpp
+    src/core/FolderAnalyzer.cpp
+    src/core/BackupManager.cpp
+    src/core/Sc2Archive.cpp
+    src/core/XmlLoader.cpp
+    src/core/DuplicateFinder.cpp
+    src/core/MergeService.cpp
+    src/core/UnitFamilyDetector.cpp
+    src/core/StandardNamePlanner.cpp
+    src/core/ReferenceRenamer.cpp
+    src/core/DataCollectionAliasMapper.cpp
+    src/core/DataCollectionPreservation.cpp
+    src/core/DataCollectionUnitBuilder.cpp
+)
+target_include_directories(SC2DataCollectionProbe PRIVATE src)
+target_link_libraries(SC2DataCollectionProbe PRIVATE
+    Qt6::Widgets
+    pugixml
+    StormLib::storm
+    nlohmann_json::nlohmann_json
+)
+target_compile_definitions(SC2DataCollectionProbe PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
+
+if (SC2DH_HAVE_LIBZIP)
+    target_compile_definitions(SC2DataCollectionProbe PRIVATE SC2DH_USE_LIBZIP=1)
+    if (TARGET libzip::zip)
+        target_link_libraries(SC2DataCollectionProbe PRIVATE libzip::zip)
+    else()
+        target_link_libraries(SC2DataCollectionProbe PRIVATE ${LIBZIP_LIBRARY})
+        target_include_directories(SC2DataCollectionProbe PRIVATE ${LIBZIP_INCLUDE_DIR})
+    endif()
+endif()

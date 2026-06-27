@@ -149,6 +149,7 @@ DataCollectionPage::DataCollectionPage(QWidget *parent) : QWidget(parent)
     m_categories = new QLineEdit(header);
     fields->addWidget(m_categories, 1);
     m_confirmNonStandard = new QCheckBox(QStringLiteral("Manually confirm non-standard family preview"), header);
+    m_confirmNonStandard->setChecked(true);
     fields->addWidget(m_confirmNonStandard); headerLayout->addLayout(fields); layout->addWidget(header);
 
     m_entryTabs = new QTabWidget(this);
@@ -269,7 +270,7 @@ void DataCollectionPage::rebuildFamily()
     if (index < 0 || index >= m_families.size()) { m_root->setText(QStringLiteral("Root ID: -")); return; }
     DataCollectionBuildRequest request; request.family = m_families[index]; request.confirmNonStandard = true;
     request.requestedUnitId = request.family.rootId;
-    const DataCollectionPreviewReport view = DataCollectionUnitBuilder().preview(m_result, request);
+    const DataCollectionPreviewReport view = DataCollectionUnitBuilder().preview(m_result, request, &m_families);
     m_root->setText(QStringLiteral("Root ID: %1").arg(request.family.rootId));
     {
         const QSignalBlocker currentBlock(m_currentUnitName), newBlock(m_newUnitName);

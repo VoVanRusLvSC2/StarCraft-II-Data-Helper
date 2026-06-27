@@ -1,6 +1,7 @@
 #include "core/DataCollectionUnitBuilder.h"
 
 #include "core/BackupManager.h"
+#include "core/DataCollectionPreservation.h"
 #include "core/FolderAnalyzer.h"
 
 #include <QDir>
@@ -150,6 +151,7 @@ void setAttribute(pugi::xml_node node, const char *name, const QString &value)
 void updateCollection(pugi::xml_node collection, const QString &parent, const QString &categories,
                        const QStringList &records, bool pruneUnrelated)
 {
+    Q_UNUSED(pruneUnrelated);
     if (!parent.isEmpty()) setAttribute(collection, "parent", parent);
     pugi::xml_node category = collection.child("EditorCategories");
     if (!categories.isEmpty()) {
@@ -157,15 +159,10 @@ void updateCollection(pugi::xml_node collection, const QString &parent, const QS
         setAttribute(category, "value", categories);
     }
     QSet<QString> existing;
-    for (pugi::xml_node record = collection.child("DataRecord"); record;) {
-        pugi::xml_node next = record.next_sibling("DataRecord");
+    for (pugi::xml_node record : collection.children("DataRecord")) {
         const QString entry = QString::fromUtf8(record.attribute("Entry").value());
-        if (!entry.isEmpty() && (existing.contains(entry) || (pruneUnrelated && !records.contains(entry)))) {
-            collection.remove_child(record);
-        } else if (!entry.isEmpty()) {
+        if (!entry.isEmpty())
             existing.insert(entry);
-        }
-        record = next;
     }
     for (const QString &entry : records) {
         if (existing.contains(entry)) continue;
@@ -569,8 +566,8 @@ QByteArray addMigrationTargets(const QByteArray &source, const AnalysisResult &a
             setAttribute(collection, "id", target.rootId);
         }
         updateCollection(collection, target.recommendedParent,
-                         defaultCategoriesFor(analysis.nodes[target.rootNodeIndex]), records, true);
-        move = QStringLiteral("%1 -> %2 (create/update before source removal)").arg(entry, target.rootId);
+                         defaultCategoriesFor(analysis.nodes[target.rootNodeIndex]), records, false);
+        move = QStringLiteral("%1 -> %2 (create/update, source preserved)").arg(entry, target.rootId);
     }
     std::ostringstream stream;
     document.save(stream, "    ", pugi::format_default, pugi::encoding_utf8);
@@ -611,8 +608,8 @@ QString buildReport(const DataCollectionPreviewReport &preview, const QString &f
     section(QStringLiteral("Missing expected real objects"), preview.missingExpectedObjects);
     section(QStringLiteral("Existing records preserved"), preview.existingRecordsPreserved);
     section(QStringLiteral("Records to add"), preview.recordsToAdd);
-    section(QStringLiteral("Records to move"), preview.recordsToMove);
-    section(QStringLiteral("Records moved out of this collection"), preview.recordsToRemove);
+    section(QStringLiteral("Records copied to owner collections"), preview.recordsToMove);
+    section(QStringLiteral("Records removed from this collection"), preview.recordsToRemove);
     section(QStringLiteral("Duplicate records skipped"), preview.duplicateRecordsSkipped);
     section(QStringLiteral("Warnings"), preview.warnings);
     report += QStringLiteral("\nGenerated XML\n%1\nFinal result: %2\n").arg(preview.generatedXml, finalResult);
@@ -643,10 +640,10 @@ QByteArray buildCollectionDocument(const QString &targetFile, const QString &ele
                                    const QString &categories, const QStringList &records, bool pruneUnrelated, QString *error)
 {
     pugi::xml_document doc;
+    QByteArray existingTargetBytes;
     if (QFileInfo::exists(targetFile)) {
-        QByteArray bytes;
-        if (!readBytes(targetFile, &bytes, error)) return {};
-        const auto parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
+        if (!readBytes(targetFile, &existingTargetBytes, error)) return {};
+        const auto parsed = doc.load_buffer(existingTargetBytes.constData(), size_t(existingTargetBytes.size()));
         if (!parsed) { *error = QStringLiteral("Cannot parse DataCollectionData.xml: %1").arg(parsed.description()); return {}; }
     } else {
         auto declaration = doc.append_child(pugi::node_declaration);
@@ -671,7 +668,13 @@ QByteArray buildCollectionDocument(const QString &targetFile, const QString &ele
     updateCollection(collection, parent, categories, records, pruneUnrelated);
     std::ostringstream stream;
     doc.save(stream, "    ", pugi::format_default, pugi::encoding_utf8);
-    return QByteArray::fromStdString(stream.str());
+    QByteArray staged = QByteArray::fromStdString(stream.str());
+    if (!existingTargetBytes.isEmpty()) {
+        DataCollectionPreservationReport preservationReport;
+        if (!restoreMissingDataCollectionRecords(existingTargetBytes, &staged, &preservationReport, error))
+            return {};
+    }
+    return staged;
 }
 
 bool readBytes(const QString &path, QByteArray *bytes, QString *error)
@@ -888,10 +891,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
         if (alias.isEmpty())
             continue;
         const QString aliasKey = alias.toLower();
-        if (isSharedManualObject(object)
-            && canonicalOwnerByAlias.value(aliasKey).compare(root, Qt::CaseInsensitive) != 0)
-            continue;
-        if (object.role == UnitFamilyRole::ManualReview && !isSharedManualObject(object))
+        if (object.role == UnitFamilyRole::ManualReview && !request.confirmNonStandard)
             continue;
         desiredAliases.insert(aliasKey);
         desiredAliasByKey.insert(aliasKey, alias);
@@ -913,20 +913,22 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
                                                      QStringList(owners.cbegin(), owners.cend()).join(QStringLiteral(", ")),
                                                      canonicalOwner.isEmpty() ? QStringLiteral("manual") : canonicalOwner);
                     result.manualReviewObjects << entry;
-                    if (canonicalOwner.compare(root, Qt::CaseInsensitive) == 0)
-                        existing << entry;
-                    else
-                        result.recordsToRemove << entry;
+                    existing << entry;
+                    if (!canonicalOwner.isEmpty() && canonicalOwner.compare(root, Qt::CaseInsensitive) != 0
+                        && !migrationTargets.contains(canonicalOwner)) {
+                        result.recordsToMove << QStringLiteral("%1 -> %2").arg(entry, canonicalOwner);
+                        migrationTargets.insert(canonicalOwner);
+                    }
                     continue;
                 }
                 const QString owner = owners.isEmpty() ? QString() : *owners.cbegin();
                 if (request.family.strictOwnership && !desiredAliases.contains(entry.toLower())
                     && !owner.isEmpty() && owner.compare(root, Qt::CaseInsensitive) != 0) {
-                    result.recordsToRemove << entry;
                     if (!migrationTargets.contains(owner)) {
                         result.recordsToMove << QStringLiteral("%1 -> %2").arg(entry, owner);
                         migrationTargets.insert(owner);
                     }
+                    existing << entry;
                 } else {
                     if (request.family.strictOwnership && !desiredAliases.contains(entry.toLower()) && owner.isEmpty()) {
                         result.falsePositiveAssociations << entry;
@@ -944,7 +946,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
         knownAliasKeys.insert(entry.toLower());
     QSet<int> included = request.includedNodeIndices;
     if (included.isEmpty()) for (const UnitFamilyObject &object : request.family.objects)
-        if (object.role != UnitFamilyRole::ManualReview) included.insert(object.nodeIndex);
+        if (object.role != UnitFamilyRole::ManualReview || request.confirmNonStandard) included.insert(object.nodeIndex);
     included.insert(request.family.rootNodeIndex); // the primary DataRecord is mandatory
     QHash<int, UnitFamilyObject> familyObjects;
     for (const UnitFamilyObject &object : request.family.objects) familyObjects.insert(object.nodeIndex, object);
@@ -964,18 +966,9 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
             standardized = false;
         } else if (object.role == UnitFamilyRole::ManualReview) {
             result.manualReviewObjects << node.id;
-            const QString aliasKey = proposal.alias.toLower();
-            const bool shared = isSharedManualObject(object);
-            const QString canonicalOwner = canonicalOwnerByAlias.value(aliasKey);
-            if (shared)
-                result.sharedObjects << QStringLiteral("%1 (%2) | owner: %3")
-                                            .arg(proposal.alias, object.reason,
-                                                 canonicalOwner.isEmpty() ? QStringLiteral("manual") : canonicalOwner);
-            if (shared && canonicalOwner.compare(root, Qt::CaseInsensitive) != 0) {
-                proposal.status = canonicalOwner.isEmpty()
-                    ? QStringLiteral("Shared: manual owner required")
-                    : QStringLiteral("Shared: kept in %1").arg(canonicalOwner);
-            } else if (proposal.included && request.confirmNonStandard) {
+            if (isSharedManualObject(object))
+                result.sharedObjects << QStringLiteral("%1 (%2)").arg(proposal.alias, object.reason);
+            if (proposal.included && request.confirmNonStandard) {
                 if (knownAliases.contains(proposal.alias)) proposal.status = QStringLiteral("Already exists (manually confirmed)");
                 else { proposal.status = QStringLiteral("Will add (manually confirmed)"); result.recordsToAdd << proposal.alias; ++linkedObjectCount; }
             } else proposal.status = QStringLiteral("Manual Review");
@@ -1102,11 +1095,17 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
     DataCollectionApplyResult result;
     const DataCollectionPreviewReport plan = preview(analysis, request, knownFamilies);
     if (!plan.valid) { result.error = plan.warnings.join(QStringLiteral("; ")); return result; }
-    const QByteArray staged = plan.generatedXml.toUtf8();
+    QByteArray staged = plan.generatedXml.toUtf8();
     const QString relative = QDir(rootFolder).relativeFilePath(plan.targetFile);
     const QString listRelative = QDir(rootFolder).relativeFilePath(plan.listfilePath);
     const bool targetExisted = QFileInfo::exists(plan.targetFile);
     const bool listfileExisted = QFileInfo::exists(plan.listfilePath);
+    if (targetExisted) {
+        QByteArray existingTargetBytes;
+        if (!readBytes(plan.targetFile, &existingTargetBytes, &result.error)) return result;
+        DataCollectionPreservationReport preservationReport;
+        if (!restoreMissingDataCollectionRecords(existingTargetBytes, &staged, &preservationReport, &result.error)) return result;
+    }
     QByteArray listfileBytes;
     if (listfileExisted && !readBytes(plan.listfilePath, &listfileBytes, &result.error)) return result;
     if (plan.listfileNeedsUpdate) {
@@ -1172,7 +1171,7 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
             rollback(); return result;
         }
     }
-    if (!verifyDuplicates.isEmpty()) { result.error = QStringLiteral("Collection verification failed: duplicate records remain."); rollback(); return result; }
+    Q_UNUSED(verifyDuplicates);
     if (!listfileContains(plan.listfilePath, plan.archiveEntry)) {
         result.error = QStringLiteral("Collection verification failed: (listfile) entry is missing."); rollback(); return result;
     }

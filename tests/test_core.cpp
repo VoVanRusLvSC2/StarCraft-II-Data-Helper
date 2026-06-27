@@ -7,6 +7,7 @@
 #include "core/StandardNamePlanner.h"
 #include "core/UnitFamilyDetector.h"
 #include "core/DataCollectionAliasMapper.h"
+#include "core/DataCollectionPreservation.h"
 #include "core/DataCollectionUnitBuilder.h"
 #include "core/Sc2Archive.h"
 #include "core/XmlLoader.h"
@@ -134,7 +135,7 @@ private slots:
     void mergeRollbackOnFailure();
     void unusedSafetyClassification();
     void unusedReachabilityDistinguishesStatesAndPaths();
-    void unusedDeletionRemovesDataCollectionLinks();
+    void unusedDeletionPreservesDataCollectionLinks();
     void unitFamilyDetectionAndStandardPlanning();
     void renamePlannerBlocksConflicts();
     void referenceRenamePreviewAndApply();
@@ -146,6 +147,8 @@ private slots:
     void dataCollectionUnitAbilWeaponModeSplitsRoots();
     void dataCollectionTypedPreservesLegacyNonScopedAbilityRecords();
     void dataCollectionTypedSplitPreservesEveryCatalogRecord();
+    void dataCollectionPreservationRestoresLossyXml();
+    void dataCollectionMigrationPreservesExistingTargetRecords();
     void dataCollectionTypedSplitPreservesSharedMemberships();
     void dataCollectionMigrationRollbackRestoresAllCollections();
     void dataCollectionPatternInheritanceValidation();
@@ -328,17 +331,16 @@ void CoreTests::dataCollectionUnitAbilWeaponModeSplitsRoots()
     QCOMPARE(weapon->recommendedParent, QStringLiteral("Weapon_Instant"));
     DataCollectionBuildRequest request; request.family = *unit;
     const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request);
-    QVERIFY(preview.recordsToRemove.contains(QStringLiteral("Abil,Gargantua_Jump")));
-    QVERIFY(preview.recordsToRemove.contains(QStringLiteral("Weapon,Gargantua_Weapon")));
+    QVERIFY(preview.recordsToRemove.isEmpty());
     QVERIFY(preview.generatedXml.contains(QStringLiteral("<CDataCollectionAbil id=\"Gargantua_Jump\" parent=\"AbilityBase\">")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("<CDataCollection id=\"Gargantua_Weapon\" parent=\"Weapon_Instant\">")));
     QCOMPARE(preview.recordsToMove.size(), 2);
     const DataCollectionApplyResult applied = DataCollectionUnitBuilder().apply(analysis, request, dir.path(), {});
     QVERIFY2(applied.success, qPrintable(applied.error));
-    QCOMPARE(applied.recordsRemoved, 2);
+    QCOMPARE(applied.recordsRemoved, 0);
     QFile updated(path); QVERIFY(updated.open(QIODevice::ReadOnly)); const QByteArray updatedXml = updated.readAll();
-    QCOMPARE(updatedXml.count("Entry=\"Abil,Gargantua_Jump\""), 1);
-    QCOMPARE(updatedXml.count("Entry=\"Weapon,Gargantua_Weapon\""), 1);
+    QCOMPARE(updatedXml.count("Entry=\"Abil,Gargantua_Jump\""), 2);
+    QCOMPARE(updatedXml.count("Entry=\"Weapon,Gargantua_Weapon\""), 2);
     QVERIFY(updatedXml.contains("id=\"Gargantua_Jump\""));
     QVERIFY(updatedXml.contains("id=\"Gargantua_Weapon\""));
     QVERIFY(updatedXml.contains("id=\"Gargantua\" parent=\"UnitGround\""));
@@ -467,6 +469,86 @@ void CoreTests::dataCollectionTypedSplitPreservesEveryCatalogRecord()
     QVERIFY(preview.manualReviewObjects.contains(QStringLiteral("Upgrade,TitanUpgrade")));
 }
 
+void CoreTests::dataCollectionPreservationRestoresLossyXml()
+{
+    QByteArray baseline = QByteArrayLiteral(
+        "<Catalog>"
+        "<CDataCollectionUnit id=\"Alpha\">"
+        "<DataRecord Entry=\"Unit,Alpha\" keep=\"1\"/>"
+        "<DataRecord Entry=\"Actor,AlphaActor\"/>"
+        "<DataRecord Entry=\"Actor,AlphaActor\" duplicate=\"1\"/>"
+        "</CDataCollectionUnit>"
+        "<CDataCollection id=\"WeaponAlpha\">"
+        "<DataRecord Entry=\"Weapon,WeaponAlpha\"/>"
+        "<DataRecord Entry=\"Effect,LegacyDamage\"/>"
+        "</CDataCollection>"
+        "</Catalog>");
+    QByteArray lossy = QByteArrayLiteral(
+        "<Catalog>"
+        "<CDataCollectionUnit id=\"Alpha\">"
+        "<DataRecord Entry=\"Unit,Alpha\"/>"
+        "<DataRecord Entry=\"Behavior,NewBuff\"/>"
+        "</CDataCollectionUnit>"
+        "</Catalog>");
+
+    DataCollectionPreservationReport report;
+    QString error;
+    QVERIFY2(restoreMissingDataCollectionRecords(baseline, &lossy, &report, &error), qPrintable(error));
+    QCOMPARE(report.missingBeforeRestore, 4);
+    QCOMPARE(report.restoredRecords, 4);
+    QCOMPARE(report.missingAfterRestore, 0);
+    QCOMPARE(report.addedRecords, 1);
+    QVERIFY(lossy.contains("Entry=\"Actor,AlphaActor\""));
+    QCOMPARE(lossy.count("Entry=\"Actor,AlphaActor\""), 2);
+    QVERIFY(lossy.contains("duplicate=\"1\""));
+    QVERIFY(lossy.contains("Entry=\"Effect,LegacyDamage\""));
+    QVERIFY(lossy.contains("Entry=\"Behavior,NewBuff\""));
+}
+
+void CoreTests::dataCollectionMigrationPreservesExistingTargetRecords()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Carrier.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"Carrier\"><AbilArray Link=\"Launch\"/></CUnit>"
+        "<CAbilEffectTarget id=\"Launch\"><Effect value=\"LaunchEffect\"/></CAbilEffectTarget>"
+        "<CEffectDamage id=\"LaunchEffect\"/>"
+        "<CUpgrade id=\"LegacyUpgrade\"/>"
+        "<CDataCollectionUnit id=\"Carrier\"><DataRecord Entry=\"Unit,Carrier\"/>"
+        "<DataRecord Entry=\"Abil,Launch\"/></CDataCollectionUnit>"
+        "<CDataCollectionAbil id=\"Launch\"><DataRecord Entry=\"Upgrade,LegacyUpgrade\"/></CDataCollectionAbil>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer; AnalysisResult analysis; QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(
+        analysis, DataCollectionMode::UnitAbilWeapon);
+    const auto unit = std::find_if(families.cbegin(), families.cend(), [](const UnitFamily &family) {
+        return family.rootId == QStringLiteral("Carrier");
+    });
+    QVERIFY(unit != families.cend());
+
+    DataCollectionBuildRequest request; request.family = *unit;
+    const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request, &families);
+    QVERIFY2(preview.valid, qPrintable(preview.warnings.join(QStringLiteral("; "))));
+    QVERIFY(preview.recordsToRemove.isEmpty());
+    QVERIFY(std::any_of(preview.recordsToMove.cbegin(), preview.recordsToMove.cend(), [](const QString &move) {
+        return move.startsWith(QStringLiteral("Abil,Launch -> Launch"));
+    }));
+
+    const DataCollectionApplyResult applied = DataCollectionUnitBuilder().apply(
+        analysis, request, dir.path(), {}, true, &families);
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QCOMPARE(applied.recordsRemoved, 0);
+
+    QFile updated(path);
+    QVERIFY(updated.open(QIODevice::ReadOnly));
+    const QByteArray updatedXml = updated.readAll();
+    QVERIFY(updatedXml.contains("Entry=\"Upgrade,LegacyUpgrade\""));
+    QCOMPARE(updatedXml.count("Entry=\"Abil,Launch\""), 2);
+}
+
 void CoreTests::dataCollectionTypedSplitPreservesSharedMemberships()
 {
     QTemporaryDir dir;
@@ -503,13 +585,13 @@ void CoreTests::dataCollectionTypedSplitPreservesSharedMemberships()
         return analysis.nodes[object.nodeIndex].id == QStringLiteral("SharedEffect");
     });
     QVERIFY(shared != ability->objects.cend());
-    QCOMPARE(shared->role, UnitFamilyRole::ManualReview);
+    QCOMPARE(shared->role, UnitFamilyRole::Effect);
     QCOMPARE(shared->confidence, QStringLiteral("Shared"));
     DataCollectionBuildRequest request; request.family = *ability;
+    request.confirmNonStandard = true;
     const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request, &families);
     QVERIFY2(preview.valid, qPrintable(preview.warnings.join(QStringLiteral("; "))));
-    QVERIFY(!preview.sharedObjects.isEmpty());
-    QCOMPARE(preview.generatedXml.count(QStringLiteral("Entry=\"Effect,SharedEffect\"")), 0); // no silent duplicate
+    QCOMPARE(preview.generatedXml.count(QStringLiteral("Entry=\"Effect,SharedEffect\"")), 1);
 
     for (const QString &root : {QStringLiteral("SharedUnit"), QStringLiteral("AbilityOne"), QStringLiteral("AbilityTwo")}) {
         const QVector<UnitFamily> refreshedFamilies = UnitFamilyDetector().detectCollectionFamilies(
@@ -532,7 +614,7 @@ void CoreTests::dataCollectionTypedSplitPreservesSharedMemberships()
     QFile updated(path);
     QVERIFY(updated.open(QIODevice::ReadOnly));
     const QByteArray updatedXml = updated.readAll();
-    QCOMPARE(updatedXml.count("Entry=\"Effect,SharedEffect\""), 1);
+    QCOMPARE(updatedXml.count("Entry=\"Effect,SharedEffect\""), 3);
 }
 
 void CoreTests::dataCollectionMigrationRollbackRestoresAllCollections()
@@ -864,10 +946,12 @@ void CoreTests::dataCollectionUpdatePreservesAndSorts()
     QVERIFY(preview.existingCollection);
     QVERIFY(preview.existingRecordsPreserved.contains(QStringLiteral("Other,PreserveMe")));
     QVERIFY(preview.duplicateRecordsSkipped.contains(QStringLiteral("Actor,Vassel@Actor")));
+    QCOMPARE(preview.generatedXml.count(QStringLiteral("Actor,Vassel@Actor")), 2);
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("Other,PreserveMe")));
     const DataCollectionApplyResult applied = builder.apply(analysis, request, dir.path(), {});
     QVERIFY2(applied.success, qPrintable(applied.error));
     QFile output(path); QVERIFY(output.open(QIODevice::ReadOnly)); const QString xml = QString::fromUtf8(output.readAll());
-    QCOMPARE(xml.count(QStringLiteral("Actor,Vassel@Actor")), 1);
+    QCOMPARE(xml.count(QStringLiteral("Actor,Vassel@Actor")), 2);
     QCOMPARE(xml.count(QStringLiteral("Other,PreserveMe")), 1);
     QVERIFY(xml.contains(QStringLiteral("parent=\"CustomParent\"")));
     QVERIFY(xml.contains(QStringLiteral("value=\"DataGroup:Unit,ObjectType:Unit\"")));
@@ -1157,7 +1241,7 @@ void CoreTests::unusedReachabilityDistinguishesStatesAndPaths()
     QCOMPARE(byId[QStringLiteral("CollectionOnly")].dataCollectionReferences, 1);
 }
 
-void CoreTests::unusedDeletionRemovesDataCollectionLinks()
+void CoreTests::unusedDeletionPreservesDataCollectionLinks()
 {
     QTemporaryDir dir;
     const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Data.xml"));
@@ -1179,7 +1263,7 @@ void CoreTests::unusedDeletionRemovesDataCollectionLinks()
     QVERIFY2(analyzer.applySelectedChanges(analysis, {row}, dir.path(), {}, &backup, &error, &changed, &removed, &skipped), qPrintable(error));
     QFile result(path); QVERIFY(result.open(QIODevice::ReadOnly)); const QByteArray xml = result.readAll();
     QVERIFY(!xml.contains("id=\"UnusedUnit\""));
-    QVERIFY(!xml.contains("Unit,UnusedUnit"));
+    QVERIFY(xml.contains("Unit,UnusedUnit"));
     QCOMPARE(removed, 1);
 }
 
@@ -1384,8 +1468,8 @@ void CoreTests::backupCreation()
     QVERIFY(QFileInfo(backupFolder).fileName().startsWith(QStringLiteral("backup_")));
     QVERIFY(QFile::exists(QDir(backupFolder).absoluteFilePath(QStringLiteral("GameData/A.xml"))));
     QVERIFY(QFile::exists(QDir(backupFolder).absoluteFilePath(QStringLiteral("GameData/B.xml"))));
-    QVERIFY(QFile::exists(QDir(backupFolder).absoluteFilePath(QStringLiteral("analysis_report.txt"))));
-    QVERIFY(QFile::exists(QDir(backupFolder).absoluteFilePath(QStringLiteral("planned_changes_report.txt"))));
+    QVERIFY(!QFile::exists(QDir(backupFolder).absoluteFilePath(QStringLiteral("analysis_report.txt"))));
+    QVERIFY(!QFile::exists(QDir(backupFolder).absoluteFilePath(QStringLiteral("planned_changes_report.txt"))));
 }
 
 void CoreTests::dryRunGeneration()

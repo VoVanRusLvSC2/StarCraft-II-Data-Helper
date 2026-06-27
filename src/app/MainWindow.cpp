@@ -15,6 +15,7 @@
 #include "ui/UnusedPage.h"
 #include "ui/XmlSourcePage.h"
 #include "core/Sc2Archive.h"
+#include "core/DataCollectionPreservation.h"
 #include "core/StandardNamePlanner.h"
 #include "core/UnitFamilyDetector.h"
 
@@ -101,13 +102,14 @@ namespace
         static const QStringList units{QStringLiteral("B"), QStringLiteral("KB"), QStringLiteral("MB"), QStringLiteral("GB")};
         double value = double(bytes);
         int unit = 0;
-        while (value >= 1024.0 && unit + 1 < units.size()) {
+        while (value >= 1024.0 && unit + 1 < units.size())
+        {
             value /= 1024.0;
             ++unit;
         }
         return unit == 0
-            ? QStringLiteral("%1 %2").arg(bytes).arg(units[unit])
-            : QStringLiteral("%1 %2").arg(value, 0, 'f', 1).arg(units[unit]);
+                   ? QStringLiteral("%1 %2").arg(bytes).arg(units[unit])
+                   : QStringLiteral("%1 %2").arg(value, 0, 'f', 1).arg(units[unit]);
     }
 
     bool matchesOpenFilter(const QFileInfo &info, const Sc2FileOpenFilter &filter)
@@ -232,12 +234,17 @@ namespace
             QFileInfo startInfo(startPath);
             QString initialDir;
             QString initialFile;
-            if (startInfo.isFile()) {
+            if (startInfo.isFile())
+            {
                 initialDir = startInfo.absolutePath();
                 initialFile = startInfo.fileName();
-            } else if (startInfo.isDir()) {
+            }
+            else if (startInfo.isDir())
+            {
                 initialDir = startInfo.absoluteFilePath();
-            } else {
+            }
+            else
+            {
                 initialDir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
             }
             if (initialDir.isEmpty())
@@ -250,28 +257,34 @@ namespace
     protected:
         void keyPressEvent(QKeyEvent *event) override
         {
-            if (!event) {
+            if (!event)
+            {
                 QDialog::keyPressEvent(event);
                 return;
             }
-            if (event->key() == Qt::Key_Escape) {
+            if (event->key() == Qt::Key_Escape)
+            {
                 reject();
                 return;
             }
-            if (event->key() == Qt::Key_F5) {
+            if (event->key() == Qt::Key_F5)
+            {
                 openDirectory(m_currentDir, m_name->text());
                 return;
             }
-            if ((event->key() == Qt::Key_Backspace) || (event->key() == Qt::Key_Up && event->modifiers().testFlag(Qt::AltModifier))) {
+            if ((event->key() == Qt::Key_Backspace) || (event->key() == Qt::Key_Up && event->modifiers().testFlag(Qt::AltModifier)))
+            {
                 openParent();
                 return;
             }
-            if (event->matches(QKeySequence::Find)) {
+            if (event->matches(QKeySequence::Find))
+            {
                 m_search->setFocus();
                 m_search->selectAll();
                 return;
             }
-            if (event->key() == Qt::Key_L && event->modifiers().testFlag(Qt::ControlModifier)) {
+            if (event->key() == Qt::Key_L && event->modifiers().testFlag(Qt::ControlModifier))
+            {
                 m_path->setFocus();
                 m_path->selectAll();
                 return;
@@ -282,40 +295,47 @@ namespace
     private:
         void wireEvents()
         {
-            connect(m_path, &QLineEdit::returnPressed, this, [this] { handlePathEntered(); });
-            connect(m_name, &QLineEdit::returnPressed, this, [this] { confirmSelection(); });
-            connect(m_search, &QLineEdit::textChanged, this, [this] { populateFiles(); });
-            connect(m_filter, &QComboBox::currentIndexChanged, this, [this] { populateFiles(); });
-            connect(m_places, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
+            connect(m_path, &QLineEdit::returnPressed, this, [this]
+                    { handlePathEntered(); });
+            connect(m_name, &QLineEdit::returnPressed, this, [this]
+                    { confirmSelection(); });
+            connect(m_search, &QLineEdit::textChanged, this, [this]
+                    { populateFiles(); });
+            connect(m_filter, &QComboBox::currentIndexChanged, this, [this]
+                    { populateFiles(); });
+            connect(m_places, &QListWidget::itemClicked, this, [this](QListWidgetItem *item)
+                    {
                 if (!item) return;
                 const QString path = item->data(Qt::UserRole).toString();
-                if (!path.isEmpty()) openDirectory(path);
-            });
-            connect(m_table, &QTableWidget::itemSelectionChanged, this, [this] {
+                if (!path.isEmpty()) openDirectory(path); });
+            connect(m_table, &QTableWidget::itemSelectionChanged, this, [this]
+                    {
                 const int row = m_table->currentRow();
                 if (row < 0) return;
                 QTableWidgetItem *nameItem = m_table->item(row, 0);
                 if (!nameItem) return;
                 const QString path = nameItem->data(Qt::UserRole).toString();
                 m_name->setText(QFileInfo(path).fileName());
-                m_selection->setText(QDir::toNativeSeparators(path));
-            });
-            connect(m_table, &QTableWidget::itemDoubleClicked, this, [this](QTableWidgetItem *item) {
+                m_selection->setText(QDir::toNativeSeparators(path)); });
+            connect(m_table, &QTableWidget::itemDoubleClicked, this, [this](QTableWidgetItem *item)
+                    {
                 if (!item) return;
-                activatePath(item->data(Qt::UserRole).toString());
-            });
-            connect(m_table, &QTableWidget::itemActivated, this, [this](QTableWidgetItem *item) {
+                activatePath(item->data(Qt::UserRole).toString()); });
+            connect(m_table, &QTableWidget::itemActivated, this, [this](QTableWidgetItem *item)
+                    {
                 if (!item) return;
-                activatePath(item->data(Qt::UserRole).toString());
-            });
-            connect(m_open, &QPushButton::clicked, this, [this] { confirmSelection(); });
+                activatePath(item->data(Qt::UserRole).toString()); });
+            connect(m_open, &QPushButton::clicked, this, [this]
+                    { confirmSelection(); });
             connect(m_cancel, &QPushButton::clicked, this, &QDialog::reject);
         }
 
         void populatePlaces()
         {
-            const auto addPlace = [this](const QString &title, const QString &path) {
-                if (path.isEmpty() || !QFileInfo(path).isDir()) return;
+            const auto addPlace = [this](const QString &title, const QString &path)
+            {
+                if (path.isEmpty() || !QFileInfo(path).isDir())
+                    return;
                 auto *item = new QListWidgetItem(title, m_places);
                 item->setData(Qt::UserRole, QFileInfo(path).absoluteFilePath());
             };
@@ -336,7 +356,8 @@ namespace
         void openDirectory(const QString &path, const QString &suggestedFile = QString())
         {
             QFileInfo info(path);
-            if (!info.isDir()) {
+            if (!info.isDir())
+            {
                 setStatus(QStringLiteral("Directory not found: %1").arg(QDir::toNativeSeparators(path)));
                 return;
             }
@@ -344,7 +365,8 @@ namespace
             m_path->setText(QDir::toNativeSeparators(m_currentDir));
             m_name->setText(suggestedFile);
             m_selection->setText(QDir::toNativeSeparators(suggestedFile.isEmpty()
-                ? m_currentDir : QDir(m_currentDir).absoluteFilePath(suggestedFile)));
+                                                              ? m_currentDir
+                                                              : QDir(m_currentDir).absoluteFilePath(suggestedFile)));
             populateFiles();
             if (!suggestedFile.isEmpty())
                 selectFileName(suggestedFile);
@@ -361,7 +383,8 @@ namespace
             m_table->setRowCount(0);
             int folders = 0;
             int files = 0;
-            for (const QFileInfo &entry : entries) {
+            for (const QFileInfo &entry : entries)
+            {
                 if (!query.isEmpty() && !entry.fileName().toLower().contains(query))
                     continue;
                 if (!matchesOpenFilter(entry, filter))
@@ -380,18 +403,25 @@ namespace
                 m_table->setItem(row, 1, type);
                 m_table->setItem(row, 2, size);
                 m_table->setItem(row, 3, modified);
-                if (entry.isDir()) ++folders; else ++files;
+                if (entry.isDir())
+                    ++folders;
+                else
+                    ++files;
             }
             m_table->setUpdatesEnabled(true);
             setStatus(QStringLiteral("Current folder: %1   |   folders: %2   |   files: %3")
-                          .arg(QDir::toNativeSeparators(m_currentDir)).arg(folders).arg(files));
+                          .arg(QDir::toNativeSeparators(m_currentDir))
+                          .arg(folders)
+                          .arg(files));
         }
 
         void selectFileName(const QString &fileName)
         {
-            for (int row = 0; row < m_table->rowCount(); ++row) {
+            for (int row = 0; row < m_table->rowCount(); ++row)
+            {
                 QTableWidgetItem *item = m_table->item(row, 0);
-                if (item && item->text().compare(fileName, Qt::CaseInsensitive) == 0) {
+                if (item && item->text().compare(fileName, Qt::CaseInsensitive) == 0)
+                {
                     m_table->selectRow(row);
                     m_table->scrollToItem(item);
                     return;
@@ -403,11 +433,13 @@ namespace
         {
             const QString raw = m_path->text().trimmed().remove(QLatin1Char('"'));
             QFileInfo info(raw);
-            if (info.isDir()) {
+            if (info.isDir())
+            {
                 openDirectory(info.absoluteFilePath());
                 return;
             }
-            if (info.isFile()) {
+            if (info.isFile())
+            {
                 activatePath(info.absoluteFilePath());
                 return;
             }
@@ -417,11 +449,13 @@ namespace
         void activatePath(const QString &path)
         {
             QFileInfo info(path);
-            if (info.isDir()) {
+            if (info.isDir())
+            {
                 openDirectory(info.absoluteFilePath());
                 return;
             }
-            if (info.isFile()) {
+            if (info.isFile())
+            {
                 m_name->setText(info.fileName());
                 m_selection->setText(QDir::toNativeSeparators(info.absoluteFilePath()));
                 confirmSelection();
@@ -431,22 +465,26 @@ namespace
         void confirmSelection()
         {
             QString candidate = m_name->text().trimmed().remove(QLatin1Char('"'));
-            if (candidate.isEmpty() && m_table->currentRow() >= 0) {
+            if (candidate.isEmpty() && m_table->currentRow() >= 0)
+            {
                 if (QTableWidgetItem *item = m_table->item(m_table->currentRow(), 0))
                     candidate = item->data(Qt::UserRole).toString();
             }
             QFileInfo info(candidate);
             if (!info.isAbsolute())
                 info = QFileInfo(QDir(m_currentDir).absoluteFilePath(candidate));
-            if (info.isDir()) {
+            if (info.isDir())
+            {
                 openDirectory(info.absoluteFilePath());
                 return;
             }
-            if (!info.isFile()) {
+            if (!info.isFile())
+            {
                 setStatus(QStringLiteral("Select a file."));
                 return;
             }
-            if (!matchesOpenFilter(info, currentFilter())) {
+            if (!matchesOpenFilter(info, currentFilter()))
+            {
                 setStatus(QStringLiteral("File does not match selected filter."));
                 return;
             }
@@ -1091,7 +1129,8 @@ void MainWindow::showSettingsDialog()
     layout->addWidget(title);
 
     QSettings settings;
-    const auto checkBoxRow = [&dialog](const QString &text, bool checked, const QString &toolTip = QString()) {
+    const auto checkBoxRow = [&dialog](const QString &text, bool checked, const QString &toolTip = QString())
+    {
         auto *row = new QCheckBox(text, &dialog);
         row->setProperty("textureType", QStringLiteral("checkBoxRow"));
         row->setChecked(checked);
@@ -1793,7 +1832,19 @@ bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList
                 *errorMessage = QStringLiteral("Unable to read changed XML: %1").arg(relativeFile);
             return false;
         }
-        replacements.insert(archiveName, file.readAll());
+        QByteArray replacementBytes = file.readAll();
+        if (normalized.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive))
+        {
+            QByteArray originalBytes;
+            QString readError;
+            if (archive.readEntry(archiveName, &originalBytes, &readError))
+            {
+                DataCollectionPreservationReport preservationReport;
+                if (!restoreMissingDataCollectionRecords(originalBytes, &replacementBytes, &preservationReport, errorMessage))
+                    return false;
+            }
+        }
+        replacements.insert(archiveName, replacementBytes);
     }
 
     BackupManager backupManager;
@@ -2140,14 +2191,6 @@ void MainWindow::previewStandardRename(const RenamePlan &plan)
     m_renameIdsPage->setPreviewReport(report);
     if (m_sourceKind == SourceKind::ArchiveFile)
         m_renameIdsPage->setApplyAvailable(false);
-
-    const QString reportPath = QDir(m_rootFolder).absoluteFilePath(QStringLiteral("rename_to_standard_preview.txt"));
-    QSaveFile file(reportPath);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text))
-    {
-        file.write(report.reportText.toUtf8());
-        file.commit();
-    }
     logLine(QStringLiteral("Rename-to-standard preview: %1 renames, %2 reference updates, valid=%3")
                 .arg(report.identitiesRenamed)
                 .arg(report.referencesUpdated)
@@ -2185,13 +2228,6 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
         return;
     }
     m_renamePreviewValid = false;
-    const QString reportPath = QDir(m_rootFolder).absoluteFilePath(QStringLiteral("rename_to_standard_preview.txt"));
-    QSaveFile reportFile(reportPath);
-    if (reportFile.open(QIODevice::WriteOnly | QIODevice::Text))
-    {
-        reportFile.write(result.finalReport.toUtf8());
-        reportFile.commit();
-    }
     loadPathAndAnalyze(m_currentSourcePath);
     m_dryRunPage->recordRenameResult(result.identitiesRenamed);
     QMessageBox::information(this, QStringLiteral("Rename complete"),
@@ -2242,13 +2278,6 @@ void MainWindow::previewDataCollection(const DataCollectionBuildRequest &request
     m_previewedCollectionRequest = request;
     m_collectionPreviewValid = report.valid;
     m_dataCollectionPage->setPreviewReport(report);
-    const QString path = QDir(m_rootFolder).absoluteFilePath(QStringLiteral("data_collection_preview.txt"));
-    QSaveFile file(path);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text))
-    {
-        file.write(report.reportText.toUtf8());
-        file.commit();
-    }
     logLine(QStringLiteral("Data Collection preview: %1 records to add, valid=%2")
                 .arg(report.recordsToAdd.size())
                 .arg(report.valid ? QStringLiteral("yes") : QStringLiteral("no")));
@@ -2312,13 +2341,6 @@ void MainWindow::applyDataCollection(const DataCollectionBuildRequest &request)
         return;
     }
     m_collectionPreviewValid = false;
-    const QString reportPath = QDir(m_rootFolder).absoluteFilePath(QStringLiteral("data_collection_preview.txt"));
-    QSaveFile reportFile(reportPath);
-    if (reportFile.open(QIODevice::WriteOnly | QIODevice::Text))
-    {
-        reportFile.write(result.finalReport.toUtf8());
-        reportFile.commit();
-    }
     loadPathAndAnalyze(m_currentSourcePath);
     m_dryRunPage->recordCollectionResult(result.recordsAdded, result.recordsRemoved);
     QMessageBox::information(this, QStringLiteral("Collection complete"),
@@ -2900,19 +2922,7 @@ void MainWindow::showGraphForRow(int row)
 
 void MainWindow::writeAnalysisReportFile() const
 {
-    if (m_rootFolder.isEmpty() || m_result.analysisReportText.isEmpty())
-    {
-        return;
-    }
-
-    const QString reportPath = QDir(m_rootFolder).absoluteFilePath(QStringLiteral("analysis_report.txt"));
-    QFile file(reportPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
-    {
-        return;
-    }
-    file.write(m_result.analysisReportText.toUtf8());
-    file.close();
+    // Reports stay in the UI unless the user explicitly exports them.
 }
 
 void MainWindow::refreshPages()

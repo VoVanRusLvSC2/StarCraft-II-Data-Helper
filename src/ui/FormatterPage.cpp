@@ -4,6 +4,7 @@
 #include "core/UnitFamilyDetector.h"
 #include <QFont>
 #include <QAbstractItemView>
+#include <QHash>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -109,12 +110,16 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
         plan.unused.append({{status, node.id, node.elementName, detail, candidate.riskLevel},
                             true, true, candidate.nodeIndex, -1});
     }
+    QHash<QString, int> incomingReferenceCount;
+    if (duplicateMergeEnabled)
+        for (const DataNode &source : result.nodes)
+            for (const QString &reference : source.referencedIds)
+                incomingReferenceCount[reference] += 1;
     if (duplicateMergeEnabled) for (const DuplicateContentGroup &group : result.duplicateContentGroups) if (group.nodeIndices.size() > 1) {
         const int keep = group.nodeIndices.front();
         for (int position = 1; position < group.nodeIndices.size(); ++position) {
             const int remove = group.nodeIndices[position];
-            int references = 0;
-            for (const DataNode &source : result.nodes) if (source.referencedIds.contains(result.nodes[remove].id)) ++references;
+            const int references = incomingReferenceCount.value(result.nodes[remove].id);
             plan.duplicates.append({{group.mergeCandidate ? QString() : QStringLiteral("Compare"),
                                      group.mergeCandidate ? group.commonIdMask : QStringLiteral("Unrelated IDs - allowed"),
                                      result.nodes[keep].id, result.nodes[remove].id, QString::number(references)},
@@ -148,11 +153,12 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
         DataCollectionBuildRequest request;
         request.family = family;
         request.summaryOnly = true;
+        request.confirmNonStandard = true;
         const DataCollectionPreviewReport collection = collectionBuilder.preview(result, request, &collectionFamilies);
         plan.collection.append({{QString(), QStringLiteral("%1 [%2]").arg(family.rootId, dataCollectionEntityTypeName(family.entityType)),
                                  QString::number(collection.existingRecordsPreserved.size()),
                                  QString::number(collection.recordsToAdd.size()),
-                                 QStringLiteral("%1 remove / %2 move").arg(collection.recordsToRemove.size()).arg(collection.recordsToMove.size()),
+                                 QStringLiteral("%1 remove / %2 copy").arg(collection.recordsToRemove.size()).arg(collection.recordsToMove.size()),
                                  collection.warnings.join(QStringLiteral("; "))},
                                 collection.valid, collection.valid, familyIndex, -1});
     }
