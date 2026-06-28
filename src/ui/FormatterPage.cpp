@@ -50,9 +50,40 @@ void addRow(QTableWidget *target, const OptimizationPlanRow &row) {
     }
 }
 
-QVector<int> wizardSteps(bool duplicateMergeEnabled)
+bool isSelectableRow(const QTableWidget *table, int row)
 {
-    return duplicateMergeEnabled ? QVector<int>{0, 1, 2, 3, 4} : QVector<int>{0, 2, 3, 4};
+    const QTableWidgetItem *item = table ? table->item(row, 0) : nullptr;
+    return item && (item->flags() & Qt::ItemIsUserCheckable);
+}
+
+int selectableRowCount(const QTableWidget *table)
+{
+    int count = 0;
+    if (!table) return count;
+    for (int row = 0; row < table->rowCount(); ++row)
+        if (isSelectableRow(table, row)) ++count;
+    return count;
+}
+
+int leadingInt(const QString &text)
+{
+    static const QRegularExpression expression(QStringLiteral("^\\s*(\\d+)"));
+    const QRegularExpressionMatch match = expression.match(text);
+    return match.hasMatch() ? match.captured(1).toInt() : text.toInt();
+}
+
+int tableInt(const QTableWidget *table, int row, int column)
+{
+    const QTableWidgetItem *item = table ? table->item(row, column) : nullptr;
+    return item ? leadingInt(item->text()) : 0;
+}
+
+QVector<int> wizardSteps(bool duplicateMergeEnabled, bool includePostApplyAudit)
+{
+    QVector<int> steps = duplicateMergeEnabled ? QVector<int>{0, 1, 2, 3, 4} : QVector<int>{0, 2, 3, 4};
+    if (includePostApplyAudit)
+        steps.append(5);
+    return steps;
 }
 
 class XmlTextHighlighter final : public QSyntaxHighlighter
@@ -183,8 +214,12 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_summary->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_summary->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
     new XmlTextHighlighter(m_summary->document());
+    m_audit = new QPlainTextEdit; m_audit->setReadOnly(true);
+    m_audit->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_audit->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
     m_steps->addTab(m_unused, QStringLiteral("Unused Objects")); m_steps->addTab(m_duplicates, QStringLiteral("Duplicate Merge"));
     m_steps->addTab(m_rename, QStringLiteral("Rename")); m_steps->addTab(m_collection, QStringLiteral("Data Collection")); m_steps->addTab(m_summary, QStringLiteral("Summary"));
+    m_steps->addTab(m_audit, QStringLiteral("Post-Apply Audit"));
     m_steps->tabBar()->hide();
     m_details = new QPlainTextEdit(this);
     m_details->setObjectName(QStringLiteral("optimizationDetails"));
@@ -214,13 +249,13 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_stepActionButton->hide();
     layout->addLayout(navigation);
     connect(m_backButton, &QPushButton::clicked, this, [this] {
-        const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled);
+        const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled, m_hasAppliedChanges);
         const int position = steps.indexOf(m_steps->currentIndex());
         if (position > 0) m_steps->setCurrentIndex(steps[position - 1]);
         updateNavigation();
     });
     connect(m_nextButton, &QPushButton::clicked, this, [this] {
-        const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled);
+        const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled, m_hasAppliedChanges);
         const int position = steps.indexOf(m_steps->currentIndex());
         if (position < 0 || position + 1 >= steps.size()) emit wizardFinished();
         else { m_steps->setCurrentIndex(steps[position + 1]); updateNavigation(); }
@@ -247,8 +282,12 @@ void FormatterPage::setAnalysisResult(const AnalysisResult &result) {
     m_planBuilt = false;
     m_planConfirmed = false;
     m_applying = false;
-    m_summary->setPlainText(QStringLiteral("Open Optimization, then press Build Optimization Preview when you are ready to calculate the five-step plan."));
+    m_hasAppliedChanges = false;
+    m_summary->setPlainText(QStringLiteral("Open Optimization, then press Build Optimization Preview when you are ready to calculate the plan."));
+    m_audit->setPlainText(QStringLiteral("Post-Apply Audit\n\nApply an optimization plan to generate the refreshed audit."));
     m_details->clear();
+    if (m_steps && m_steps->currentIndex() == 5)
+        m_steps->setCurrentIndex(0);
     updateNavigation();
 }
 void FormatterPage::startWizard(bool autoBuild) {
@@ -266,7 +305,8 @@ void FormatterPage::startWizard(bool autoBuild) {
     m_summary->setPlainText(m_duplicateMergeEnabled
         ? QStringLiteral("Optimization is open.\n\nNo heavy scan was started yet.\nPress Build Optimization Preview to calculate unused objects, duplicate merges, rename items, Data Collection additions, and the final summary.")
         : QStringLiteral("Optimization is open.\n\nDuplicate Merge is disabled in Settings and will be skipped.\nPress Build Optimization Preview to calculate unused objects, rename items, Data Collection additions, and the final summary."));
-    m_details->setPlainText(QStringLiteral("1. Press Build Optimization Preview.\n2. Review every item and compare XML here.\n3. Keep recommendations checked or clear individual items.\n4. Apply on step 4 and close when finished."));
+    m_audit->setPlainText(QStringLiteral("Post-Apply Audit\n\nApply an optimization plan to generate the refreshed audit."));
+    m_details->setPlainText(QStringLiteral("1. Press Build Optimization Preview.\n2. Review every item and compare XML here.\n3. Keep recommendations checked or clear individual items.\n4. Apply on the Summary step, then review Post-Apply Audit."));
     m_steps->setCurrentIndex(0);
     updateNavigation();
     if (autoBuild)
@@ -321,15 +361,18 @@ void FormatterPage::buildPreview() {
 }
 void FormatterPage::updateNavigation() {
     const int step = m_steps->currentIndex();
-    const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled);
+    const QVector<int> steps = wizardSteps(m_duplicateMergeEnabled, m_hasAppliedChanges);
     const int position = qMax(0, steps.indexOf(step));
     m_stepLabel->setText(QStringLiteral("Step %1 of %2 - %3").arg(position + 1).arg(steps.size()).arg(m_steps->tabText(step)));
     m_backButton->setEnabled(position > 0 && !m_building && !m_applying);
     const bool summary = step == 4;
-    m_nextButton->setEnabled(!m_building && !m_applying && (!summary ? m_planBuilt : (m_hasAppliedChanges || (m_planBuilt && m_planConfirmed))));
-    m_nextButton->setText(!summary ? QStringLiteral("Next")
-                                   : m_hasAppliedChanges ? QStringLiteral("Close Optimization")
-                                                         : QStringLiteral("Apply Complete"));
+    const bool audit = step == 5;
+    m_nextButton->setEnabled(!m_building && !m_applying
+                             && (audit || (!summary ? m_planBuilt : (m_hasAppliedChanges || (m_planBuilt && m_planConfirmed)))));
+    m_nextButton->setText(audit ? QStringLiteral("Close Optimization")
+                                : !summary ? QStringLiteral("Next")
+                                           : m_hasAppliedChanges ? QStringLiteral("Post-Apply Audit")
+                                                                 : QStringLiteral("Apply Complete"));
     m_buildButton->setEnabled(!m_planBuilt && !m_building && !m_applying);
     m_buildButton->setText(m_applying ? QStringLiteral("Applying Plan...")
                                       : m_building ? QStringLiteral("Building Preview...")
@@ -365,6 +408,10 @@ void FormatterPage::updateDetails()
     const int step = m_steps->currentIndex();
     if (step == 4) {
         m_details->setPlainText(buildIdChangePreview());
+        return;
+    }
+    if (step == 5) {
+        m_details->setPlainText(m_audit ? m_audit->toPlainText() : QStringLiteral("Post-apply audit is not available."));
         return;
     }
     auto *table = qobject_cast<QTableWidget *>(m_steps->currentWidget());
@@ -450,7 +497,7 @@ void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collec
     for (int index = 0; index < m_duplicates->rowCount(); ++index) {
         QTableWidgetItem *item = m_duplicates->item(index, 0);
         if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked) {
-            redirects += m_duplicates->item(index, 4)->text().toInt();
+            redirects += tableInt(m_duplicates, index, 4);
             ++duplicateDeletes;
         }
     }
@@ -461,12 +508,96 @@ void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collec
     for (int index = 0; index < m_collection->rowCount(); ++index) {
         QTableWidgetItem *item = m_collection->item(index, 0);
         if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked)
-            collectionAdds += m_collection->item(index, 3)->text().toInt(), collectionMoves += m_collection->item(index, 4)->text().toInt();
+            collectionAdds += tableInt(m_collection, index, 3), collectionMoves += tableInt(m_collection, index, 4);
     }
-    m_summary->setPlainText(QStringLiteral("Optimization Summary\n\nProjected:\n- unused objects to delete: %1\n- duplicate objects to delete: %2\n- references moved to kept duplicates: %3\n- IDs to rename: %4\n- Data Collection records to add: %5\n- Data Collection records to reorganize: %6\n\nActually completed:\n- unused deleted: %7\n- duplicates deleted: %8\n- references redirected: %9\n- IDs renamed: %10\n- collection records added: %11\n- collection records reorganized: %12\n")
+    QString summary = QStringLiteral("Optimization Summary\n\nProjected:\n- unused objects to delete: %1\n- duplicate objects to delete: %2\n- references moved to kept duplicates: %3\n- IDs to rename: %4\n- Data Collection records to add: %5\n- Data Collection records to reorganize: %6\n\nActually completed:\n- unused deleted: %7\n- duplicates deleted: %8\n- references redirected: %9\n- IDs renamed: %10\n- collection records added: %11\n- collection records reorganized: %12\n")
         .arg(selectedUnusedRows().size()).arg(duplicateDeletes).arg(redirects).arg(renameCount).arg(collectionAdds).arg(collectionMoves)
-        .arg(m_actualUnused).arg(m_actualDuplicates).arg(m_actualRedirected).arg(m_actualRenamed).arg(m_actualCollectionAdded).arg(m_actualCollectionReorganized));
-    if (m_steps->currentIndex() == 4) updateDetails();
+        .arg(m_actualUnused).arg(m_actualDuplicates).arg(m_actualRedirected).arg(m_actualRenamed).arg(m_actualCollectionAdded).arg(m_actualCollectionReorganized);
+    if (m_hasAppliedChanges && m_planBuilt) {
+        QStringList nextSteps;
+        if (selectedUnusedRows().size() > 0)
+            nextSteps << QStringLiteral("Run another unused-object pass: refreshed analysis still has %1 safe candidate(s).").arg(selectedUnusedRows().size());
+        if (duplicateDeletes > 0)
+            nextSteps << QStringLiteral("Review duplicate merge again: %1 merge candidate(s) remain after refresh.").arg(duplicateDeletes);
+        if (renameCount > 0)
+            nextSteps << QStringLiteral("Review Rename To Standard again: %1 ID change(s) are still available.").arg(renameCount);
+        if (collectionAdds > 0 || collectionMoves > 0)
+            nextSteps << QStringLiteral("Update Data Collection again: %1 record(s) can be added, %2 record(s) can be reorganized.").arg(collectionAdds).arg(collectionMoves);
+        if (nextSteps.isEmpty())
+            nextSteps << QStringLiteral("No remaining wizard recommendations were detected after the refreshed analysis.");
+        summary += QStringLiteral("\nNext optimization pass\n- %1\n").arg(nextSteps.join(QStringLiteral("\n- ")));
+    }
+    m_summary->setPlainText(summary);
+    updatePostApplyAudit();
+    if (m_steps->currentIndex() == 4 || m_steps->currentIndex() == 5) updateDetails();
+}
+
+void FormatterPage::updatePostApplyAudit()
+{
+    if (!m_audit) return;
+    if (!m_hasAppliedChanges) {
+        m_audit->setPlainText(QStringLiteral("Post-Apply Audit\n\nApply an optimization plan to generate the refreshed audit."));
+        return;
+    }
+    if (m_building || !m_planBuilt) {
+        m_audit->setPlainText(QStringLiteral("Post-Apply Audit\n\nRefreshing analysis after apply..."));
+        return;
+    }
+
+    const int remainingUnused = selectableRowCount(m_unused);
+    const int remainingDuplicates = m_duplicateMergeEnabled ? selectableRowCount(m_duplicates) : 0;
+    const int remainingRename = selectableRowCount(m_rename);
+    const int remainingCollections = selectableRowCount(m_collection);
+    int remainingRedirects = 0;
+    int remainingCollectionAdds = 0;
+    int remainingCollectionMoves = 0;
+    if (m_duplicateMergeEnabled) {
+        for (int row = 0; row < m_duplicates->rowCount(); ++row)
+            if (isSelectableRow(m_duplicates, row)) remainingRedirects += tableInt(m_duplicates, row, 4);
+    }
+    for (int row = 0; row < m_collection->rowCount(); ++row) {
+        if (!isSelectableRow(m_collection, row)) continue;
+        remainingCollectionAdds += tableInt(m_collection, row, 3);
+        remainingCollectionMoves += tableInt(m_collection, row, 4);
+    }
+    const int remainingTotal = remainingUnused + remainingDuplicates + remainingRename + remainingCollections;
+
+    QStringList lines;
+    lines << QStringLiteral("Post-Apply Audit")
+          << QStringLiteral("================")
+          << QString()
+          << (remainingTotal == 0
+                  ? QStringLiteral("Status: PASS - refreshed analysis has no remaining wizard recommendations.")
+                  : QStringLiteral("Status: FOLLOW-UP - refreshed analysis still has optimization candidates."))
+          << QString()
+          << QStringLiteral("Completed in this optimization session")
+          << QStringLiteral("- unused deleted: %1").arg(m_actualUnused)
+          << QStringLiteral("- duplicate objects deleted: %1").arg(m_actualDuplicates)
+          << QStringLiteral("- references redirected: %1").arg(m_actualRedirected)
+          << QStringLiteral("- IDs renamed: %1").arg(m_actualRenamed)
+          << QStringLiteral("- collection records added: %1").arg(m_actualCollectionAdded)
+          << QStringLiteral("- collection records reorganized: %1").arg(m_actualCollectionReorganized)
+          << QString()
+          << QStringLiteral("Remaining recommendations after refresh")
+          << QStringLiteral("- safe unused objects: %1").arg(remainingUnused);
+    lines << (m_duplicateMergeEnabled
+                  ? QStringLiteral("- duplicate merge candidates: %1, estimated redirects: %2").arg(remainingDuplicates).arg(remainingRedirects)
+                  : QStringLiteral("- duplicate merge candidates: skipped because Duplicate Merge is disabled in Settings"));
+    lines << QStringLiteral("- rename candidates: %1").arg(remainingRename)
+          << QStringLiteral("- Data Collection families: %1, records to add: %2, records to reorganize: %3")
+                 .arg(remainingCollections)
+                 .arg(remainingCollectionAdds)
+                 .arg(remainingCollectionMoves)
+          << QString();
+
+    if (remainingTotal == 0) {
+        lines << QStringLiteral("Recommended next action")
+              << QStringLiteral("- Save the optimized copy and test it in StarCraft II Editor.");
+    } else {
+        lines << QStringLiteral("Recommended next action")
+              << QStringLiteral("- Run another optimization pass or inspect the remaining rows before closing.");
+    }
+    m_audit->setPlainText(lines.join(QLatin1Char('\n')));
 }
 void FormatterPage::setPreview(const QString &text) { m_summary->setPlainText(text); m_steps->setCurrentWidget(m_summary); updateNavigation(); }
 void FormatterPage::recordUnusedResult(int value) { m_actualUnused += value; updateSummary(); }

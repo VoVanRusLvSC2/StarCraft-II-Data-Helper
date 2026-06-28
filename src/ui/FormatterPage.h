@@ -85,6 +85,7 @@ signals:
 private:
     void buildPreview();
     void updateSummary();
+    void updatePostApplyAudit();
     void updateNavigation();
     void updateDetails();
     void setRecommendedSelection(bool selected);
@@ -101,6 +102,7 @@ private:
     QTableWidget *m_rename = nullptr;
     QTableWidget *m_collection = nullptr;
     QPlainTextEdit *m_summary = nullptr;
+    QPlainTextEdit *m_audit = nullptr;
     QPlainTextEdit *m_details = nullptr;
     QLabel *m_stepLabel = nullptr;
     QPushButton *m_backButton = nullptr;
