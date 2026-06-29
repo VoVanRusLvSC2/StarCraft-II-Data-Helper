@@ -3,6 +3,7 @@
 #include "core/StandardNamePlanner.h"
 
 #include <QSet>
+#include <functional>
 
 struct RenamePreviewReport
 {
@@ -24,6 +25,7 @@ struct RenameApplyResult
     QStringList changedFiles;
     int identitiesRenamed = 0;
     int referencesUpdated = 0;
+    QStringList warnings;
     QString error;
     QString finalReport;
 };
@@ -31,9 +33,12 @@ struct RenameApplyResult
 class ReferenceRenamer
 {
 public:
+    using ProgressCallback = std::function<void(const QString &stage, int index, int total, const QString &file)>;
+
     RenamePreviewReport preview(const AnalysisResult &analysis, const RenamePlan &plan) const;
     RenameApplyResult apply(const AnalysisResult &analysis, const RenamePlan &plan,
-                            const QString &rootFolder, const QSet<QString> &whitelistIds) const;
+                            const QString &rootFolder, const QSet<QString> &whitelistIds,
+                            const ProgressCallback &progress = {}) const;
     void setFailureInjectionStep(const QString &step) { m_failureInjectionStep = step; }
 
 private:

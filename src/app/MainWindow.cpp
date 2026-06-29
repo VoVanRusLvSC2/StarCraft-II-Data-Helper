@@ -3258,6 +3258,32 @@ void MainWindow::applyOptimizationWizardPlan()
     {
         return ref.sourceFile + QChar(0x1f) + ref.originalLocation + QChar(0x1f) + ref.elementName + QChar(0x1f) + ref.id;
     };
+    const auto makeRenameProgress = [&](int basePercent, int spanPercent) -> ReferenceRenamer::ProgressCallback
+    {
+        return [&, basePercent, spanPercent](const QString &stage, int index, int total, const QString &file)
+        {
+            int percent = basePercent;
+            if (total > 0)
+                percent += (qBound(0, index, total) * spanPercent) / total;
+            QString detail;
+            if (stage == QStringLiteral("locate"))
+                detail = QStringLiteral("Locating XML identities");
+            else if (stage == QStringLiteral("rewrite"))
+                detail = QStringLiteral("Rewriting XML IDs and references");
+            else if (stage == QStringLiteral("backup"))
+                detail = QStringLiteral("Creating rename backup");
+            else if (stage == QStringLiteral("write"))
+                detail = QStringLiteral("Saving renamed XML");
+            else if (stage == QStringLiteral("verify"))
+                detail = QStringLiteral("Verifying renamed IDs");
+            else
+                detail = QStringLiteral("Applying rename changes");
+            if (!file.isEmpty())
+                detail += QStringLiteral(": %1").arg(QFileInfo(file).fileName());
+            updateApplyProgress(qBound(basePercent, percent, basePercent + spanPercent),
+                                QStringLiteral("Applying rename changes"), detail);
+        };
+    };
     const auto buildCombinedRenamePlan = [this](const AnalysisResult &analysis,
                                                 const QVector<WizardRenameSelection> &renameSelection,
                                                 QStringList *planWarnings)
@@ -3532,7 +3558,9 @@ void MainWindow::applyOptimizationWizardPlan()
                     updateApplyProgress(56, QStringLiteral("Applying rename changes"),
                                         QStringLiteral("Updating %1 real XML IDs and references in one pass")
                                             .arg(combinedRenamePlan.items.size()));
-                    const RenameApplyResult result = m_referenceRenamer.apply(current, combinedRenamePlan, workspace.path(), m_whitelistIds);
+                    const RenameApplyResult result = m_referenceRenamer.apply(
+                        current, combinedRenamePlan, workspace.path(), m_whitelistIds,
+                        makeRenameProgress(56, 8));
                     if (!result.success)
                     {
                         failure = result.error;
@@ -3540,6 +3568,7 @@ void MainWindow::applyOptimizationWizardPlan()
                     else
                     {
                         renamedIds += result.identitiesRenamed;
+                        warnings.append(result.warnings);
                         changedFiles.append(result.changedFiles);
                         changedFiles.removeDuplicates();
                         if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
@@ -3736,7 +3765,9 @@ void MainWindow::applyOptimizationWizardPlan()
                 updateApplyProgress(61, QStringLiteral("Applying rename changes"),
                                     QStringLiteral("Updating %1 IDs and references in one pass")
                                         .arg(combinedRenamePlan.items.size()));
-                const RenameApplyResult result = m_referenceRenamer.apply(current, combinedRenamePlan, m_rootFolder, m_whitelistIds);
+                const RenameApplyResult result = m_referenceRenamer.apply(
+                    current, combinedRenamePlan, m_rootFolder, m_whitelistIds,
+                    makeRenameProgress(61, 17));
                 if (!result.success)
                 {
                     failure = result.error;
@@ -3744,6 +3775,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 else
                 {
                     renamedIds += result.identitiesRenamed;
+                    warnings.append(result.warnings);
                     if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
                         failure = error;
                 }

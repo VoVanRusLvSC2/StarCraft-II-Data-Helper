@@ -728,14 +728,20 @@ QDialog#sc2OpenFileDialog QComboBox,
 QDialog#sc2OpenFileDialog QTableWidget,
 QDialog#sc2OpenFileDialog QListWidget {
     color: #9fffdc;
+    font-size: 12pt;
+    font-weight: 600;
 }
 
 QDialog#sc2OpenFileDialog QLabel#panelTitle {
     color: #eafff6;
+    font-size: 13pt;
+    font-weight: 700;
 }
 
 QDialog#sc2OpenFileDialog QLabel#inspectorSubtitle {
     color: #93e8cc;
+    font-size: 12pt;
+    font-weight: 600;
 }
 
 QDialog#sc2OpenFileDialog QLineEdit {
@@ -743,6 +749,9 @@ QDialog#sc2OpenFileDialog QLineEdit {
     border: 6px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
     color: #9fffdc;
+    min-height: 34px;
+    padding: 4px 12px;
+    font-weight: 600;
     selection-background-color: rgba(75, 218, 176, 130);
     selection-color: #ffffff;
 }
@@ -751,6 +760,8 @@ QDialog#sc2OpenFileDialog QLineEdit:hover,
 QDialog#sc2OpenFileDialog QLineEdit:focus {
     border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
     color: #ffffff;
+    padding: 4px 12px;
+    font-weight: 600;
 }
 
 QComboBox#sc2OpenFileFilter {
@@ -758,18 +769,24 @@ QComboBox#sc2OpenFileFilter {
     border: 8px solid transparent;
     border-image: url(:/textures/ui_glue_dropdownbutton_normal_terran.png) 16 16 16 16 stretch stretch;
     color: #9fffdc;
+    min-height: 34px;
     padding: 2px 42px 2px 12px;
+    font-weight: 600;
 }
 
 QComboBox#sc2OpenFileFilter:hover,
 QComboBox#sc2OpenFileFilter:focus {
     border-image: url(:/textures/ui_glue_dropdownbutton_over_terran.png) 16 16 16 16 stretch stretch;
     color: #ffffff;
+    padding: 2px 42px 2px 12px;
+    font-weight: 600;
 }
 
 QComboBox#sc2OpenFileFilter:on {
     border-image: url(:/textures/ui_glue_dropdownbutton_Pressed_terran.png) 16 16 16 16 stretch stretch;
     color: #ffffff;
+    padding: 2px 42px 2px 12px;
+    font-weight: 600;
 }
 
 QComboBox#sc2OpenFileFilter::drop-down {
@@ -803,20 +820,26 @@ QTableWidget#fileOpenTable::item {
     border: 4px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
     color: #9fffdc;
+    min-height: 30px;
     padding: 5px 10px;
+    font-size: 12pt;
+    font-weight: 600;
 }
 
 QListWidget#fileOpenPlaces::item:hover,
 QTableWidget#fileOpenTable::item:hover {
     border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
     color: #ffffff;
+    padding: 5px 10px;
+    font-weight: 600;
 }
 
 QListWidget#fileOpenPlaces::item:selected,
 QTableWidget#fileOpenTable::item:selected {
     border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
     color: #ffffff;
-    font-weight: 700;
+    padding: 5px 10px;
+    font-weight: 600;
 }
 
 QDialog#sc2OpenFileDialog QHeaderView::section {
@@ -824,11 +847,17 @@ QDialog#sc2OpenFileDialog QHeaderView::section {
     border: 5px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
     color: #b7ffe8;
+    min-height: 34px;
+    padding: 6px 10px;
+    font-size: 12pt;
+    font-weight: 600;
 }
 
 QDialog#sc2OpenFileDialog QHeaderView::section:hover {
     border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
     color: #ffffff;
+    padding: 6px 10px;
+    font-weight: 600;
 }
 
 QDialog#sc2OpenFileDialog QPushButton {
