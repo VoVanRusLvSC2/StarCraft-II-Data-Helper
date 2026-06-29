@@ -14,11 +14,12 @@ catalog file.
 - Analyze XML catalogs, references, duplicate bodies, unused chains, assets,
   localization, and archive metadata
 - Build and update typed Data Collections for supported editor catalog objects
-- Preview and safely remove unused objects and whole unused object chains
+- Preview and safely remove unused data objects and whole unused data-object chains
 - Find exact duplicate XML bodies, redirect references, and merge safely
 - Preview and apply Rename To Standard operations for unit-family style data
-- Run Deep Cleanup for unused assets, stale strings, redundant default fields,
-  broken actor events, and archive/helper trash
+- Run Import Cleanup for unused imported files in folders or archives
+- Run Deep Cleanup for stale strings, redundant default fields, broken actor
+  events, dependency review, and archive/helper trash
 - Show full XML source with syntax highlighting
 - Open an Optimization Wizard for batch review before apply
 
@@ -55,9 +56,9 @@ Destructive operations are preview-first and backup-first.
 
 ## Main tools
 
-### Unused Objects
+### Unused Data Objects
 
-Find catalog objects with no incoming XML references and no script/text usage.
+Find catalog data objects with no incoming XML references and no script/text usage.
 Whitelisted, protected, and referenced objects are blocked. Linked unused
 subgraphs can be removed as chains when every incoming XML source is also part
 of the selected deletion set.
@@ -68,11 +69,22 @@ Detect exact duplicate normalized XML bodies for the same object type, preview
 reference redirects, then keep one object and remove the duplicate safely.
 Duplicate Merge is enabled by default in the Optimization Wizard.
 
+### Import Cleanup
+
+Find unused imported files separately from catalog object cleanup. This covers
+assets such as `.dds`, `.m3`, `.ogg`, `.wav`, `.tga`, `.layout`, and related
+files when they are not referenced by Data XML, layouts, triggers, preload
+data, or game strings. In archive mode the wizard materializes cleanup-relevant
+archive entries into its workspace before apply, so direct `.SC2Map` and
+`.SC2Mod` optimization can remove proven unused imports from the packed file.
+Editor-managed map files such as `Minimap.tga`, `LightingMap.tga`, and
+`PreloadAssetDB.txt` are protected even when normal XML references do not point
+to them.
+
 ### Deep Cleanup
 
-Find and optionally apply safe cleanup outside normal catalog-object deletion:
+Find and optionally apply safe cleanup outside data-object and import deletion:
 
-- unused imported assets in folders or extracted map/mod data
 - stale localization lines for object IDs that no longer exist
 - redundant attributes that duplicate a local parent object's value
 - broken actor event XML nodes that reference only missing typed IDs
@@ -97,7 +109,8 @@ it is skipped and reported while the rest of the selected safe work continues.
 
 1. Open an `.SC2Map`, `.SC2Mod`, folder, or XML file
 2. Run `Analyze`
-3. Review Data Collection, Unused Objects, Duplicate Merge, or Optimization
+3. Review Data Collection, Unused Data Objects, Import Cleanup, Duplicate
+   Merge, or Optimization
 4. Preview the change
 5. Apply only after checking the result
 

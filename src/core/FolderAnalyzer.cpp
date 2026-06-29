@@ -143,7 +143,9 @@ bool FolderAnalyzer::isSc2DataLikeFile(const QFileInfo &info) const
         return false;
     static const QSet<QString> extensions = {
         QStringLiteral("xml"), QStringLiteral("txt"), QStringLiteral("json"), QStringLiteral("ini"),
-        QStringLiteral("galaxy"), QStringLiteral("csv"), QStringLiteral("yaml"), QStringLiteral("yml")};
+        QStringLiteral("galaxy"), QStringLiteral("csv"), QStringLiteral("yaml"), QStringLiteral("yml"),
+        QStringLiteral("layout"), QStringLiteral("sc2layout"), QStringLiteral("fxa"),
+        QStringLiteral("fxs"), QStringLiteral("fxh")};
     return extensions.contains(info.suffix().toLower());
 }
 
@@ -623,7 +625,7 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
     for (const UnusedCandidateInfo &info : result.unusedCandidates)
         if (info.state == CandidateState::Blocked)
             ++blockedUnused;
-    report += QStringLiteral("Blocked unused objects: %1\n").arg(blockedUnused);
+    report += QStringLiteral("Blocked unused data objects: %1\n").arg(blockedUnused);
     report += QStringLiteral("Parse errors: %1\n\n").arg(result.parseErrors.size());
 
     report += QStringLiteral("Duplicate IDs\n");
@@ -695,7 +697,7 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
                            info.dataCollectionMemberships.join(QStringLiteral(", ")), info.riskLevel);
     }
 
-    report += QStringLiteral("\nBlocked unused objects\n");
+    report += QStringLiteral("\nBlocked unused data objects\n");
     for (const UnusedCandidateInfo &info : result.unusedCandidates)
     {
         if (info.state != CandidateState::Blocked)

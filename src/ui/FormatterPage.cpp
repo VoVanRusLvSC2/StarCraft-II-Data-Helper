@@ -29,11 +29,12 @@
 namespace {
 constexpr int kUnusedStep = 0;
 constexpr int kDuplicateStep = 1;
-constexpr int kDeepCleanupStep = 2;
-constexpr int kRenameStep = 3;
-constexpr int kCollectionStep = 4;
-constexpr int kSummaryStep = 5;
-constexpr int kAuditStep = 6;
+constexpr int kImportCleanupStep = 2;
+constexpr int kDeepCleanupStep = 3;
+constexpr int kRenameStep = 4;
+constexpr int kCollectionStep = 5;
+constexpr int kSummaryStep = 6;
+constexpr int kAuditStep = 7;
 
 QTableWidget *makeTable(const QStringList &headers) {
     auto *value = new QTableWidget; value->setColumnCount(headers.size()); value->setHorizontalHeaderLabels(headers);
@@ -91,8 +92,8 @@ int tableInt(const QTableWidget *table, int row, int column)
 QVector<int> wizardSteps(bool duplicateMergeEnabled, bool includePostApplyAudit)
 {
     QVector<int> steps = duplicateMergeEnabled
-        ? QVector<int>{kUnusedStep, kDuplicateStep, kDeepCleanupStep, kRenameStep, kCollectionStep, kSummaryStep}
-        : QVector<int>{kUnusedStep, kDeepCleanupStep, kRenameStep, kCollectionStep, kSummaryStep};
+        ? QVector<int>{kUnusedStep, kDuplicateStep, kImportCleanupStep, kDeepCleanupStep, kRenameStep, kCollectionStep, kSummaryStep}
+        : QVector<int>{kUnusedStep, kImportCleanupStep, kDeepCleanupStep, kRenameStep, kCollectionStep, kSummaryStep};
     if (includePostApplyAudit)
         steps.append(kAuditStep);
     return steps;
@@ -174,16 +175,28 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
         const QString state = candidate.state == CandidateState::Safe ? QStringLiteral("Safe")
             : candidate.state == CandidateState::Risky ? QStringLiteral("Review")
                                                        : QStringLiteral("Blocked");
-        plan.deepCleanup.append({{state,
-                                  deepCleanupKindName(candidate.kind),
-                                  candidate.label,
-                                  deepCleanupActionName(candidate.action),
-                                  candidate.reason,
-                                  candidate.bytes > 0 ? QString::number(candidate.bytes) : QString()},
-                                 safe && candidate.recommended,
-                                 safe,
-                                 candidate.index,
-                                 -1});
+        if (candidate.kind == DeepCleanupKind::UnusedAsset) {
+            plan.importCleanup.append({{state,
+                                        candidate.label,
+                                        deepCleanupActionName(candidate.action),
+                                        candidate.reason,
+                                        candidate.bytes > 0 ? QString::number(candidate.bytes) : QString()},
+                                       safe && candidate.recommended,
+                                       safe,
+                                       candidate.index,
+                                       -1});
+        } else {
+            plan.deepCleanup.append({{state,
+                                      deepCleanupKindName(candidate.kind),
+                                      candidate.label,
+                                      deepCleanupActionName(candidate.action),
+                                      candidate.reason,
+                                      candidate.bytes > 0 ? QString::number(candidate.bytes) : QString()},
+                                     safe && candidate.recommended,
+                                     safe,
+                                     candidate.index,
+                                     -1});
+        }
     }
     const QVector<UnitFamily> renameFamilies = UnitFamilyDetector().detect(result);
     for (const UnitFamily &family : renameFamilies) {
@@ -233,8 +246,9 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     hint->setObjectName(QStringLiteral("inspectorSubtitle")); hint->setWordWrap(true); layout->addWidget(hint);
     m_steps = new QTabWidget(this);
     m_steps->setObjectName(QStringLiteral("optimizationSteps"));
-    m_unused = makeTable({QStringLiteral("Use"), QStringLiteral("Object ID"), QStringLiteral("Type"), QStringLiteral("Reason"), QStringLiteral("Risk")});
+    m_unused = makeTable({QStringLiteral("Use"), QStringLiteral("Data object ID"), QStringLiteral("Catalog type"), QStringLiteral("Reason"), QStringLiteral("Risk")});
     m_duplicates = makeTable({QStringLiteral("Use"), QStringLiteral("ID mask"), QStringLiteral("Keep"), QStringLiteral("Remove"), QStringLiteral("References redirected")});
+    m_importCleanup = makeTable({QStringLiteral("Use"), QStringLiteral("Import file"), QStringLiteral("Action"), QStringLiteral("Reason"), QStringLiteral("Bytes")});
     m_deepCleanup = makeTable({QStringLiteral("Use"), QStringLiteral("Kind"), QStringLiteral("Target"), QStringLiteral("Action"), QStringLiteral("Reason"), QStringLiteral("Bytes")});
     m_rename = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Role"),
                           QStringLiteral("Current ID"), QStringLiteral("Proposed ID"),
@@ -242,6 +256,7 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_collection = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Existing records"), QStringLiteral("Can add"), QStringLiteral("Move out"), QStringLiteral("Warnings")});
     m_unused->setObjectName(QStringLiteral("optimizationUnusedTable"));
     m_duplicates->setObjectName(QStringLiteral("optimizationDuplicateTable"));
+    m_importCleanup->setObjectName(QStringLiteral("optimizationImportCleanupTable"));
     m_deepCleanup->setObjectName(QStringLiteral("optimizationDeepCleanupTable"));
     m_rename->setObjectName(QStringLiteral("optimizationRenameTable"));
     m_collection->setObjectName(QStringLiteral("optimizationCollectionTable"));
@@ -254,7 +269,8 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_audit->setObjectName(QStringLiteral("optimizationAudit"));
     m_audit->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_audit->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
-    m_steps->addTab(m_unused, QStringLiteral("Unused Objects")); m_steps->addTab(m_duplicates, QStringLiteral("Duplicate Merge"));
+    m_steps->addTab(m_unused, QStringLiteral("Unused Data Objects")); m_steps->addTab(m_duplicates, QStringLiteral("Duplicate Merge"));
+    m_steps->addTab(m_importCleanup, QStringLiteral("Import Cleanup"));
     m_steps->addTab(m_deepCleanup, QStringLiteral("Deep Cleanup"));
     m_steps->addTab(m_rename, QStringLiteral("Rename")); m_steps->addTab(m_collection, QStringLiteral("Data Collection")); m_steps->addTab(m_summary, QStringLiteral("Summary"));
     m_steps->addTab(m_audit, QStringLiteral("Post-Apply Audit"));
@@ -282,7 +298,7 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_selectRecommendedButton = new QPushButton(QStringLiteral("Select Recommended"), this);
     m_clearSelectionButton = new QPushButton(QStringLiteral("Clear Selection"), this);
     m_applyPlanButton = new QPushButton(QStringLiteral("Apply Optimization Plan"), this);
-    m_stepActionButton = new QPushButton(QStringLiteral("Open Unused Objects Preview / Apply"), this);
+    m_stepActionButton = new QPushButton(QStringLiteral("Open Unused Data Objects Preview / Apply"), this);
     m_nextButton = new QPushButton(QStringLiteral("Next"), this);
     navigation->addWidget(m_stepLabel); navigation->addStretch(1); navigation->addWidget(m_selectRecommendedButton); navigation->addWidget(m_clearSelectionButton); navigation->addWidget(m_backButton); navigation->addWidget(m_buildButton); navigation->addWidget(m_applyPlanButton); navigation->addWidget(m_nextButton);
     m_stepActionButton->hide();
@@ -307,9 +323,9 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
         emit applyWizardRequested();
     });
     connect(m_steps, &QTabWidget::currentChanged, this, [this] { updateNavigation(); updateDetails(); });
-    for (QTableWidget *value : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection})
+    for (QTableWidget *value : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection})
         connect(value, &QTableWidget::itemSelectionChanged, this, &FormatterPage::updateDetails);
-    for (QTableWidget *value : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) connect(value, &QTableWidget::itemChanged, this, [this] {
+    for (QTableWidget *value : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection}) connect(value, &QTableWidget::itemChanged, this, [this] {
         m_planConfirmed = false;
         m_hasAppliedChanges = false;
         updateSummary();
@@ -317,7 +333,7 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     });
 }
 void FormatterPage::setAnalysisResult(const AnalysisResult &result) {
-    m_result = result; for (QTableWidget *value : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) value->setRowCount(0);
+    m_result = result; for (QTableWidget *value : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection}) value->setRowCount(0);
     m_planBuilt = false;
     m_planConfirmed = false;
     m_applying = false;
@@ -340,11 +356,12 @@ void FormatterPage::startWizard(bool autoBuild) {
     m_actualRenamed = 0;
     m_actualCollectionAdded = 0;
     m_actualCollectionReorganized = 0;
+    m_actualImportCleanup = 0;
     m_actualDeepCleanup = 0;
-    for (QTableWidget *value : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) value->setRowCount(0);
+    for (QTableWidget *value : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection}) value->setRowCount(0);
     m_summary->setPlainText(m_duplicateMergeEnabled
-        ? QStringLiteral("Optimization is open.\n\nNo heavy scan was started yet.\nPress Build Optimization Preview to calculate unused objects, duplicate merges, deep cleanup, rename items, Data Collection additions, and the final summary.")
-        : QStringLiteral("Optimization is open.\n\nDuplicate Merge is disabled in Settings and will be skipped.\nPress Build Optimization Preview to calculate unused objects, deep cleanup, rename items, Data Collection additions, and the final summary."));
+        ? QStringLiteral("Optimization is open.\n\nNo heavy scan was started yet.\nPress Build Optimization Preview to calculate unused data objects, duplicate merges, import cleanup, deep cleanup, rename items, Data Collection additions, and the final summary.")
+        : QStringLiteral("Optimization is open.\n\nDuplicate Merge is disabled in Settings and will be skipped.\nPress Build Optimization Preview to calculate unused data objects, import cleanup, deep cleanup, rename items, Data Collection additions, and the final summary."));
     m_audit->setPlainText(QStringLiteral("Post-Apply Audit\n\nApply an optimization plan to generate the refreshed audit."));
     m_details->setPlainText(QStringLiteral("1. Press Build Optimization Preview.\n2. Review every item and compare XML here.\n3. Keep recommendations checked or clear individual items.\n4. Apply on the Summary step, then review Post-Apply Audit."));
     m_steps->setCurrentIndex(kUnusedStep);
@@ -357,7 +374,7 @@ void FormatterPage::buildPreview() {
     m_planBuilt = false;
     m_building = true;
     m_planConfirmed = false;
-    for (QTableWidget *value : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) value->setRowCount(0);
+    for (QTableWidget *value : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection}) value->setRowCount(0);
     m_summary->setPlainText(QStringLiteral("Building optimization preview in the background...\n\nThe window remains usable while the plan is calculated."));
     updateNavigation();
     auto *watcher = new QFutureWatcher<OptimizationPlanData>(this);
@@ -368,24 +385,27 @@ void FormatterPage::buildPreview() {
         m_planWatcher = nullptr;
         const QSignalBlocker unusedBlocker(m_unused);
         const QSignalBlocker duplicateBlocker(m_duplicates);
+        const QSignalBlocker importCleanupBlocker(m_importCleanup);
         const QSignalBlocker deepCleanupBlocker(m_deepCleanup);
         const QSignalBlocker renameBlocker(m_rename);
         const QSignalBlocker collectionBlocker(m_collection);
-        for (QTableWidget *table : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) table->setUpdatesEnabled(false);
+        for (QTableWidget *table : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection}) table->setUpdatesEnabled(false);
         for (const OptimizationPlanRow &row : plan.unused) addRow(m_unused, row);
         for (const OptimizationPlanRow &row : plan.duplicates) addRow(m_duplicates, row);
+        for (const OptimizationPlanRow &row : plan.importCleanup) addRow(m_importCleanup, row);
         for (const OptimizationPlanRow &row : plan.deepCleanup) addRow(m_deepCleanup, row);
         for (const OptimizationPlanRow &row : plan.rename) addRow(m_rename, row);
         for (const OptimizationPlanRow &row : plan.collection) addRow(m_collection, row);
         const auto addEmptyState = [](QTableWidget *table, const QString &text) {
             if (table->rowCount() == 0) addRow(table, {{QStringLiteral("Info"), text}, false, false, -1, -1});
         };
-        addEmptyState(m_unused, QStringLiteral("No unused objects were detected"));
+        addEmptyState(m_unused, QStringLiteral("No unused data objects were detected"));
         addEmptyState(m_duplicates, QStringLiteral("No duplicate bodies were detected"));
+        addEmptyState(m_importCleanup, QStringLiteral("No unused imported files were detected"));
         addEmptyState(m_deepCleanup, QStringLiteral("No deep cleanup candidates were detected"));
         addEmptyState(m_rename, QStringLiteral("No rename recommendations were detected"));
         addEmptyState(m_collection, QStringLiteral("No Data Collection recommendations were detected"));
-        for (QTableWidget *table : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) {
+        for (QTableWidget *table : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection}) {
             table->resizeColumnsToContents();
             table->setUpdatesEnabled(true);
         }
@@ -447,7 +467,7 @@ void FormatterPage::setRecommendedSelection(bool selected)
 
 void FormatterPage::selectRecommendedItems()
 {
-    for (QTableWidget *table : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) {
+    for (QTableWidget *table : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection}) {
         const QSignalBlocker blocker(table);
         for (int row = 0; row < table->rowCount(); ++row) {
             QTableWidgetItem *item = table->item(row, 0);
@@ -489,10 +509,21 @@ void FormatterPage::updateDetails()
             .arg(node.elementName, node.id, node.sourceFile, node.originalLocation, node.serializedXml);
     };
     if (step == kUnusedStep) {
-        m_details->setPlainText(QStringLiteral("UNUSED OBJECT REVIEW\n\n%1").arg(xmlFor(primary)));
+        m_details->setPlainText(QStringLiteral("UNUSED DATA OBJECT REVIEW\n\n%1").arg(xmlFor(primary)));
     } else if (step == kDuplicateStep) {
         m_details->setPlainText(QStringLiteral("KEEP OBJECT\n============\n%1\n\nREMOVE / COMPARE OBJECT\n=======================\n%2")
                                     .arg(xmlFor(primary), xmlFor(secondary)));
+    } else if (step == kImportCleanupStep) {
+        QStringList fields;
+        for (int column = 1; column < table->columnCount(); ++column)
+            fields << QStringLiteral("%1: %2").arg(table->horizontalHeaderItem(column)->text(), table->item(row, column)->text());
+        if (primary >= 0 && primary < m_result.deepCleanupCandidates.size()) {
+            const DeepCleanupCandidate &candidate = m_result.deepCleanupCandidates[primary];
+            fields << QStringLiteral("File: %1").arg(candidate.filePath);
+            if (candidate.bytes > 0)
+                fields << QStringLiteral("Bytes: %1").arg(candidate.bytes);
+        }
+        m_details->setPlainText(QStringLiteral("IMPORT CLEANUP REVIEW\n\n%1").arg(fields.join(QLatin1Char('\n'))));
     } else if (step == kDeepCleanupStep) {
         QStringList fields;
         for (int column = 1; column < table->columnCount(); ++column)
@@ -542,7 +573,13 @@ QString FormatterPage::buildIdChangePreview() const
     for (int row = 0; row < m_unused->rowCount(); ++row) {
         const QTableWidgetItem *use = m_unused->item(row, 0);
         if (use && use->checkState() == Qt::Checked)
-            lines << QStringLiteral("%1  ->  <deleted>  [unused]").arg(m_unused->item(row, 1)->text());
+            lines << QStringLiteral("%1  ->  <deleted>  [unused data object]").arg(m_unused->item(row, 1)->text());
+    }
+    for (int row = 0; row < m_importCleanup->rowCount(); ++row) {
+        const QTableWidgetItem *use = m_importCleanup->item(row, 0);
+        if (use && use->checkState() == Qt::Checked)
+            lines << QStringLiteral("%1  ->  <deleted>  [import cleanup]")
+                         .arg(m_importCleanup->item(row, 1)->text());
     }
     for (int row = 0; row < m_deepCleanup->rowCount(); ++row) {
         const QTableWidgetItem *use = m_deepCleanup->item(row, 0);
@@ -573,7 +610,7 @@ QVector<int> FormatterPage::selectedUnusedRows() const { QVector<int> result; fo
 MergeRequest FormatterPage::selectedMergeRequest() const { MergeRequest result; for (int index = 0; index < m_duplicates->rowCount(); ++index) {
     QTableWidgetItem *item = m_duplicates->item(index, 0); if (item->checkState() != Qt::Checked) continue; const int keep = item->data(Qt::UserRole).toInt();
     if (result.keepNodeIndex < 0) result.keepNodeIndex = keep; if (keep == result.keepNodeIndex) result.removeNodeIndices << item->data(Qt::UserRole + 1).toInt(); } return result; }
-void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collectionAdds = 0, collectionMoves = 0, deepCleanupCount = 0;
+void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collectionAdds = 0, collectionMoves = 0, importCleanupCount = 0, deepCleanupCount = 0;
     int duplicateDeletes = 0;
     for (int index = 0; index < m_duplicates->rowCount(); ++index) {
         QTableWidgetItem *item = m_duplicates->item(index, 0);
@@ -590,22 +627,28 @@ void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collec
         QTableWidgetItem *item = m_deepCleanup->item(index, 0);
         if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked) ++deepCleanupCount;
     }
+    for (int index = 0; index < m_importCleanup->rowCount(); ++index) {
+        QTableWidgetItem *item = m_importCleanup->item(index, 0);
+        if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked) ++importCleanupCount;
+    }
     for (int index = 0; index < m_collection->rowCount(); ++index) {
         QTableWidgetItem *item = m_collection->item(index, 0);
         if (item && (item->flags() & Qt::ItemIsUserCheckable) && item->checkState() == Qt::Checked)
             collectionAdds += tableInt(m_collection, index, 3), collectionMoves += tableInt(m_collection, index, 4);
     }
-    QString summary = QStringLiteral("Optimization Summary\n\nProjected:\n- unused objects to delete: %1\n- duplicate objects to delete: %2\n- references moved to kept duplicates: %3\n- deep cleanup changes: %4\n- IDs to rename: %5\n- Data Collection records to add: %6\n- Data Collection records to reorganize: %7\n\nActually completed:\n- unused deleted: %8\n- duplicates deleted: %9\n- references redirected: %10\n- deep cleanup changes: %11\n- IDs renamed: %12\n- collection records added: %13\n- collection records reorganized: %14\n")
-        .arg(selectedUnusedRows().size()).arg(duplicateDeletes).arg(redirects).arg(deepCleanupCount).arg(renameCount).arg(collectionAdds).arg(collectionMoves)
-        .arg(m_actualUnused).arg(m_actualDuplicates).arg(m_actualRedirected).arg(m_actualDeepCleanup).arg(m_actualRenamed).arg(m_actualCollectionAdded).arg(m_actualCollectionReorganized);
+    QString summary = QStringLiteral("Optimization Summary\n\nProjected:\n- unused data objects to delete: %1\n- imported files to delete: %2\n- duplicate data objects to delete: %3\n- references moved to kept duplicates: %4\n- deep cleanup changes: %5\n- IDs to rename: %6\n- Data Collection records to add: %7\n- Data Collection records to reorganize: %8\n\nActually completed:\n- unused data objects deleted: %9\n- imported files deleted: %10\n- duplicates deleted: %11\n- references redirected: %12\n- deep cleanup changes: %13\n- IDs renamed: %14\n- collection records added: %15\n- collection records reorganized: %16\n")
+        .arg(selectedUnusedRows().size()).arg(importCleanupCount).arg(duplicateDeletes).arg(redirects).arg(deepCleanupCount).arg(renameCount).arg(collectionAdds).arg(collectionMoves)
+        .arg(m_actualUnused).arg(m_actualImportCleanup).arg(m_actualDuplicates).arg(m_actualRedirected).arg(m_actualDeepCleanup).arg(m_actualRenamed).arg(m_actualCollectionAdded).arg(m_actualCollectionReorganized);
     if (m_hasAppliedChanges && m_planBuilt) {
         QStringList nextSteps;
         if (selectedUnusedRows().size() > 0)
-            nextSteps << QStringLiteral("Run another unused-object pass: refreshed analysis still has %1 safe candidate(s).").arg(selectedUnusedRows().size());
+            nextSteps << QStringLiteral("Run another unused data-object pass: refreshed analysis still has %1 safe candidate(s).").arg(selectedUnusedRows().size());
         if (duplicateDeletes > 0)
             nextSteps << QStringLiteral("Review duplicate merge again: %1 merge candidate(s) remain after refresh.").arg(duplicateDeletes);
+        if (importCleanupCount > 0)
+            nextSteps << QStringLiteral("Review Import Cleanup again: %1 imported file(s) remain after refresh.").arg(importCleanupCount);
         if (deepCleanupCount > 0)
-            nextSteps << QStringLiteral("Review deep cleanup again: %1 cleanup candidate(s) remain after refresh.").arg(deepCleanupCount);
+            nextSteps << QStringLiteral("Review deep cleanup again: %1 cleanup candidate(s) remain after the automatic follow-up pass.").arg(deepCleanupCount);
         if (renameCount > 0)
             nextSteps << QStringLiteral("Review Rename To Standard again: %1 ID change(s) are still available.").arg(renameCount);
         if (collectionAdds > 0 || collectionMoves > 0)
@@ -633,6 +676,7 @@ void FormatterPage::updatePostApplyAudit()
 
     const int remainingUnused = selectableRowCount(m_unused);
     const int remainingDuplicates = m_duplicateMergeEnabled ? selectableRowCount(m_duplicates) : 0;
+    const int remainingImportCleanup = selectableRowCount(m_importCleanup);
     const int remainingDeepCleanup = selectableRowCount(m_deepCleanup);
     const int remainingRename = selectableRowCount(m_rename);
     const int remainingCollections = selectableRowCount(m_collection);
@@ -648,7 +692,7 @@ void FormatterPage::updatePostApplyAudit()
         remainingCollectionAdds += tableInt(m_collection, row, 3);
         remainingCollectionMoves += tableInt(m_collection, row, 4);
     }
-    const int remainingTotal = remainingUnused + remainingDuplicates + remainingDeepCleanup + remainingRename + remainingCollections;
+    const int remainingTotal = remainingUnused + remainingDuplicates + remainingImportCleanup + remainingDeepCleanup + remainingRename + remainingCollections;
 
     QStringList lines;
     lines << QStringLiteral("Post-Apply Audit")
@@ -659,7 +703,8 @@ void FormatterPage::updatePostApplyAudit()
                   : QStringLiteral("Status: FOLLOW-UP - refreshed analysis still has optimization candidates."))
           << QString()
           << QStringLiteral("Completed in this optimization session")
-          << QStringLiteral("- unused deleted: %1").arg(m_actualUnused)
+          << QStringLiteral("- unused data objects deleted: %1").arg(m_actualUnused)
+          << QStringLiteral("- imported files deleted: %1").arg(m_actualImportCleanup)
           << QStringLiteral("- duplicate objects deleted: %1").arg(m_actualDuplicates)
           << QStringLiteral("- references redirected: %1").arg(m_actualRedirected)
           << QStringLiteral("- deep cleanup changes: %1").arg(m_actualDeepCleanup)
@@ -668,11 +713,12 @@ void FormatterPage::updatePostApplyAudit()
           << QStringLiteral("- collection records reorganized: %1").arg(m_actualCollectionReorganized)
           << QString()
           << QStringLiteral("Remaining recommendations after refresh")
-          << QStringLiteral("- safe unused objects: %1").arg(remainingUnused);
+          << QStringLiteral("- safe unused data objects: %1").arg(remainingUnused)
+          << QStringLiteral("- unused imported files: %1").arg(remainingImportCleanup);
     lines << (m_duplicateMergeEnabled
                   ? QStringLiteral("- duplicate merge candidates: %1, estimated redirects: %2").arg(remainingDuplicates).arg(remainingRedirects)
                   : QStringLiteral("- duplicate merge candidates: skipped because Duplicate Merge is disabled in Settings"));
-    lines << QStringLiteral("- deep cleanup candidates: %1").arg(remainingDeepCleanup)
+    lines << QStringLiteral("- deep cleanup candidates after automatic follow-up: %1").arg(remainingDeepCleanup)
           << QStringLiteral("- rename candidates: %1").arg(remainingRename)
           << QStringLiteral("- Data Collection families: %1, records to add: %2, records to reorganize: %3")
                  .arg(remainingCollections)
@@ -685,13 +731,14 @@ void FormatterPage::updatePostApplyAudit()
               << QStringLiteral("- Save the optimized copy and test it in StarCraft II Editor.");
     } else {
         lines << QStringLiteral("Recommended next action")
-              << QStringLiteral("- Run another optimization pass or inspect the remaining rows before closing.");
+              << QStringLiteral("- Inspect the remaining rows; the wizard already applied safe recommended follow-up cleanup once.");
     }
     m_audit->setPlainText(lines.join(QLatin1Char('\n')));
 }
 void FormatterPage::setPreview(const QString &text) { m_summary->setPlainText(text); m_steps->setCurrentWidget(m_summary); updateNavigation(); }
 void FormatterPage::recordUnusedResult(int value) { m_actualUnused += value; updateSummary(); }
 void FormatterPage::recordMergeResult(int removed, int redirected) { m_actualDuplicates += removed; m_actualRedirected += redirected; updateSummary(); }
+void FormatterPage::recordImportCleanupResult(int value) { m_actualImportCleanup += value; updateSummary(); }
 void FormatterPage::recordDeepCleanupResult(int value) { m_actualDeepCleanup += value; updateSummary(); }
 void FormatterPage::recordRenameResult(int value) { m_actualRenamed += value; updateSummary(); }
 void FormatterPage::recordCollectionResult(int value, int reorganized) { m_actualCollectionAdded += value; m_actualCollectionReorganized += reorganized; updateSummary(); }
@@ -712,7 +759,7 @@ void FormatterPage::rebuildAfterApply()
     m_building = false;
     m_applying = false;
     m_hasAppliedChanges = true;
-    for (QTableWidget *value : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) value->setRowCount(0);
+    for (QTableWidget *value : {m_unused, m_duplicates, m_importCleanup, m_deepCleanup, m_rename, m_collection}) value->setRowCount(0);
     m_summary->setPlainText(QStringLiteral("Optimization was applied. Rebuilding preview from updated files..."));
     if (m_steps->currentIndex() != kSummaryStep) m_steps->setCurrentIndex(kSummaryStep);
     updateNavigation();
@@ -765,6 +812,11 @@ OptimizationWizardSelection FormatterPage::currentSelection() const
         selection.remove = nodeRefFromIndices(item->data(Qt::UserRole + 1).toInt());
         result.duplicates.append(selection);
     }
+    for (int row = 0; row < m_importCleanup->rowCount(); ++row) {
+        const QTableWidgetItem *item = m_importCleanup->item(row, 0);
+        if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->checkState() != Qt::Checked) continue;
+        result.importCleanup.append(item->data(Qt::UserRole).toInt());
+    }
     for (int row = 0; row < m_deepCleanup->rowCount(); ++row) {
         const QTableWidgetItem *item = m_deepCleanup->item(row, 0);
         if (!item || !(item->flags() & Qt::ItemIsUserCheckable) || item->checkState() != Qt::Checked) continue;
@@ -796,6 +848,6 @@ OptimizationWizardSelection FormatterPage::currentSelection() const
 void FormatterPage::setDuplicateMergeEnabled(bool enabled)
 {
     m_duplicateMergeEnabled = enabled;
-    if (!enabled && m_steps && m_steps->currentIndex() == kDuplicateStep) m_steps->setCurrentIndex(kDeepCleanupStep);
+    if (!enabled && m_steps && m_steps->currentIndex() == kDuplicateStep) m_steps->setCurrentIndex(kImportCleanupStep);
     updateNavigation();
 }

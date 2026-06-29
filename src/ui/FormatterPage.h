@@ -20,6 +20,7 @@ struct OptimizationPlanData
 {
     QVector<OptimizationPlanRow> unused;
     QVector<OptimizationPlanRow> duplicates;
+    QVector<OptimizationPlanRow> importCleanup;
     QVector<OptimizationPlanRow> deepCleanup;
     QVector<OptimizationPlanRow> rename;
     QVector<OptimizationPlanRow> collection;
@@ -55,6 +56,7 @@ struct OptimizationWizardSelection
 {
     QVector<WizardNodeRef> unused;
     QVector<WizardMergeSelection> duplicates;
+    QVector<int> importCleanup;
     QVector<int> deepCleanup;
     QVector<WizardRenameSelection> rename;
     QVector<WizardCollectionSelection> collection;
@@ -70,6 +72,7 @@ public:
     void startWizard(bool autoBuild = false);
     void recordUnusedResult(int removed);
     void recordMergeResult(int removed, int redirected);
+    void recordImportCleanupResult(int changed);
     void recordDeepCleanupResult(int changed);
     void recordRenameResult(int renamed);
     void recordCollectionResult(int added, int reorganized = 0);
@@ -103,6 +106,7 @@ private:
     QTabWidget *m_steps = nullptr;
     QTableWidget *m_unused = nullptr;
     QTableWidget *m_duplicates = nullptr;
+    QTableWidget *m_importCleanup = nullptr;
     QTableWidget *m_deepCleanup = nullptr;
     QTableWidget *m_rename = nullptr;
     QTableWidget *m_collection = nullptr;
@@ -125,6 +129,7 @@ private:
     bool m_hasAppliedChanges = false;
     bool m_duplicateMergeEnabled = false;
     int m_actualUnused = 0, m_actualDuplicates = 0, m_actualRedirected = 0, m_actualRenamed = 0;
+    int m_actualImportCleanup = 0;
     int m_actualDeepCleanup = 0;
     int m_actualCollectionAdded = 0, m_actualCollectionReorganized = 0;
 };

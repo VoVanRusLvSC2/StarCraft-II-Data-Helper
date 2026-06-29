@@ -179,7 +179,7 @@ namespace
             windowTitle->setObjectName(QStringLiteral("sc2OpenFileWindowTitle"));
             auto *closeButton = new QPushButton(QStringLiteral("X"), titleBar);
             closeButton->setObjectName(QStringLiteral("sc2OpenFileCloseButton"));
-            closeButton->setFixedSize(34, 28);
+            closeButton->setFixedSize(44, 36);
             titleBarLayout->addWidget(windowIcon);
             titleBarLayout->addWidget(windowTitle);
             titleBarLayout->addStretch(1);
@@ -224,6 +224,7 @@ namespace
             m_places = new QListWidget(splitter);
             m_places->setObjectName(QStringLiteral("fileOpenPlaces"));
             m_places->setSelectionMode(QAbstractItemView::SingleSelection);
+            m_places->setSpacing(3);
             m_table = new QTableWidget(splitter);
             m_table->setObjectName(QStringLiteral("fileOpenTable"));
             m_table->setColumnCount(4);
@@ -234,6 +235,8 @@ namespace
             m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
             m_table->setShowGrid(false);
             m_table->verticalHeader()->hide();
+            m_table->verticalHeader()->setDefaultSectionSize(40);
+            m_table->horizontalHeader()->setFixedHeight(44);
             m_table->horizontalHeader()->setStretchLastSection(true);
             m_table->setColumnWidth(0, 470);
             m_table->setColumnWidth(1, 130);
@@ -668,8 +671,44 @@ namespace
         static const QSet<QString> weakExtensions = {
             QStringLiteral("txt"), QStringLiteral("ini"), QStringLiteral("json"),
             QStringLiteral("yaml"), QStringLiteral("yml"), QStringLiteral("version"),
-            QStringLiteral("sc2components")};
+            QStringLiteral("sc2components"), QStringLiteral("layout"), QStringLiteral("sc2layout"),
+            QStringLiteral("fxa"), QStringLiteral("fxs"), QStringLiteral("fxh")};
         return weakExtensions.contains(suffix) ? ArchiveReferenceStrength::Weak : ArchiveReferenceStrength::None;
+    }
+
+    bool archiveEntryLooksLikeImportedAsset(const QString &entry)
+    {
+        const QString suffix = QFileInfo(QDir::cleanPath(entry).replace('\\', '/')).suffix().toLower();
+        static const QSet<QString> extensions = {
+            QStringLiteral("dds"), QStringLiteral("tga"), QStringLiteral("png"), QStringLiteral("jpg"),
+            QStringLiteral("jpeg"), QStringLiteral("bmp"), QStringLiteral("m3"), QStringLiteral("ogg"),
+            QStringLiteral("wav"), QStringLiteral("mp3"), QStringLiteral("webm"), QStringLiteral("mp4"),
+            QStringLiteral("fxa"), QStringLiteral("fxs"), QStringLiteral("fxh"), QStringLiteral("layout"),
+            QStringLiteral("sc2layout"), QStringLiteral("txt")
+        };
+        return extensions.contains(suffix);
+    }
+
+    bool archiveEntryLooksLikeHelperTrash(const QString &entry)
+    {
+        const QString normalized = QDir::cleanPath(entry).replace('\\', '/').toLower();
+        const QString fileName = QFileInfo(normalized).fileName();
+        return normalized.contains(QStringLiteral("/backup_"))
+            || fileName.startsWith(QStringLiteral("backup_"))
+            || fileName.contains(QStringLiteral(".bak-"))
+            || fileName.endsWith(QStringLiteral(".bak"))
+            || fileName.endsWith(QStringLiteral(".tmp"))
+            || fileName.endsWith(QStringLiteral(".old"))
+            || fileName.endsWith(QStringLiteral(".orig"))
+            || fileName.endsWith(QStringLiteral(".log"))
+            || fileName.endsWith(QStringLiteral(".sc2dh.pending"));
+    }
+
+    bool archiveEntryShouldMaterializeForCleanup(const QString &entry)
+    {
+        return archiveEntryLooksLikeImportedAsset(entry)
+            || archiveEntryLooksLikeHelperTrash(entry)
+            || archiveReferenceStrength(entry) != ArchiveReferenceStrength::None;
     }
 
     void collectKnownIdTokens(const QByteArray &bytes, const QSet<QString> &knownIds, QSet<QString> *found)
@@ -1261,7 +1300,7 @@ void MainWindow::setupUi()
     m_tabs->addTab(m_dataCollectionPage, QStringLiteral("Data Collection"));
     m_tabs->addTab(m_renameIdsPage, QStringLiteral("Rename To Standard"));
     m_tabs->addTab(m_duplicatesPage, QStringLiteral("Duplicate Merge"));
-    m_tabs->addTab(m_cleanupPage, QStringLiteral("Unused Objects"));
+    m_tabs->addTab(m_cleanupPage, QStringLiteral("Unused Data Objects"));
     m_tabs->addTab(m_logPanel, QStringLiteral("Logs"));
     m_tabs->addTab(m_xmlSourcePage, QStringLiteral("XML Source"));
     m_tabs->tabBar()->setExpanding(false);
@@ -2284,6 +2323,19 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
         m_result.nodes += fileNodes;
     }
 
+    for (const QString &entryName : archive.allEntries())
+    {
+        if (entryName.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive)
+            || !archiveEntryShouldMaterializeForCleanup(entryName))
+            continue;
+        ScannedFileInfo scanned;
+        scanned.filePath = entryName;
+        scanned.isXml = false;
+        scanned.isSc2DataLike = archiveReferenceStrength(entryName) != ArchiveReferenceStrength::None;
+        scanned.size = 0;
+        m_result.scannedFiles.append(scanned);
+    }
+
     if (!m_analyzer.finalizeAnalysisResult(&m_result, m_whitelistIds, errorMessage, [this]
                                            {
             if (!m_activeProgressDialog)
@@ -2485,6 +2537,32 @@ bool MainWindow::materializeArchiveAnalysis(const QString &tempRoot, AnalysisRes
             if (errorMessage)
                 *errorMessage = QStringLiteral("Unable to materialize archive (listfile).");
             return false;
+        }
+        for (const QString &entry : archive.allEntries())
+        {
+            if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive)
+                || !archiveEntryShouldMaterializeForCleanup(entry))
+                continue;
+            const QString relative = QDir::cleanPath(entry).replace('\\', '/');
+            if (relative.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(relative))
+            {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Unsafe archive entry path: %1").arg(entry);
+                return false;
+            }
+            QByteArray bytes;
+            QString readError;
+            if (!archive.readEntry(entry, &bytes, &readError))
+                continue;
+            const QString target = QDir(tempRoot).absoluteFilePath(relative);
+            QDir().mkpath(QFileInfo(target).absolutePath());
+            QSaveFile file(target);
+            if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+            {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Unable to materialize archive import: %1").arg(relative);
+                return false;
+            }
         }
     }
     for (ScannedFileInfo &file : analysis->scannedFiles)
@@ -2830,12 +2908,12 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
 {
     if (m_sourceKind == SourceKind::ArchiveFolder)
     {
-        QMessageBox::information(this, QStringLiteral("Delete Unused Objects"), archiveFolderReadOnlyMessage());
+        QMessageBox::information(this, QStringLiteral("Delete Unused Data Objects"), archiveFolderReadOnlyMessage());
         return;
     }
     if (rows.isEmpty() || rows != m_previewedUnusedRows)
     {
-        QMessageBox::warning(this, QStringLiteral("Delete Unused Objects"),
+        QMessageBox::warning(this, QStringLiteral("Delete Unused Data Objects"),
                              QStringLiteral("Preview this exact selection before deletion."));
         return;
     }
@@ -2843,14 +2921,14 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
     {
         if (!m_archiveReferenceScanComplete)
         {
-            QMessageBox::information(this, QStringLiteral("Delete Unused Objects"),
+            QMessageBox::information(this, QStringLiteral("Delete Unused Data Objects"),
                                      QStringLiteral("Blocked: the archive reference scan was incomplete."));
             return;
         }
-        if (QMessageBox::question(this, QStringLiteral("Delete Selected Unused Objects"),
+        if (QMessageBox::question(this, QStringLiteral("Delete Selected Unused Data Objects"),
                                   backupPrompt(
-                                      QStringLiteral("Create an archive backup, delete the selected verified candidates, and atomically save the SC2 archive?"),
-                                      QStringLiteral("Backups are disabled in Settings. Delete the selected verified candidates and atomically save the SC2 archive without a persistent backup?"))) != QMessageBox::Yes)
+                                      QStringLiteral("Create an archive backup, delete the selected verified data objects, and atomically save the SC2 archive?"),
+                                      QStringLiteral("Backups are disabled in Settings. Delete the selected verified data objects and atomically save the SC2 archive without a persistent backup?"))) != QMessageBox::Yes)
             return;
         QTemporaryDir workspace;
         AnalysisResult materialized;
@@ -2909,10 +2987,10 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
     QString backupFolder, error;
     QStringList changedFiles;
     int removed = 0, skipped = 0;
-    if (QMessageBox::question(this, QStringLiteral("Delete Selected Unused Objects"),
+    if (QMessageBox::question(this, QStringLiteral("Delete Selected Unused Data Objects"),
                               backupPrompt(
-                                  QStringLiteral("A backup will be created before deleting the selected safe candidates. Continue?"),
-                                  QStringLiteral("Backups are disabled in Settings. Delete the selected safe candidates without a persistent backup?"))) != QMessageBox::Yes)
+                                  QStringLiteral("A backup will be created before deleting the selected safe data objects. Continue?"),
+                                  QStringLiteral("Backups are disabled in Settings. Delete the selected safe data objects without a persistent backup?"))) != QMessageBox::Yes)
         return;
     if (!m_analyzer.applySelectedChanges(m_result, rows, m_rootFolder, m_whitelistIds,
                                          &backupFolder, &error, &changedFiles, &removed, &skipped))
@@ -3273,7 +3351,7 @@ void MainWindow::applyOptimizationWizardPlan()
         return;
 
     const OptimizationWizardSelection selection = m_dryRunPage->currentSelection();
-    if (selection.unused.isEmpty() && selection.duplicates.isEmpty() && selection.deepCleanup.isEmpty()
+    if (selection.unused.isEmpty() && selection.duplicates.isEmpty() && selection.importCleanup.isEmpty() && selection.deepCleanup.isEmpty()
         && selection.rename.isEmpty() && selection.collection.isEmpty())
     {
         if (m_wizardApplyAutomation)
@@ -3321,6 +3399,7 @@ void MainWindow::applyOptimizationWizardPlan()
     int removedUnused = 0;
     int removedDuplicates = 0;
     int redirectedReferences = 0;
+    int importCleanupChanged = 0;
     int deepCleanupChanged = 0;
     int renamedIds = 0;
     int collectionAdded = 0;
@@ -3494,6 +3573,26 @@ void MainWindow::applyOptimizationWizardPlan()
             details = details.mid(0, 4) << QStringLiteral("...");
         return details.join(QStringLiteral("; "));
     };
+    const auto automaticFollowUpDeepCleanupRows = [](const AnalysisResult &analysis)
+    {
+        QVector<int> rows;
+        for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates)
+        {
+            if (candidate.kind == DeepCleanupKind::UnusedAsset)
+                continue;
+            if (candidate.state == CandidateState::Safe
+                && candidate.recommended
+                && candidate.action != DeepCleanupAction::ReportOnly)
+            {
+                rows.append(candidate.index);
+            }
+        }
+        return rows;
+    };
+    const auto deepCleanupChangeCount = [](const DeepCleanupApplyResult &result)
+    {
+        return result.filesDeleted + result.textLinesRemoved + result.xmlNodesRemoved + result.xmlAttributesRemoved;
+    };
 
     if (m_sourceKind == SourceKind::ArchiveFile)
     {
@@ -3519,9 +3618,37 @@ void MainWindow::applyOptimizationWizardPlan()
                 applyArchiveReferenceSafety(&current);
             }
 
+            if (failure.isEmpty() && !selection.importCleanup.isEmpty())
+            {
+                updateApplyProgress(20, QStringLiteral("Applying import cleanup"), QStringLiteral("Removing unused imported assets from the archive workspace"));
+                const DeepCleanupApplyResult result = DeepCleanupService().apply(current, selection.importCleanup, workspace.path(), false);
+                if (!result.success)
+                {
+                    failure = result.error;
+                }
+                else
+                {
+                    importCleanupChanged += result.filesDeleted;
+                    if (result.reportOnlySkipped > 0)
+                        warnings << QStringLiteral("Skipped %1 review-only import cleanup item(s).").arg(result.reportOnlySkipped);
+                    changedFiles.append(result.changedFiles);
+                    removedFiles.append(result.removedFiles);
+                    changedFiles.removeDuplicates();
+                    removedFiles.removeDuplicates();
+                    if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                    {
+                        failure = error;
+                    }
+                    else
+                    {
+                        applyArchiveReferenceSafety(&current);
+                    }
+                }
+            }
+
             if (failure.isEmpty() && !selection.deepCleanup.isEmpty())
             {
-                updateApplyProgress(22, QStringLiteral("Applying deep cleanup"), QStringLiteral("Removing unused assets, stale localization and redundant XML"));
+                updateApplyProgress(22, QStringLiteral("Applying deep cleanup"), QStringLiteral("Removing stale localization, redundant XML and broken actor events"));
                 const DeepCleanupApplyResult result = DeepCleanupService().apply(current, selection.deepCleanup, workspace.path(), false);
                 if (!result.success)
                 {
@@ -3558,7 +3685,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 }
                 if (!unusedRows.isEmpty())
                 {
-                    updateApplyProgress(25, QStringLiteral("Deleting unused objects"), QStringLiteral("Rewriting verified archive XML"));
+                    updateApplyProgress(25, QStringLiteral("Deleting unused data objects"), QStringLiteral("Rewriting verified archive XML"));
                     QString workspaceBackup;
                     QStringList unusedChangedFiles;
                     int removed = 0;
@@ -3574,7 +3701,7 @@ void MainWindow::applyOptimizationWizardPlan()
                         changedFiles.append(unusedChangedFiles);
                         changedFiles.removeDuplicates();
                         if (skipped > 0)
-                            warnings << QStringLiteral("Skipped %1 unused objects because they were no longer safe or available.").arg(skipped);
+                            warnings << QStringLiteral("Skipped %1 unused data object(s) because they were no longer safe or available.").arg(skipped);
                         if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
                             failure = error;
                     }
@@ -3728,6 +3855,42 @@ void MainWindow::applyOptimizationWizardPlan()
             if (failure.isEmpty() && collectionChanged && !reloadWorkingAnalysis(workspace.path(), &current, &error))
                 failure = error;
 
+            if (failure.isEmpty())
+            {
+                const QVector<int> followUpRows = automaticFollowUpDeepCleanupRows(current);
+                if (!followUpRows.isEmpty())
+                {
+                    updateApplyProgress(82, QStringLiteral("Applying follow-up deep cleanup"),
+                                        QStringLiteral("Cleaning safe stale data created by earlier steps"));
+                    const DeepCleanupApplyResult result = DeepCleanupService().apply(current, followUpRows, workspace.path(), false);
+                    if (!result.success)
+                    {
+                        failure = result.error;
+                    }
+                    else
+                    {
+                        const int changed = deepCleanupChangeCount(result);
+                        deepCleanupChanged += changed;
+                        if (changed > 0)
+                            warnings << QStringLiteral("Automatically applied %1 follow-up deep cleanup change(s).").arg(changed);
+                        if (result.reportOnlySkipped > 0)
+                            warnings << QStringLiteral("Skipped %1 review-only follow-up deep cleanup item(s).").arg(result.reportOnlySkipped);
+                        changedFiles.append(result.changedFiles);
+                        removedFiles.append(result.removedFiles);
+                        changedFiles.removeDuplicates();
+                        removedFiles.removeDuplicates();
+                        if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                        {
+                            failure = error;
+                        }
+                        else
+                        {
+                            applyArchiveReferenceSafety(&current);
+                        }
+                    }
+                }
+            }
+
             if (failure.isEmpty() && (!changedFiles.isEmpty() || !removedFiles.isEmpty()))
             {
                 updateApplyProgress(85, QStringLiteral("Saving archive"), QStringLiteral("Writing verified XML back to the SC2 archive"));
@@ -3749,9 +3912,27 @@ void MainWindow::applyOptimizationWizardPlan()
         AnalysisResult current = m_result;
         QString error;
 
+        if (failure.isEmpty() && !selection.importCleanup.isEmpty())
+        {
+            updateApplyProgress(16, QStringLiteral("Applying import cleanup"), QStringLiteral("Removing unused imported assets"));
+            const DeepCleanupApplyResult result = DeepCleanupService().apply(current, selection.importCleanup, m_rootFolder, true);
+            if (!result.success)
+            {
+                failure = result.error;
+            }
+            else
+            {
+                importCleanupChanged += result.filesDeleted;
+                if (result.reportOnlySkipped > 0)
+                    warnings << QStringLiteral("Skipped %1 review-only import cleanup item(s).").arg(result.reportOnlySkipped);
+                if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
+                    failure = error;
+            }
+        }
+
         if (failure.isEmpty() && !selection.deepCleanup.isEmpty())
         {
-            updateApplyProgress(18, QStringLiteral("Applying deep cleanup"), QStringLiteral("Removing unused assets, stale localization and redundant XML"));
+            updateApplyProgress(18, QStringLiteral("Applying deep cleanup"), QStringLiteral("Removing stale localization, redundant XML and broken actor events"));
             const DeepCleanupApplyResult result = DeepCleanupService().apply(current, selection.deepCleanup, m_rootFolder, true);
             if (!result.success)
             {
@@ -3776,7 +3957,7 @@ void MainWindow::applyOptimizationWizardPlan()
         }
         if (failure.isEmpty() && !unusedRows.isEmpty())
         {
-            updateApplyProgress(20, QStringLiteral("Deleting unused objects"), QStringLiteral("Removing selected safe unused objects"));
+            updateApplyProgress(20, QStringLiteral("Deleting unused data objects"), QStringLiteral("Removing selected safe unused data objects"));
             QString backupFolder;
             QStringList changedFiles;
             int removed = 0;
@@ -3790,7 +3971,7 @@ void MainWindow::applyOptimizationWizardPlan()
             {
                 removedUnused += removed;
                 if (skipped > 0)
-                    warnings << QStringLiteral("Skipped %1 unused objects because they were no longer safe or available.").arg(skipped);
+                    warnings << QStringLiteral("Skipped %1 unused data object(s) because they were no longer safe or available.").arg(skipped);
                 if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
                     failure = error;
             }
@@ -3929,6 +4110,32 @@ void MainWindow::applyOptimizationWizardPlan()
             collectionAdded += result.recordsAdded;
             collectionReorganized += result.recordsRemoved;
         }
+
+        if (failure.isEmpty())
+        {
+            const QVector<int> followUpRows = automaticFollowUpDeepCleanupRows(current);
+            if (!followUpRows.isEmpty())
+            {
+                updateApplyProgress(91, QStringLiteral("Applying follow-up deep cleanup"),
+                                    QStringLiteral("Cleaning safe stale data created by earlier steps"));
+                const DeepCleanupApplyResult result = DeepCleanupService().apply(current, followUpRows, m_rootFolder, true);
+                if (!result.success)
+                {
+                    failure = result.error;
+                }
+                else
+                {
+                    const int changed = deepCleanupChangeCount(result);
+                    deepCleanupChanged += changed;
+                    if (changed > 0)
+                        warnings << QStringLiteral("Automatically applied %1 follow-up deep cleanup change(s).").arg(changed);
+                    if (result.reportOnlySkipped > 0)
+                        warnings << QStringLiteral("Skipped %1 review-only follow-up deep cleanup item(s).").arg(result.reportOnlySkipped);
+                    if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
+                        failure = error;
+                }
+            }
+        }
     }
 
     m_dryRunPage->setApplyingState(false);
@@ -3980,6 +4187,8 @@ void MainWindow::applyOptimizationWizardPlan()
         m_dryRunPage->recordUnusedResult(removedUnused);
     if (removedDuplicates > 0 || redirectedReferences > 0)
         m_dryRunPage->recordMergeResult(removedDuplicates, redirectedReferences);
+    if (importCleanupChanged > 0)
+        m_dryRunPage->recordImportCleanupResult(importCleanupChanged);
     if (deepCleanupChanged > 0)
         m_dryRunPage->recordDeepCleanupResult(deepCleanupChanged);
     if (renamedIds > 0)
@@ -3988,8 +4197,9 @@ void MainWindow::applyOptimizationWizardPlan()
         m_dryRunPage->recordCollectionResult(collectionAdded, collectionReorganized);
     m_dryRunPage->rebuildAfterApply();
 
-    QString message = QStringLiteral("Selected optimization steps were applied and saved.\n\nUnused deleted: %1\nDuplicates deleted: %2\nReferences redirected: %3\nDeep cleanup changes: %4\nIDs renamed: %5\nCollection records added: %6\nCollection records reorganized: %7")
+    QString message = QStringLiteral("Selected optimization steps were applied and saved.\n\nUnused data objects deleted: %1\nImported files deleted: %2\nDuplicates deleted: %3\nReferences redirected: %4\nDeep cleanup changes: %5\nIDs renamed: %6\nCollection records added: %7\nCollection records reorganized: %8")
                           .arg(removedUnused)
+                          .arg(importCleanupChanged)
                           .arg(removedDuplicates)
                           .arg(redirectedReferences)
                           .arg(deepCleanupChanged)

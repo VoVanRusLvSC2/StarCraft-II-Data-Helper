@@ -1,6 +1,7 @@
 #include "core/DeepCleanupService.h"
 
 #include "core/BackupManager.h"
+#include "core/Sc2Archive.h"
 #include "core/XmlLoader.h"
 
 #include <QDir>
@@ -19,6 +20,11 @@ namespace
 {
 QString relativePath(const QString &rootFolder, const QString &filePath)
 {
+    if (!QDir::isAbsolutePath(filePath))
+        return QDir::cleanPath(filePath).replace('\\', '/');
+    const QFileInfo rootInfo(rootFolder);
+    if (rootInfo.exists() && rootInfo.isFile())
+        return QDir::cleanPath(filePath).replace('\\', '/');
     return QDir(rootFolder).relativeFilePath(filePath).replace('\\', '/');
 }
 
@@ -46,15 +52,43 @@ bool isBackupOrTrashName(const QString &relative)
         || fileName == QStringLiteral("data_collection_preview.txt");
 }
 
-bool isAssetFile(const QFileInfo &info)
+bool isArchivePath(const QString &path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    static const QSet<QString> extensions = {
+        QStringLiteral("sc2map"), QStringLiteral("sc2mod"), QStringLiteral("sc2components"),
+        QStringLiteral("sc2campaign"), QStringLiteral("sc2archive")
+    };
+    return extensions.contains(suffix);
+}
+
+bool isLocalizationFile(const QString &relative);
+
+bool isEditorManagedMapFile(const QString &relative)
+{
+    const QString fileName = QFileInfo(QDir::cleanPath(relative).replace('\\', '/')).fileName().toLower();
+    static const QSet<QString> fileNames = {
+        QStringLiteral("minimap.tga"),
+        QStringLiteral("lightingmap.tga"),
+        QStringLiteral("preloadassetdb.txt")
+    };
+    return fileNames.contains(fileName);
+}
+
+bool isAssetFile(const QFileInfo &info, const QString &relative)
 {
     static const QSet<QString> extensions = {
         QStringLiteral("dds"), QStringLiteral("tga"), QStringLiteral("png"), QStringLiteral("jpg"),
         QStringLiteral("jpeg"), QStringLiteral("bmp"), QStringLiteral("m3"), QStringLiteral("ogg"),
         QStringLiteral("wav"), QStringLiteral("mp3"), QStringLiteral("webm"), QStringLiteral("mp4"),
-        QStringLiteral("fxa"), QStringLiteral("fxs"), QStringLiteral("fxh"), QStringLiteral("layout")
+        QStringLiteral("fxa"), QStringLiteral("fxs"), QStringLiteral("fxh"), QStringLiteral("layout"),
+        QStringLiteral("sc2layout"), QStringLiteral("txt")
     };
-    return info.isFile() && extensions.contains(info.suffix().toLower());
+    if (info.exists() && !info.isFile())
+        return false;
+    if (isBackupOrTrashName(relative) || isLocalizationFile(relative) || isEditorManagedMapFile(relative))
+        return false;
+    return extensions.contains(info.suffix().toLower());
 }
 
 bool isLocalizationFile(const QString &relative)
@@ -98,9 +132,19 @@ QString referenceCorpus(const AnalysisResult &analysis)
     QStringList parts;
     for (const QString &xml : analysis.sourceXmlByFile)
         parts << xml;
+    Sc2Archive archive;
+    QString archiveError;
+    const bool readArchiveEntries = isArchivePath(analysis.rootFolder) && archive.load(analysis.rootFolder, &archiveError);
     for (const ScannedFileInfo &file : analysis.scannedFiles) {
         if (!file.isSc2DataLike || file.isXml || file.size > 4 * 1024 * 1024)
             continue;
+        if (readArchiveEntries && !QDir::isAbsolutePath(file.filePath)) {
+            QByteArray bytes;
+            QString readError;
+            if (archive.readEntry(file.filePath, &bytes, &readError) && bytes.size() <= 4 * 1024 * 1024)
+                parts << QString::fromUtf8(bytes);
+            continue;
+        }
         parts << readTextFileBestEffort(file.filePath);
     }
     return parts.join(QLatin1Char('\n'));
@@ -357,7 +401,7 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
             append(candidate);
             continue;
         }
-        if (isAssetFile(info) && !assetIsReferenced(corpus, rel, info)) {
+        if (isAssetFile(info, rel) && !assetIsReferenced(corpus, rel, info)) {
             DeepCleanupCandidate candidate;
             candidate.kind = DeepCleanupKind::UnusedAsset;
             candidate.action = DeepCleanupAction::DeleteFile;

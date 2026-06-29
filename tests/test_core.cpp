@@ -1364,6 +1364,9 @@ void CoreTests::deepCleanupAppliesSafeCandidates()
     const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/Data.xml"));
     const QString locPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("enUS.SC2Data/LocalizedData/GameStrings.txt"));
     const QString assetPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Unused.dds"));
+    const QString minimapPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Minimap.tga"));
+    const QString lightingPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("LightingMap.tga"));
+    const QString preloadPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("PreloadAssetDB.txt"));
     QVERIFY(writeTextFile(xmlPath, QByteArrayLiteral(
         "<Catalog>"
         "<CActor id=\"Actor\"><Event>Effect,MissingFx</Event><Event>Effect,ExistingFx</Event></CActor>"
@@ -1373,6 +1376,9 @@ void CoreTests::deepCleanupAppliesSafeCandidates()
         "</Catalog>")));
     QVERIFY(writeTextFile(locPath, QByteArrayLiteral("Unit/Name/MissingUnit=Old name\r\nUnit/Name/ExistingFx=Keep\r\n")));
     QVERIFY(writeTextFile(assetPath, QByteArrayLiteral("unused asset bytes")));
+    QVERIFY(writeTextFile(minimapPath, QByteArrayLiteral("editor minimap")));
+    QVERIFY(writeTextFile(lightingPath, QByteArrayLiteral("editor lighting")));
+    QVERIFY(writeTextFile(preloadPath, QByteArrayLiteral("editor preload asset db")));
 
     FolderAnalyzer analyzer;
     AnalysisResult analysis;
@@ -1389,6 +1395,11 @@ void CoreTests::deepCleanupAppliesSafeCandidates()
     QVERIFY(hasKind(DeepCleanupKind::LocalizationEntry));
     QVERIFY(hasKind(DeepCleanupKind::RedundantDefaultField));
     QVERIFY(hasKind(DeepCleanupKind::BrokenActorEvent));
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates) {
+        QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("Minimap.tga"));
+        QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("LightingMap.tga"));
+        QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("PreloadAssetDB.txt"));
+    }
 
     QVector<int> selected;
     for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates)
@@ -1403,6 +1414,9 @@ void CoreTests::deepCleanupAppliesSafeCandidates()
     QVERIFY(applied.xmlAttributesRemoved >= 1);
     QVERIFY(applied.xmlNodesRemoved >= 1);
     QVERIFY(!QFileInfo::exists(assetPath));
+    QVERIFY(QFileInfo::exists(minimapPath));
+    QVERIFY(QFileInfo::exists(lightingPath));
+    QVERIFY(QFileInfo::exists(preloadPath));
 
     QFile xmlFile(xmlPath);
     QVERIFY(xmlFile.open(QIODevice::ReadOnly));

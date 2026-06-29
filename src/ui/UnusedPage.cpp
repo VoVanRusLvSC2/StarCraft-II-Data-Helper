@@ -75,7 +75,7 @@ UnusedPage::UnusedPage(QWidget *parent)
     headerLayout->setContentsMargins(12, 12, 12, 12);
     headerLayout->setSpacing(6);
 
-    auto *title = new QLabel(QStringLiteral("Unused Objects"), header);
+    auto *title = new QLabel(QStringLiteral("Unused Data Objects"), header);
     title->setObjectName(QStringLiteral("panelTitle"));
     headerLayout->addWidget(title);
 
@@ -115,7 +115,7 @@ UnusedPage::UnusedPage(QWidget *parent)
     layout->addWidget(m_table, 1);
     auto *buttons = new QHBoxLayout;
     m_previewButton = new QPushButton(QStringLiteral("Preview Deletion"), this);
-    m_applyButton = new QPushButton(QStringLiteral("Delete Selected Unused Objects"), this);
+    m_applyButton = new QPushButton(QStringLiteral("Delete Selected Unused Data Objects"), this);
     buttons->addWidget(m_previewButton);
     buttons->addWidget(m_applyButton);
     buttons->addStretch(1);
@@ -123,7 +123,7 @@ UnusedPage::UnusedPage(QWidget *parent)
     m_preview = new QTextEdit(this);
     m_preview->setReadOnly(true);
     m_preview->setMaximumHeight(180);
-    m_preview->setPlaceholderText(QStringLiteral("Preview selected unused objects before deletion."));
+    m_preview->setPlaceholderText(QStringLiteral("Preview selected unused data objects before deletion."));
     layout->addWidget(m_preview);
     connect(m_previewButton, &QPushButton::clicked, this, [this]
             { emit previewDeletionRequested(selectedSafeRows()); });
@@ -159,7 +159,7 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
     }
     else
     {
-        m_summaryLabel->setText(QStringLiteral("%1 safe unreachable object(s) can be removed after manual confirmation.").arg(count));
+        m_summaryLabel->setText(QStringLiteral("%1 safe unreachable data object(s) can be removed after manual confirmation.").arg(count));
         for (const UnusedCandidateInfo &candidate : m_result.unusedCandidates)
         {
             if (candidate.state != CandidateState::Safe
@@ -240,7 +240,7 @@ void UnusedPage::updateActionState()
     m_previewButton->setEnabled(available);
     m_applyButton->setEnabled(available);
     const QString hint = available
-                             ? QStringLiteral("%1 safe object(s) selected").arg(count)
+                             ? QStringLiteral("%1 safe data object(s) selected").arg(count)
                              : QStringLiteral("Select at least one Safe candidate first");
     m_previewButton->setToolTip(hint);
     m_applyButton->setToolTip(hint);
