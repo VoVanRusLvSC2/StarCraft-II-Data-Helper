@@ -465,9 +465,10 @@ void CoreTests::dataCollectionTypedSplitPreservesEveryCatalogRecord()
     QVERIFY(unit != families.cend());
     DataCollectionBuildRequest request; request.family = *unit;
     const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request);
-    QVERIFY(!preview.valid);
+    QVERIFY2(preview.valid, qPrintable(preview.warnings.join(QStringLiteral("; "))));
     QCOMPARE(preview.recordsToMove.size(), 2);
     QCOMPARE(preview.falsePositiveAssociations.size(), 4);
+    QVERIFY(preview.warnings.join(QStringLiteral(" ")).contains(QStringLiteral("preserved in no-loss mode")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("id=\"TitanLeap\"")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Mover,TitanLeapMover\"")));
     QVERIFY(preview.manualReviewObjects.contains(QStringLiteral("Upgrade,TitanUpgrade")));

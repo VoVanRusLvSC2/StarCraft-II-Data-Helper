@@ -38,34 +38,33 @@ bool readFile(const QString &path, QByteArray *bytes, QString *error)
     return true;
 }
 
-QRegularExpression renameExpression(const QHash<QString, QString> &renames)
+QString fastLookupKey(const QString &left, const QString &right)
 {
-    QStringList ids = renames.keys();
-    std::sort(ids.begin(), ids.end(), [](const QString &left, const QString &right) {
-        return left.size() > right.size();
-    });
-    QStringList escaped;
-    escaped.reserve(ids.size());
-    for (const QString &id : ids)
-        escaped << QRegularExpression::escape(id);
-    return QRegularExpression(QStringLiteral("(?<![A-Za-z0-9_@])(%1)(?![A-Za-z0-9_@])")
-                                  .arg(escaped.join(QLatin1Char('|'))));
+    return left + QChar(0x1f) + right;
 }
 
-int simultaneousReplace(QString *value, const QHash<QString, QString> &renames,
-                        const QRegularExpression &expression)
+const QRegularExpression &renameTokenExpression()
+{
+    static const QRegularExpression expression(QStringLiteral("(?<![A-Za-z0-9_@])([A-Za-z0-9_@]+)(?![A-Za-z0-9_@])"));
+    return expression;
+}
+
+int simultaneousReplace(QString *value, const QHash<QString, QString> &renames)
 {
     if (!value || value->isEmpty() || renames.isEmpty())
         return 0;
     QString output;
     qsizetype last = 0;
     int replacements = 0;
-    auto matches = expression.globalMatch(*value);
+    auto matches = renameTokenExpression().globalMatch(*value);
     while (matches.hasNext()) {
         const QRegularExpressionMatch match = matches.next();
-        output += value->mid(last, match.capturedStart() - last);
         const QString oldId = match.captured(1);
-        output += renames.value(oldId, oldId);
+        const auto replacement = renames.constFind(oldId);
+        if (replacement == renames.cend())
+            continue;
+        output += value->mid(last, match.capturedStart() - last);
+        output += replacement.value();
         last = match.capturedEnd();
         ++replacements;
     }
@@ -92,9 +91,12 @@ struct PendingRename {
     bool found = false;
 };
 
-void locateIdentityTargets(pugi::xml_node node, QVector<PendingRename> *targets)
+void locateIdentityTargets(pugi::xml_node node,
+                           QHash<QString, int> *targetIndexByElementAndId,
+                           QHash<QString, int> *targetIndexByLocation,
+                           QVector<PendingRename> *targets)
 {
-    if (!targets)
+    if (!targets || !targetIndexByElementAndId || !targetIndexByLocation)
         return;
     if (node.type() == pugi::node_element) {
         const pugi::xml_attribute idAttribute = node.attribute("id");
@@ -102,28 +104,25 @@ void locateIdentityTargets(pugi::xml_node node, QVector<PendingRename> *targets)
             const QString id = QString::fromUtf8(idAttribute.value());
             const QString elementName = QString::fromUtf8(node.name());
             const QString path = nodePath(node);
-            for (PendingRename &target : *targets) {
-                if (target.found)
-                    continue;
-                const bool locationMatch = !target.expectedLocation.isEmpty()
-                                           && target.expectedLocation == path
-                                           && (target.oldId.isEmpty() || id == target.oldId);
-                const bool idMatch = target.elementName == elementName && target.oldId == id;
-                if (locationMatch || idMatch) {
+            int targetIndex = targetIndexByElementAndId->value(fastLookupKey(elementName, id), -1);
+            if (targetIndex < 0)
+                targetIndex = targetIndexByLocation->value(path, -1);
+            if (targetIndex >= 0 && targetIndex < targets->size() && !(*targets)[targetIndex].found) {
+                PendingRename &target = (*targets)[targetIndex];
+                if ((target.elementName == elementName && target.oldId == id)
+                    || (target.expectedLocation == path && target.oldId == id)) {
                     target.found = true;
                     target.actualLocation = path;
-                    break;
                 }
             }
         }
     }
     for (pugi::xml_node child = node.first_child(); child; child = child.next_sibling())
-        locateIdentityTargets(child, targets);
+        locateIdentityTargets(child, targetIndexByElementAndId, targetIndexByLocation, targets);
 }
 
 void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QString> &identityByLocation,
-             const QHash<QString, QString> &renames, const QRegularExpression &renameRegex,
-             RewriteResult *result, bool collectChanges)
+             const QHash<QString, QString> &renames, RewriteResult *result, bool collectChanges)
 {
     if (node.type() == pugi::node_element) {
         const QString path = nodePath(node);
@@ -140,7 +139,7 @@ void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QStr
             }
             QString value = QString::fromUtf8(attribute.value());
             const QString before = value;
-            const int count = simultaneousReplace(&value, renames, renameRegex);
+            const int count = simultaneousReplace(&value, renames);
             if (count) {
                 attribute.set_value(value.toUtf8().constData());
                 result->references += count;
@@ -151,7 +150,7 @@ void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QStr
     } else if (node.type() == pugi::node_pcdata || node.type() == pugi::node_cdata) {
         QString value = QString::fromUtf8(node.value());
         const QString before = value;
-        const int count = simultaneousReplace(&value, renames, renameRegex);
+        const int count = simultaneousReplace(&value, renames);
         if (count) {
             node.set_value(value.toUtf8().constData());
             result->references += count;
@@ -160,7 +159,7 @@ void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QStr
         }
     }
     for (pugi::xml_node child = node.first_child(); child; child = child.next_sibling())
-        rewrite(child, file, identityByLocation, renames, renameRegex, result, collectChanges);
+        rewrite(child, file, identityByLocation, renames, result, collectChanges);
 }
 
 bool restore(const QString &root, const QString &backup, const QStringList &files, QString *error)
@@ -248,7 +247,15 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         pugi::xml_document doc;
         const pugi::xml_parse_result parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
         if (!parsed) { *error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description()); return false; }
-        locateIdentityTargets(doc, &targetsIt.value());
+        QHash<QString, int> targetIndexByElementAndId;
+        QHash<QString, int> targetIndexByLocation;
+        for (int targetIndex = 0; targetIndex < targetsIt.value().size(); ++targetIndex) {
+            const PendingRename &target = targetsIt.value().at(targetIndex);
+            targetIndexByElementAndId.insert(fastLookupKey(target.elementName, target.oldId), targetIndex);
+            if (!target.expectedLocation.isEmpty())
+                targetIndexByLocation.insert(target.expectedLocation, targetIndex);
+        }
+        locateIdentityTargets(doc, &targetIndexByElementAndId, &targetIndexByLocation, &targetsIt.value());
     }
 
     QHash<QString, QString> renames;
@@ -278,7 +285,6 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
     if (appliedRenames)
         *appliedRenames = renames;
 
-    const QRegularExpression renameRegex = renameExpression(renames);
     fileIndex = 0;
     for (const ScannedFileInfo &info : analysis.scannedFiles) {
         if (progress)
@@ -291,7 +297,7 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         const pugi::xml_parse_result parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
         if (!parsed) { *error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description()); return false; }
         RewriteResult fileResult;
-        rewrite(doc, info.filePath, identities.value(info.filePath), renames, renameRegex, &fileResult, collectChanges);
+        rewrite(doc, info.filePath, identities.value(info.filePath), renames, &fileResult, collectChanges);
         if (fileResult.identities || fileResult.references) {
             std::ostringstream stream;
             doc.save(stream, "  ", pugi::format_default, pugi::encoding_utf8);
@@ -337,13 +343,12 @@ RenamePreviewReport ReferenceRenamer::preview(const AnalysisResult &analysis, co
             // preview while keeping Apply disabled at the UI boundary.
             QHash<QString, QString> renames;
             for (const RenamePlanItem &item : plan.items) renames.insert(item.oldId, item.newId);
-            const QRegularExpression renameRegex = renameExpression(renames);
             rewriteResult.identities = plan.items.size();
             QSet<QString> files;
             for (const DataNode &node : analysis.nodes) {
                 files.insert(node.sourceFile);
                 QString value = node.serializedXml;
-                int count = simultaneousReplace(&value, renames, renameRegex);
+                int count = simultaneousReplace(&value, renames);
                 if (renames.contains(node.id) && count > 0) --count;
                 if (count > 0) rewriteResult.references += count;
             }

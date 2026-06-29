@@ -445,6 +445,21 @@ void FormatterPage::setRecommendedSelection(bool selected)
     updateDetails();
 }
 
+void FormatterPage::selectRecommendedItems()
+{
+    for (QTableWidget *table : {m_unused, m_duplicates, m_deepCleanup, m_rename, m_collection}) {
+        const QSignalBlocker blocker(table);
+        for (int row = 0; row < table->rowCount(); ++row) {
+            QTableWidgetItem *item = table->item(row, 0);
+            if (item && (item->flags() & Qt::ItemIsUserCheckable))
+                item->setCheckState(Qt::Checked);
+        }
+    }
+    m_planConfirmed = false;
+    updateSummary();
+    updateDetails();
+}
+
 void FormatterPage::updateDetails()
 {
     if (!m_details) return;

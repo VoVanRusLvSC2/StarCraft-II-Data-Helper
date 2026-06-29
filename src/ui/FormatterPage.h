@@ -76,6 +76,7 @@ public:
     void setApplyingState(bool applying, const QString &message = {});
     void rebuildAfterApply();
     void setDuplicateMergeEnabled(bool enabled);
+    void selectRecommendedItems();
     OptimizationWizardSelection currentSelection() const;
 signals:
     void previewBuilt();

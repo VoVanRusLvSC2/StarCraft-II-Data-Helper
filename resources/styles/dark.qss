@@ -386,34 +386,34 @@ QPlainTextEdit:focus {
 
 QScrollBar:vertical {
     background: transparent;
-    border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 22 5 22 5 stretch stretch;
-    width: 22px;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 22 5 22 5 repeat repeat;
+    width: 24px;
     margin: 0;
 }
 
 QScrollBar:horizontal {
     background: transparent;
-    border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 5 22 5 22 stretch stretch;
-    height: 22px;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 5 22 5 22 repeat repeat;
+    height: 24px;
     margin: 0;
 }
 
 QScrollBar::handle:vertical {
     background: transparent;
-    border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 14 7 14 7 stretch stretch;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 24 10 24 10 repeat repeat;
     min-height: 52px;
-    margin: 2px 3px;
+    margin: 2px;
 }
 
 QScrollBar::handle:horizontal {
     background: transparent;
-    border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 7 14 7 14 stretch stretch;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 repeat repeat;
     min-width: 72px;
-    margin: 2px 3px;
+    margin: 2px;
 }
 
 QScrollBar::handle:vertical:hover,
@@ -488,15 +488,15 @@ QAbstractScrollArea::corner {
 QScrollBar::handle:vertical:hover,
 QScrollBar::handle:vertical:pressed {
     background: transparent;
-    border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 14 7 14 7 stretch stretch;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 14 7 14 7 repeat repeat;
 }
 
 QScrollBar::handle:horizontal:hover,
 QScrollBar::handle:horizontal:pressed {
     background: transparent;
-    border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 7 14 7 14 stretch stretch;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 repeat repeat;
 }
 
 QTableView::item:focus,
@@ -761,26 +761,26 @@ QDialog#sc2OpenFileDialog QComboBox,
 QDialog#sc2OpenFileDialog QTableWidget,
 QDialog#sc2OpenFileDialog QListWidget {
     color: #9fffdc;
-    font-size: 12pt;
+    font-size: 13pt;
     font-weight: 600;
 }
 
 QDialog#sc2OpenFileDialog QLabel#panelTitle {
     color: #eafff6;
-    font-size: 13pt;
+    font-size: 14pt;
     font-weight: 700;
 }
 
 QDialog#sc2OpenFileDialog QLabel#inspectorSubtitle {
     color: #93e8cc;
-    font-size: 12pt;
+    font-size: 13pt;
     font-weight: 600;
 }
 
 QDialog#sc2OpenFileDialog QLineEdit {
     background: transparent;
     border: 8px solid transparent;
-    border-image: url(:/textures/ui_nova_global_tooltip.png) 8 8 8 8 repeat repeat;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 repeat repeat;
     color: #9fffdc;
     min-height: 34px;
     padding: 2px 12px;
@@ -791,7 +791,7 @@ QDialog#sc2OpenFileDialog QLineEdit {
 
 QDialog#sc2OpenFileDialog QLineEdit:hover,
 QDialog#sc2OpenFileDialog QLineEdit:focus {
-    border-image: url(:/textures/ui_nova_global_tooltip.png) 8 8 8 8 repeat repeat;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 repeat repeat;
     color: #ffffff;
     padding: 2px 12px;
     font-weight: 600;
@@ -842,7 +842,7 @@ QListWidget#fileOpenPlaces,
 QTableWidget#fileOpenTable {
     background: transparent;
     border: 6px solid transparent;
-    border-image: url(:/textures/ui_nova_global_tooltip.png) 8 8 8 8 repeat repeat;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 repeat repeat;
     alternate-background-color: rgba(5, 20, 18, 215);
     color: #9fffdc;
     selection-color: #ffffff;
@@ -853,9 +853,9 @@ QTableWidget#fileOpenTable::item {
     border: 4px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 repeat repeat;
     color: #9fffdc;
-    min-height: 30px;
+    min-height: 32px;
     padding: 5px 10px;
-    font-size: 12pt;
+    font-size: 13pt;
     font-weight: 600;
 }
 
@@ -985,6 +985,29 @@ QWidget#optimizationWizardPage QHeaderView::section {
 QWidget#optimizationWizardPage QHeaderView::section:hover {
     border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 repeat repeat;
     color: #ffffff;
+}
+
+QWidget#optimizationWizardPage QScrollBar:horizontal {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 5 22 5 22 repeat repeat;
+    height: 24px;
+    margin: 0;
+}
+
+QWidget#optimizationWizardPage QScrollBar::handle:horizontal {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 repeat repeat;
+    min-width: 72px;
+    margin: 2px;
+}
+
+QWidget#optimizationWizardPage QScrollBar::handle:horizontal:hover,
+QWidget#optimizationWizardPage QScrollBar::handle:horizontal:pressed {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 repeat repeat;
 }
 
 QSplitter#optimizationContent::handle {

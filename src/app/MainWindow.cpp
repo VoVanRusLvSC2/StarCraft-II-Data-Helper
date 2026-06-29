@@ -28,6 +28,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDesktopServices>
@@ -74,6 +75,7 @@
 #include <QPixmap>
 #include <QSizePolicy>
 #include <QTemporaryDir>
+#include <QTextStream>
 #include <QToolButton>
 #include <QToolBar>
 #include <QTimer>
@@ -1894,7 +1896,7 @@ bool MainWindow::loadPathAndAnalyze(const QString &path)
     {
         logLine(QStringLiteral("Duplicate content group: %1 (%2 nodes)").arg(group.contentHash.left(12)).arg(group.nodeIndices.size()));
     }
-    if (!m_optimizationDialog)
+    if (!m_optimizationDialog && !m_wizardApplyAutomation)
         showDryRunTab(true);
     return true;
 }
@@ -2583,6 +2585,7 @@ bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList
     }
     QSaveFile destination(m_currentSourcePath);
     const QByteArray archiveBytes = pendingFile.readAll();
+    pendingFile.close();
     if (!destination.open(QIODevice::WriteOnly) || destination.write(archiveBytes) != archiveBytes.size() || !destination.commit())
     {
         if (errorMessage)
@@ -3273,18 +3276,29 @@ void MainWindow::applyOptimizationWizardPlan()
     if (selection.unused.isEmpty() && selection.duplicates.isEmpty() && selection.deepCleanup.isEmpty()
         && selection.rename.isEmpty() && selection.collection.isEmpty())
     {
+        if (m_wizardApplyAutomation)
+        {
+            finishWizardApplyAutomation(false, QStringLiteral("No optimization items were selected."));
+            return;
+        }
         QMessageBox::information(this, QStringLiteral("Optimization Wizard"),
                                  QStringLiteral("Select at least one item before applying the optimization plan."));
         return;
     }
     if (m_sourceKind == SourceKind::ArchiveFolder)
     {
+        if (m_wizardApplyAutomation)
+        {
+            finishWizardApplyAutomation(false, archiveFolderReadOnlyMessage());
+            return;
+        }
         QMessageBox::information(this, QStringLiteral("Optimization Wizard"), archiveFolderReadOnlyMessage());
         return;
     }
 
-    if (QMessageBox::question(this, QStringLiteral("Apply Optimization Plan"),
-                              QStringLiteral("Apply the selected optimization steps to files now, then rebuild the preview from the updated data?")) != QMessageBox::Yes)
+    if (!m_wizardApplyAutomation
+        && QMessageBox::question(this, QStringLiteral("Apply Optimization Plan"),
+                                 QStringLiteral("Apply the selected optimization steps to files now, then rebuild the preview from the updated data?")) != QMessageBox::Yes)
     {
         return;
     }
@@ -3298,6 +3312,8 @@ void MainWindow::applyOptimizationWizardPlan()
     QApplication::processEvents();
     const auto updateApplyProgress = [&](int percent, const QString &primary, const QString &secondary = QString())
     {
+        if (m_wizardApplyAutomation)
+            appendWizardApplyAutomationLog(QStringLiteral("progress %1% | %2 | %3").arg(percent).arg(primary, secondary));
         applyProgress.setProgress(percent, primary, secondary);
         QApplication::processEvents();
     };
@@ -3467,6 +3483,16 @@ void MainWindow::applyOptimizationWizardPlan()
         if (!combined.valid)
             combined.conflicts << QStringLiteral("No safe rename items remained after batch validation.");
         return combined;
+    };
+    const auto collectionSkipReason = [](const DataCollectionPreviewReport &preview)
+    {
+        QStringList details = preview.warnings + preview.idConflicts;
+        details.removeDuplicates();
+        if (details.isEmpty())
+            return QStringLiteral("preview is not valid for automatic apply");
+        if (details.size() > 4)
+            details = details.mid(0, 4) << QStringLiteral("...");
+        return details.join(QStringLiteral("; "));
     };
 
     if (m_sourceKind == SourceKind::ArchiveFile)
@@ -3677,6 +3703,13 @@ void MainWindow::applyOptimizationWizardPlan()
                         if (index >= 0)
                             request.includedNodeIndices.insert(index);
                     }
+                    const DataCollectionPreviewReport preview = m_dataCollectionBuilder.preview(current, request, &families);
+                    if (!preview.valid)
+                    {
+                        warnings << QStringLiteral("Skipped Data Collection family %1: %2")
+                                        .arg(selectedCollection.familyRootId, collectionSkipReason(preview));
+                        continue;
+                    }
                     const DataCollectionApplyResult result = m_dataCollectionBuilder.apply(
                         current, request, workspace.path(), m_whitelistIds, false, &families, true);
                     if (!result.success)
@@ -3879,6 +3912,13 @@ void MainWindow::applyOptimizationWizardPlan()
                 if (index >= 0)
                     request.includedNodeIndices.insert(index);
             }
+            const DataCollectionPreviewReport preview = m_dataCollectionBuilder.preview(current, request, &collectionFamilies);
+            if (!preview.valid)
+            {
+                warnings << QStringLiteral("Skipped Data Collection family %1: %2")
+                                .arg(selectedCollection.familyRootId, collectionSkipReason(preview));
+                continue;
+            }
             const DataCollectionApplyResult result = m_dataCollectionBuilder.apply(
                 current, request, m_rootFolder, m_whitelistIds, false, &collectionFamilies);
             if (!result.success)
@@ -3897,6 +3937,11 @@ void MainWindow::applyOptimizationWizardPlan()
     {
         applyProgress.close();
         loadPathAndAnalyze(m_currentSourcePath);
+        if (m_wizardApplyAutomation)
+        {
+            finishWizardApplyAutomation(false, failure);
+            return;
+        }
         QMessageBox::critical(this, QStringLiteral("Optimization Apply Failed"),
                               QStringLiteral("The optimization batch stopped:\n%1").arg(failure));
         return;
@@ -3919,6 +3964,11 @@ void MainWindow::applyOptimizationWizardPlan()
     }
     else if (!loadPathAndAnalyze(m_currentSourcePath))
     {
+        if (m_wizardApplyAutomation)
+        {
+            finishWizardApplyAutomation(false, QStringLiteral("Changes were saved, but automatic re-analysis failed."));
+            return;
+        }
         QMessageBox::warning(this, QStringLiteral("Optimization Applied"),
                              QStringLiteral("Changes were saved, but automatic re-analysis failed. Re-open Analyze to refresh the wizard view."));
         return;
@@ -3950,7 +4000,72 @@ void MainWindow::applyOptimizationWizardPlan()
         message += QStringLiteral("\nArchive backup: %1").arg(archiveBackup);
     if (!warnings.isEmpty())
         message += QStringLiteral("\n\nWarnings:\n- ") + warnings.join(QStringLiteral("\n- "));
+    if (m_wizardApplyAutomation)
+    {
+        finishWizardApplyAutomation(true, message);
+        return;
+    }
     QMessageBox::information(this, QStringLiteral("Optimization Applied"), message);
+}
+
+void MainWindow::runWizardApplyAutomation(const QString &path, const QString &logPath, int timeoutMs)
+{
+    m_wizardApplyAutomation = true;
+    m_wizardApplyAutomationLogPath = logPath;
+    appendWizardApplyAutomationLog(QStringLiteral("start path=%1 timeoutMs=%2").arg(path).arg(timeoutMs));
+    if (timeoutMs > 0)
+    {
+        QTimer::singleShot(timeoutMs, this, [this]
+        {
+            if (m_wizardApplyAutomation)
+                finishWizardApplyAutomation(false, QStringLiteral("Wizard apply automation timed out."));
+        });
+    }
+    QTimer::singleShot(0, this, [this, path]
+    {
+        appendWizardApplyAutomationLog(QStringLiteral("load begin"));
+        if (!loadPathAndAnalyze(path))
+        {
+            finishWizardApplyAutomation(false, QStringLiteral("Failed to analyze %1").arg(path));
+            return;
+        }
+        appendWizardApplyAutomationLog(QStringLiteral("load ok nodes=%1 files=%2").arg(m_result.nodes.size()).arg(m_result.scannedFiles.size()));
+        connect(m_dryRunPage, &FormatterPage::previewBuilt, this, [this]
+        {
+            appendWizardApplyAutomationLog(QStringLiteral("preview built; selecting recommended"));
+            m_dryRunPage->selectRecommendedItems();
+            QTimer::singleShot(0, this, [this]
+            {
+                appendWizardApplyAutomationLog(QStringLiteral("apply begin"));
+                applyOptimizationWizardPlan();
+            });
+        }, Qt::SingleShotConnection);
+        appendWizardApplyAutomationLog(QStringLiteral("preview start"));
+        m_dryRunPage->startWizard(true);
+    });
+}
+
+void MainWindow::appendWizardApplyAutomationLog(const QString &line) const
+{
+    if (m_wizardApplyAutomationLogPath.isEmpty())
+        return;
+    QFile file(m_wizardApplyAutomationLogPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        return;
+    QTextStream stream(&file);
+    stream << QDateTime::currentDateTime().toString(Qt::ISODateWithMs)
+           << ' ' << line << '\n';
+}
+
+void MainWindow::finishWizardApplyAutomation(bool success, const QString &message)
+{
+    appendWizardApplyAutomationLog(QStringLiteral("finish status=%1 message=%2")
+                                       .arg(success ? QStringLiteral("ok") : QStringLiteral("failed"), message));
+    m_wizardApplyAutomation = false;
+    qInfo().noquote() << (success ? QStringLiteral("wizard_apply_status=ok")
+                                  : QStringLiteral("wizard_apply_status=failed"));
+    qInfo().noquote() << QStringLiteral("wizard_apply_message=%1").arg(message);
+    QCoreApplication::exit(success ? 0 : 1);
 }
 
 void MainWindow::showLogsTab()

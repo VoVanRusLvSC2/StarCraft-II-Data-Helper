@@ -993,7 +993,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     if (!result.existingCollection && linkedObjectCount < 1)
         result.warnings << QStringLiteral("A new collection requires at least one existing catalog object.");
     if (!result.falsePositiveAssociations.isEmpty())
-        result.warnings << QStringLiteral("Automatic Apply is blocked: legacy DataRecord entries without a proven entity owner require Manual Review.");
+        result.warnings << QStringLiteral("Legacy DataRecord entries without a proven entity owner were preserved in no-loss mode.");
 
     QString existingParent;
     if (existingCollectionNode) {
@@ -1018,7 +1018,6 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
         sortEntries(&result.recordsToAdd);
         const int linkedObjectCount = result.existingRecordsPreserved.size() + result.recordsToAdd.size();
         result.valid = nameMatchesCollection && !request.family.rootTypeConflict && !brokenInheritance
-            && result.falsePositiveAssociations.isEmpty()
             && (result.existingCollection || linkedObjectCount >= 1);
         result.reportText = buildReport(result, QStringLiteral("Summary preview; XML generation deferred until apply"));
         return result;
@@ -1078,7 +1077,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     result.generatedXml = QString::fromUtf8(generated);
     if (!generatedError.isEmpty()) result.warnings << generatedError;
     result.valid = nameMatchesCollection && !request.family.rootTypeConflict && !brokenInheritance
-        && result.falsePositiveAssociations.isEmpty() && generatedError.isEmpty()
+        && generatedError.isEmpty()
         && (result.existingCollection || linkedObjectCount >= 1);
     result.reportText = buildReport(result, QStringLiteral("Preview only; no files modified"));
     return result;

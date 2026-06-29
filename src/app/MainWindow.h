@@ -43,6 +43,7 @@ class MainWindow : public QMainWindow
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    void runWizardApplyAutomation(const QString &path, const QString &logPath = QString(), int timeoutMs = 600000);
 
 private slots:
     void openSc2File();
@@ -100,6 +101,8 @@ private:
     void showGraphForRow(int row);
     void setDuplicateMergeEnabled(bool enabled);
     void updateFullscreenActionText();
+    void appendWizardApplyAutomationLog(const QString &line) const;
+    void finishWizardApplyAutomation(bool success, const QString &message);
 
     QString m_rootFolder;
     QString m_currentSourcePath;
@@ -155,4 +158,6 @@ private:
     QAction *m_exitAction = nullptr;
     AnalysisProgressDialog *m_activeProgressDialog = nullptr;
     QDialog *m_optimizationDialog = nullptr;
+    bool m_wizardApplyAutomation = false;
+    QString m_wizardApplyAutomationLogPath;
 };
