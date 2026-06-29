@@ -46,5 +46,5 @@ class UnitFamilyDetector
 public:
     QVector<UnitFamily> detect(const AnalysisResult &analysis) const;
     QVector<UnitFamily> detectCollectionFamilies(const AnalysisResult &analysis,
-                                                  DataCollectionMode mode = DataCollectionMode::Unit) const;
+                                                  DataCollectionMode mode = DataCollectionMode::UnitAbilWeapon) const;
 };

@@ -16,6 +16,7 @@
 #include "ui/XmlSourcePage.h"
 #include "core/Sc2Archive.h"
 #include "core/DataCollectionPreservation.h"
+#include "core/DeepCleanupService.h"
 #include "core/StandardNamePlanner.h"
 #include "core/UnitFamilyDetector.h"
 
@@ -532,10 +533,40 @@ namespace
         return dialog.exec() == QDialog::Accepted ? dialog.selectedFile() : QString();
     }
 
+    QString openFolderStyled(QWidget *parent, const QString &startPath)
+    {
+        QFileDialog dialog(parent, QStringLiteral("Open SC2 Folder"), startPath);
+        dialog.setObjectName(QStringLiteral("sc2FileDialog"));
+        dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+        dialog.setOption(QFileDialog::ShowDirsOnly, true);
+        dialog.setFileMode(QFileDialog::Directory);
+        dialog.setAcceptMode(QFileDialog::AcceptOpen);
+        dialog.setLabelText(QFileDialog::Accept, QStringLiteral("Open"));
+        dialog.setMinimumSize(980, 640);
+        return dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()
+            ? dialog.selectedFiles().front()
+            : QString();
+    }
+
+    QString saveTextFileStyled(QWidget *parent, const QString &title, const QString &startPath)
+    {
+        QFileDialog dialog(parent, title, QFileInfo(startPath).absolutePath(), QStringLiteral("Text files (*.txt)"));
+        dialog.setObjectName(QStringLiteral("sc2FileDialog"));
+        dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        dialog.setFileMode(QFileDialog::AnyFile);
+        dialog.setDefaultSuffix(QStringLiteral("txt"));
+        dialog.selectFile(QFileInfo(startPath).fileName());
+        dialog.setMinimumSize(980, 640);
+        return dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()
+            ? dialog.selectedFiles().front()
+            : QString();
+    }
+
     DataCollectionMode configuredDataCollectionMode()
     {
         QSettings settings;
-        return settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("Unit")).toString().compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
+        return settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString().compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
                    ? DataCollectionMode::UnitAbilWeapon
                    : DataCollectionMode::Unit;
     }
@@ -1006,7 +1037,28 @@ MainWindow::MainWindow(QWidget *parent)
     setupTheme();
     AudioManager::instance()->initialize();
     QSettings settings;
-    setDuplicateMergeEnabled(settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), false).toBool());
+    const QString collectionModeKey = QStringLiteral("dataCollection/mode");
+    const QString collectionModeMigrationKey = QStringLiteral("dataCollection/unitAbilWeaponDefaultMigrated");
+    if (!settings.value(collectionModeMigrationKey, false).toBool())
+    {
+        if (!settings.contains(collectionModeKey)
+            || settings.value(collectionModeKey).toString().compare(QStringLiteral("Unit"), Qt::CaseInsensitive) == 0)
+            settings.setValue(collectionModeKey, QStringLiteral("UnitAbilWeapon"));
+        settings.setValue(collectionModeMigrationKey, true);
+    }
+    else if (!settings.contains(collectionModeKey))
+    {
+        settings.setValue(collectionModeKey, QStringLiteral("UnitAbilWeapon"));
+    }
+    const QString duplicateMergeKey = QStringLiteral("optimization/duplicateMergeEnabled");
+    const QString duplicateMergeMigrationKey = QStringLiteral("optimization/duplicateMergeDefaultEnabledMigrated");
+    if (!settings.value(duplicateMergeMigrationKey, false).toBool())
+    {
+        if (!settings.contains(duplicateMergeKey) || !settings.value(duplicateMergeKey).toBool())
+            settings.setValue(duplicateMergeKey, true);
+        settings.setValue(duplicateMergeMigrationKey, true);
+    }
+    setDuplicateMergeEnabled(settings.value(duplicateMergeKey, true).toBool());
     loadDefaultFolder();
 
     const QString rulesPath = runtimePath(QStringLiteral("config/rules.json"));
@@ -1304,7 +1356,7 @@ void MainWindow::setupUi()
         effects->installOn(button);
     }
     auto *promoAnimator = new PromoButtonAnimator(this);
-    promoAnimator->installOn(discordButton, QSize(30, 30), QSize(36, 36), QColor(88, 190, 255, 220));
+    promoAnimator->installOn(discordButton, QSize(30, 30), QSize(30, 30), QColor(88, 190, 255, 220));
     promoAnimator->installOn(boostyButton, QSize(), QSize(), QColor(255, 176, 74, 230));
 
     for (QLabel *label : findChildren<QLabel *>())
@@ -1415,8 +1467,8 @@ void MainWindow::showSettingsDialog()
     musicValue->setText(QStringLiteral("Music volume: %1%").arg(musicSlider->value()));
     auto *duplicatesCheck = checkBoxRow(
         QStringLiteral("Enable Duplicate Merge in Optimization"),
-        settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), false).toBool(),
-        QStringLiteral("Disabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
+        settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), true).toBool(),
+        QStringLiteral("Enabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
     auto *backupCheck = checkBoxRow(
         QStringLiteral("Create backup files before applying changes"),
         settings.value(QStringLiteral("backup/enabled"), true).toBool(),
@@ -1428,7 +1480,7 @@ void MainWindow::showSettingsDialog()
     auto *collectionMode = new QComboBox(&dialog);
     collectionMode->addItem(QStringLiteral("Unit - one collection per unit family"), QStringLiteral("Unit"));
     collectionMode->addItem(QStringLiteral("UnitAbilWeapon - separate Unit, Ability and Weapon collections"), QStringLiteral("UnitAbilWeapon"));
-    const QString savedCollectionMode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("Unit")).toString();
+    const QString savedCollectionMode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString();
     collectionMode->setCurrentIndex(qMax(0, collectionMode->findData(savedCollectionMode)));
     collectionMode->setToolTip(QStringLiteral("Unit keeps the current behavior. UnitAbilWeapon creates separate collections like Gargantua, Gargantua_Jump and Gargantua_Weapon."));
     layout->addWidget(soundCheck);
@@ -1604,7 +1656,7 @@ void MainWindow::openSourceFolder()
     if (!startPath.isEmpty() && !QFileInfo(startPath).isDir())
         startPath = QFileInfo(startPath).absolutePath();
 
-    const QString selected = QFileDialog::getExistingDirectory(this, QStringLiteral("Open SC2 Folder"), startPath);
+    const QString selected = openFolderStyled(this, startPath);
     if (selected.isEmpty())
         return;
 
@@ -2367,15 +2419,18 @@ bool MainWindow::materializeArchiveAnalysis(const QString &tempRoot, AnalysisRes
         file.filePath = QDir(tempRoot).absoluteFilePath(QDir::cleanPath(file.filePath));
     for (DataNode &node : analysis->nodes)
         node.sourceFile = QDir(tempRoot).absoluteFilePath(QDir::cleanPath(node.sourceFile));
+    for (DeepCleanupCandidate &candidate : analysis->deepCleanupCandidates)
+        candidate.filePath = QDir(tempRoot).absoluteFilePath(QDir::cleanPath(candidate.filePath));
     analysis->sourceXmlByFile = absoluteSources;
     analysis->rootFolder = tempRoot;
     return true;
 }
 
 bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList &changedFiles,
-                                      QString *backupPath, QString *errorMessage) const
+                                      QString *backupPath, QString *errorMessage,
+                                      const QStringList &removedFiles) const
 {
-    if (changedFiles.isEmpty())
+    if (changedFiles.isEmpty() && removedFiles.isEmpty())
     {
         if (errorMessage)
             *errorMessage = QStringLiteral("No archive entries changed.");
@@ -2420,6 +2475,24 @@ bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList
         }
         replacements.insert(archiveName, replacementBytes);
     }
+    QStringList removedEntries;
+    for (const QString &relativeFile : removedFiles)
+    {
+        QString normalized = QDir::cleanPath(relativeFile).replace('\\', '/');
+        QString archiveName;
+        for (const QString &entry : archive.allEntries())
+        {
+            if (QDir::cleanPath(entry).replace('\\', '/').compare(normalized, Qt::CaseInsensitive) == 0)
+            {
+                archiveName = entry;
+                break;
+            }
+        }
+        if (archiveName.isEmpty())
+            archiveName = normalized.replace('/', '\\');
+        removedEntries.append(archiveName);
+    }
+    removedEntries.removeDuplicates();
 
     BackupManager backupManager;
     QString backup;
@@ -2427,7 +2500,7 @@ bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList
         return false;
     const QString pending = m_currentSourcePath + QStringLiteral(".sc2dh.pending");
     QFile::remove(pending);
-    if (!archive.saveCopy(pending, replacements, {}, errorMessage))
+    if (!archive.saveCopy(pending, replacements, removedEntries, errorMessage))
         return false;
 
     QFile pendingFile(pending);
@@ -2786,11 +2859,32 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
 
 void MainWindow::previewStandardRename(const RenamePlan &plan)
 {
-    const RenamePreviewReport report = m_referenceRenamer.preview(m_result, plan);
+    RenamePreviewReport report;
+    if (m_sourceKind == SourceKind::ArchiveFile)
+    {
+        QTemporaryDir workspace;
+        AnalysisResult materialized;
+        QString error;
+        if (!workspace.isValid() || !materializeArchiveAnalysis(workspace.path(), &materialized, &error))
+        {
+            report.valid = false;
+            report.plan = plan;
+            report.conflicts << error;
+            report.reportText = QStringLiteral("Archive rename preview failed: %1").arg(error);
+        }
+        else
+        {
+            report = m_referenceRenamer.preview(materialized, plan);
+        }
+    }
+    else
+    {
+        report = m_referenceRenamer.preview(m_result, plan);
+    }
     m_previewedRenamePlan = plan;
     m_renamePreviewValid = report.valid;
     m_renameIdsPage->setPreviewReport(report);
-    if (m_sourceKind == SourceKind::ArchiveFile || m_sourceKind == SourceKind::ArchiveFolder)
+    if (m_sourceKind == SourceKind::ArchiveFolder)
         m_renameIdsPage->setApplyAvailable(false);
     logLine(QStringLiteral("Rename-to-standard preview: %1 renames, %2 reference updates, valid=%3")
                 .arg(report.identitiesRenamed)
@@ -2800,12 +2894,9 @@ void MainWindow::previewStandardRename(const RenamePlan &plan)
 
 void MainWindow::applyStandardRename(const RenamePlan &plan)
 {
-    if (m_sourceKind == SourceKind::ArchiveFile || m_sourceKind == SourceKind::ArchiveFolder)
+    if (m_sourceKind == SourceKind::ArchiveFolder)
     {
-        QMessageBox::information(this, QStringLiteral("Apply Rename"),
-                                 m_sourceKind == SourceKind::ArchiveFolder
-                                     ? archiveFolderReadOnlyMessage()
-                                     : QStringLiteral("Archive mode is preview-only."));
+        QMessageBox::information(this, QStringLiteral("Apply Rename"), archiveFolderReadOnlyMessage());
         return;
     }
     const auto signature = [](const RenamePlan &value)
@@ -2827,6 +2918,38 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
                                   QStringLiteral("Create a backup, rename selected real XML IDs, update references, and verify?"),
                                   QStringLiteral("Backups are disabled in Settings. Rename selected real XML IDs, update references, and verify without a persistent backup?"))) != QMessageBox::Yes)
         return;
+    if (m_sourceKind == SourceKind::ArchiveFile)
+    {
+        QTemporaryDir workspace;
+        AnalysisResult materialized;
+        QString error;
+        if (!workspace.isValid() || !materializeArchiveAnalysis(workspace.path(), &materialized, &error))
+        {
+            QMessageBox::critical(this, QStringLiteral("Rename failed"), error);
+            return;
+        }
+        const RenameApplyResult result = m_referenceRenamer.apply(materialized, plan, workspace.path(), m_whitelistIds);
+        if (!result.success)
+        {
+            QMessageBox::critical(this, QStringLiteral("Rename failed"), result.error + QStringLiteral("\nThe archive was not changed."));
+            return;
+        }
+        QString archiveBackup;
+        if (!commitArchiveChanges(workspace.path(), result.changedFiles, &archiveBackup, &error))
+        {
+            QMessageBox::critical(this, QStringLiteral("Rename failed"), error + QStringLiteral("\nNo partial archive change was retained."));
+            return;
+        }
+        m_renamePreviewValid = false;
+        loadPathAndAnalyze(m_currentSourcePath);
+        m_dryRunPage->recordRenameResult(result.identitiesRenamed);
+        QMessageBox::information(this, QStringLiteral("Rename complete"),
+                                 QStringLiteral("Archive backup: %1\nObjects renamed: %2\nReferences updated: %3")
+                                     .arg(archiveBackup)
+                                     .arg(result.identitiesRenamed)
+                                     .arg(result.referencesUpdated));
+        return;
+    }
     const RenameApplyResult result = m_referenceRenamer.apply(m_result, plan, m_rootFolder, m_whitelistIds);
     if (!result.success)
     {
@@ -2850,8 +2973,8 @@ void MainWindow::exportStandardRenameReport(const QString &reportText)
         QMessageBox::information(this, QStringLiteral("Export Rename Report"), QStringLiteral("Preview a rename first."));
         return;
     }
-    const QString selected = QFileDialog::getSaveFileName(this, QStringLiteral("Export Rename Report"),
-                                                          QDir(m_rootFolder).absoluteFilePath(QStringLiteral("rename_to_standard_preview.txt")), QStringLiteral("Text files (*.txt)"));
+    const QString selected = saveTextFileStyled(this, QStringLiteral("Export Rename Report"),
+                                                QDir(m_rootFolder).absoluteFilePath(QStringLiteral("rename_to_standard_preview.txt")));
     if (selected.isEmpty())
         return;
     QSaveFile file(selected);
@@ -2977,8 +3100,8 @@ void MainWindow::exportDataCollectionReport(const QString &reportText)
         QMessageBox::information(this, QStringLiteral("Export Collection Report"), QStringLiteral("Preview a collection first."));
         return;
     }
-    const QString selected = QFileDialog::getSaveFileName(this, QStringLiteral("Export Collection Report"),
-                                                          QDir(m_rootFolder).absoluteFilePath(QStringLiteral("data_collection_preview.txt")), QStringLiteral("Text files (*.txt)"));
+    const QString selected = saveTextFileStyled(this, QStringLiteral("Export Collection Report"),
+                                                QDir(m_rootFolder).absoluteFilePath(QStringLiteral("data_collection_preview.txt")));
     if (selected.isEmpty())
         return;
     const QByteArray bytes = reportText.toUtf8();
@@ -3076,7 +3199,8 @@ void MainWindow::applyOptimizationWizardPlan()
         return;
 
     const OptimizationWizardSelection selection = m_dryRunPage->currentSelection();
-    if (selection.unused.isEmpty() && selection.duplicates.isEmpty() && selection.rename.isEmpty() && selection.collection.isEmpty())
+    if (selection.unused.isEmpty() && selection.duplicates.isEmpty() && selection.deepCleanup.isEmpty()
+        && selection.rename.isEmpty() && selection.collection.isEmpty())
     {
         QMessageBox::information(this, QStringLiteral("Optimization Wizard"),
                                  QStringLiteral("Select at least one item before applying the optimization plan."));
@@ -3110,6 +3234,7 @@ void MainWindow::applyOptimizationWizardPlan()
     int removedUnused = 0;
     int removedDuplicates = 0;
     int redirectedReferences = 0;
+    int deepCleanupChanged = 0;
     int renamedIds = 0;
     int collectionAdded = 0;
     int collectionReorganized = 0;
@@ -3140,6 +3265,7 @@ void MainWindow::applyOptimizationWizardPlan()
         else
         {
             QStringList changedFiles;
+            QStringList removedFiles;
 
             if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
             {
@@ -3148,6 +3274,34 @@ void MainWindow::applyOptimizationWizardPlan()
             else
             {
                 applyArchiveReferenceSafety(&current);
+            }
+
+            if (failure.isEmpty() && !selection.deepCleanup.isEmpty())
+            {
+                updateApplyProgress(22, QStringLiteral("Applying deep cleanup"), QStringLiteral("Removing unused assets, stale localization and redundant XML"));
+                const DeepCleanupApplyResult result = DeepCleanupService().apply(current, selection.deepCleanup, workspace.path(), false);
+                if (!result.success)
+                {
+                    failure = result.error;
+                }
+                else
+                {
+                    deepCleanupChanged += result.filesDeleted + result.textLinesRemoved + result.xmlNodesRemoved + result.xmlAttributesRemoved;
+                    if (result.reportOnlySkipped > 0)
+                        warnings << QStringLiteral("Skipped %1 review-only deep cleanup item(s).").arg(result.reportOnlySkipped);
+                    changedFiles.append(result.changedFiles);
+                    removedFiles.append(result.removedFiles);
+                    changedFiles.removeDuplicates();
+                    removedFiles.removeDuplicates();
+                    if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                    {
+                        failure = error;
+                    }
+                    else
+                    {
+                        applyArchiveReferenceSafety(&current);
+                    }
+                }
             }
 
             if (failure.isEmpty() && !selection.unused.isEmpty())
@@ -3183,9 +3337,6 @@ void MainWindow::applyOptimizationWizardPlan()
                     }
                 }
             }
-            if (!selection.rename.isEmpty())
-                warnings << QStringLiteral("Rename To Standard was skipped: archive mode stays preview-only.");
-
             QHash<QString, QPair<WizardNodeRef, QVector<WizardNodeRef>>> mergeGroups;
             for (const WizardMergeSelection &item : selection.duplicates)
             {
@@ -3226,6 +3377,62 @@ void MainWindow::applyOptimizationWizardPlan()
                 {
                     failure = error;
                     break;
+                }
+            }
+
+            QHash<QString, QVector<WizardNodeRef>> renameByFamily;
+            for (const WizardRenameSelection &item : selection.rename)
+                renameByFamily[item.familyRootId].append(item.node);
+            if (!renameByFamily.isEmpty())
+            {
+                QVector<UnitFamily> renameFamilies = UnitFamilyDetector().detect(current);
+                QHash<QString, UnitFamily> renameFamilyByRoot;
+                for (const UnitFamily &family : renameFamilies)
+                    renameFamilyByRoot.insert(family.rootId, family);
+                StandardNamePlanner planner;
+                updateApplyProgress(55, QStringLiteral("Applying rename changes"), QStringLiteral("Updating real XML IDs and references"));
+                for (auto it = renameByFamily.cbegin(); failure.isEmpty() && it != renameByFamily.cend(); ++it)
+                {
+                    const auto familyIt = renameFamilyByRoot.constFind(it.key());
+                    if (familyIt == renameFamilyByRoot.cend())
+                    {
+                        warnings << QStringLiteral("Skipped rename family %1 because it is no longer present after apply.").arg(it.key());
+                        continue;
+                    }
+                    QSet<int> includedNodeIndices;
+                    for (const WizardNodeRef &ref : it.value())
+                    {
+                        const int index = findNodeIndex(current, ref);
+                        if (index >= 0)
+                            includedNodeIndices.insert(index);
+                    }
+                    if (includedNodeIndices.isEmpty())
+                        continue;
+                    const RenamePlan plan = planner.plan(current, familyIt.value(), familyIt.value().rootId, includedNodeIndices);
+                    if (!plan.valid)
+                    {
+                        warnings << QStringLiteral("Skipped rename family %1 because the refreshed plan is no longer valid.").arg(it.key());
+                        continue;
+                    }
+                    const RenameApplyResult result = m_referenceRenamer.apply(current, plan, workspace.path(), m_whitelistIds);
+                    if (!result.success)
+                    {
+                        failure = result.error;
+                        break;
+                    }
+                    renamedIds += result.identitiesRenamed;
+                    changedFiles.append(result.changedFiles);
+                    changedFiles.removeDuplicates();
+                    if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                    {
+                        failure = error;
+                        break;
+                    }
+                    applyArchiveReferenceSafety(&current);
+                    renameFamilies = UnitFamilyDetector().detect(current);
+                    renameFamilyByRoot.clear();
+                    for (const UnitFamily &family : renameFamilies)
+                        renameFamilyByRoot.insert(family.rootId, family);
                 }
             }
 
@@ -3281,10 +3488,10 @@ void MainWindow::applyOptimizationWizardPlan()
             if (failure.isEmpty() && collectionChanged && !reloadWorkingAnalysis(workspace.path(), &current, &error))
                 failure = error;
 
-            if (failure.isEmpty() && !changedFiles.isEmpty())
+            if (failure.isEmpty() && (!changedFiles.isEmpty() || !removedFiles.isEmpty()))
             {
                 updateApplyProgress(85, QStringLiteral("Saving archive"), QStringLiteral("Writing verified XML back to the SC2 archive"));
-                if (!commitArchiveChanges(workspace.path(), changedFiles, &archiveBackup, &error))
+                if (!commitArchiveChanges(workspace.path(), changedFiles, &archiveBackup, &error, removedFiles))
                 {
                     failure = error;
                 }
@@ -3302,6 +3509,24 @@ void MainWindow::applyOptimizationWizardPlan()
         AnalysisResult current = m_result;
         QString error;
 
+        if (failure.isEmpty() && !selection.deepCleanup.isEmpty())
+        {
+            updateApplyProgress(18, QStringLiteral("Applying deep cleanup"), QStringLiteral("Removing unused assets, stale localization and redundant XML"));
+            const DeepCleanupApplyResult result = DeepCleanupService().apply(current, selection.deepCleanup, m_rootFolder, true);
+            if (!result.success)
+            {
+                failure = result.error;
+            }
+            else
+            {
+                deepCleanupChanged += result.filesDeleted + result.textLinesRemoved + result.xmlNodesRemoved + result.xmlAttributesRemoved;
+                if (result.reportOnlySkipped > 0)
+                    warnings << QStringLiteral("Skipped %1 review-only deep cleanup item(s).").arg(result.reportOnlySkipped);
+                if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
+                    failure = error;
+            }
+        }
+
         QVector<int> unusedRows;
         for (const WizardNodeRef &ref : selection.unused)
         {
@@ -3309,7 +3534,7 @@ void MainWindow::applyOptimizationWizardPlan()
             if (index >= 0)
                 unusedRows.append(index);
         }
-        if (!unusedRows.isEmpty())
+        if (failure.isEmpty() && !unusedRows.isEmpty())
         {
             updateApplyProgress(20, QStringLiteral("Deleting unused objects"), QStringLiteral("Removing selected safe unused objects"));
             QString backupFolder;
@@ -3506,16 +3731,19 @@ void MainWindow::applyOptimizationWizardPlan()
         m_dryRunPage->recordUnusedResult(removedUnused);
     if (removedDuplicates > 0 || redirectedReferences > 0)
         m_dryRunPage->recordMergeResult(removedDuplicates, redirectedReferences);
+    if (deepCleanupChanged > 0)
+        m_dryRunPage->recordDeepCleanupResult(deepCleanupChanged);
     if (renamedIds > 0)
         m_dryRunPage->recordRenameResult(renamedIds);
     if (collectionAdded > 0 || collectionReorganized > 0)
         m_dryRunPage->recordCollectionResult(collectionAdded, collectionReorganized);
     m_dryRunPage->rebuildAfterApply();
 
-    QString message = QStringLiteral("Selected optimization steps were applied and saved.\n\nUnused deleted: %1\nDuplicates deleted: %2\nReferences redirected: %3\nIDs renamed: %4\nCollection records added: %5\nCollection records reorganized: %6")
+    QString message = QStringLiteral("Selected optimization steps were applied and saved.\n\nUnused deleted: %1\nDuplicates deleted: %2\nReferences redirected: %3\nDeep cleanup changes: %4\nIDs renamed: %5\nCollection records added: %6\nCollection records reorganized: %7")
                           .arg(removedUnused)
                           .arg(removedDuplicates)
                           .arg(redirectedReferences)
+                          .arg(deepCleanupChanged)
                           .arg(renamedIds)
                           .arg(collectionAdded)
                           .arg(collectionReorganized);

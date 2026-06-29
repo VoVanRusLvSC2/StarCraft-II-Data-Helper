@@ -94,7 +94,8 @@ private:
     void applyArchiveReferenceSafety(AnalysisResult *analysis) const;
     void normalizeArchiveAnalysis(AnalysisResult *analysis, const QString &tempRoot, const QString &archivePath) const;
     bool commitArchiveChanges(const QString &tempRoot, const QStringList &changedFiles,
-                              QString *backupPath, QString *errorMessage) const;
+                              QString *backupPath, QString *errorMessage,
+                              const QStringList &removedFiles = {}) const;
     int findNodeIndex(const AnalysisResult &analysis, const WizardNodeRef &ref) const;
     void showGraphForRow(int row);
     void setDuplicateMergeEnabled(bool enabled);

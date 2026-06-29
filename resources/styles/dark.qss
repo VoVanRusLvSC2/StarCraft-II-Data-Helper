@@ -1,6 +1,6 @@
 QWidget {
     background: transparent;
-    color: #e8f2ef;
+    color: #effff7;
     font-family: "Segoe UI", sans-serif;
     font-size: 11pt;
     font-weight: 600;
@@ -554,6 +554,89 @@ QDialog#toolDialog {
     border: 8px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
     padding: 8px;
+}
+
+QDialog,
+QFileDialog,
+QMessageBox {
+    background-color: #020507;
+    color: #effff7;
+}
+
+QFileDialog#sc2FileDialog,
+QFileDialog#sc2FileDialog QWidget {
+    background-color: #020507;
+    color: #effff7;
+}
+
+QFileDialog#sc2FileDialog QFrame,
+QFileDialog#sc2FileDialog QSplitter,
+QFileDialog#sc2FileDialog QStackedWidget,
+QFileDialog#sc2FileDialog QGroupBox,
+QMessageBox {
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    background: transparent;
+}
+
+QFileDialog#sc2FileDialog QLabel,
+QFileDialog#sc2FileDialog QCheckBox,
+QFileDialog#sc2FileDialog QRadioButton,
+QMessageBox QLabel {
+    color: #effff7;
+    background: transparent;
+}
+
+QFileDialog#sc2FileDialog QToolButton {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonup.png) 14 14 14 14 stretch stretch;
+    min-width: 30px;
+    min-height: 28px;
+    padding: 1px;
+    color: #effff7;
+}
+
+QFileDialog#sc2FileDialog QToolButton:hover {
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonover.png) 14 14 14 14 stretch stretch;
+    color: #ffffff;
+}
+
+QFileDialog#sc2FileDialog QToolButton:pressed {
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonpressed.png) 14 14 14 14 stretch stretch;
+}
+
+QFileDialog#sc2FileDialog QTreeView,
+QFileDialog#sc2FileDialog QListView,
+QFileDialog#sc2FileDialog QTableView {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    color: #effff7;
+    alternate-background-color: rgba(4, 18, 16, 210);
+}
+
+QFileDialog#sc2FileDialog QTreeView::item,
+QFileDialog#sc2FileDialog QListView::item,
+QFileDialog#sc2FileDialog QTableView::item {
+    border: 3px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    padding: 5px 9px;
+    color: #effff7;
+}
+
+QFileDialog#sc2FileDialog QTreeView::item:hover,
+QFileDialog#sc2FileDialog QListView::item:hover,
+QFileDialog#sc2FileDialog QTableView::item:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+}
+
+QFileDialog#sc2FileDialog QTreeView::item:selected,
+QFileDialog#sc2FileDialog QListView::item:selected,
+QFileDialog#sc2FileDialog QTableView::item:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
 }
 
 QTreeView#fileTree::item {

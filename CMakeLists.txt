@@ -80,6 +80,8 @@ target_sources(SC2DataHelper PRIVATE
     src/core/DataCollectionPreservation.cpp
     src/core/DataCollectionUnitBuilder.h
     src/core/DataCollectionUnitBuilder.cpp
+    src/core/DeepCleanupService.h
+    src/core/DeepCleanupService.cpp
     src/core/ConfigManager.h
     src/core/ConfigManager.cpp
     src/ui/OverviewPage.h
@@ -175,6 +177,7 @@ add_executable(SC2DataHelperTests
     src/core/DataCollectionAliasMapper.cpp
     src/core/DataCollectionPreservation.cpp
     src/core/DataCollectionUnitBuilder.cpp
+    src/core/DeepCleanupService.cpp
     src/ui/ObjectTableModel.cpp
     src/ui/ObjectFilterProxyModel.cpp
 )
@@ -210,6 +213,7 @@ add_executable(SC2OptimizeFolder
     src/core/XmlLoader.cpp
     src/core/DuplicateFinder.cpp
     src/core/MergeService.cpp
+    src/core/DeepCleanupService.cpp
     src/core/ConfigManager.cpp
 )
 target_include_directories(SC2OptimizeFolder PRIVATE src)
@@ -234,6 +238,7 @@ add_executable(SC2DataCollectionProbe
     src/core/DataCollectionAliasMapper.cpp
     src/core/DataCollectionPreservation.cpp
     src/core/DataCollectionUnitBuilder.cpp
+    src/core/DeepCleanupService.cpp
 )
 target_include_directories(SC2DataCollectionProbe PRIVATE src)
 target_link_libraries(SC2DataCollectionProbe PRIVATE
@@ -269,6 +274,7 @@ add_executable(SC2OptimizeMaps
     src/core/DataCollectionAliasMapper.cpp
     src/core/DataCollectionPreservation.cpp
     src/core/DataCollectionUnitBuilder.cpp
+    src/core/DeepCleanupService.cpp
 )
 target_include_directories(SC2OptimizeMaps PRIVATE src)
 target_link_libraries(SC2OptimizeMaps PRIVATE

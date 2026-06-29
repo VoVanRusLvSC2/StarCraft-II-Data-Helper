@@ -1,5 +1,7 @@
 #include "core/FolderAnalyzer.h"
 
+#include "core/DeepCleanupService.h"
+
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -60,6 +62,8 @@ namespace
 
     bool isProtectedObject(const DataNode &node)
     {
+        if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive))
+            return true;
         static const QSet<QString> protectedIds = {
             QStringLiteral("root"), QStringLiteral("default"), QStringLiteral("editor"), QStringLiteral("runtime")};
         if (protectedIds.contains(node.id.toLower()) || node.id.endsWith(QStringLiteral("Root"), Qt::CaseInsensitive) || node.elementName.startsWith(QStringLiteral("CGame"), Qt::CaseInsensitive))
@@ -162,6 +166,7 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
     result->suspiciousEmptyNodeIndices.clear();
     result->possibleUnusedNodeIndices.clear();
     result->unusedCandidates.clear();
+    result->deepCleanupCandidates.clear();
 
     QHash<QString, QVector<int>> idGroups;
     QHash<QString, QVector<int>> contentGroups;
@@ -390,17 +395,12 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
                 info.usageState = UsageState::UnusedSubgraph;
                 info.reason = QStringLiteral("Linked subgraph is not reachable from any gameplay/editor/runtime root");
             }
-            if (isPrimaryEntity(node)) {
-                info.state = CandidateState::Safe;
-                info.riskLevel = disconnected ? QStringLiteral("low") : QStringLiteral("medium");
-                node.candidateUnused = true;
-                result->possibleUnusedNodeIndices.append(i);
-            } else {
-                info.state = CandidateState::Risky;
-                info.usageState = UsageState::Risky;
-                info.reason += QStringLiteral("; handler/data-container objects require manual dependency review");
-                info.riskLevel = QStringLiteral("high");
-            }
+            info.state = CandidateState::Safe;
+            info.riskLevel = isPrimaryEntity(node)
+                ? (disconnected ? QStringLiteral("low") : QStringLiteral("medium"))
+                : QStringLiteral("medium");
+            node.candidateUnused = true;
+            result->possibleUnusedNodeIndices.append(i);
         }
         result->unusedCandidates.append(info);
     }
@@ -600,6 +600,7 @@ bool FolderAnalyzer::finalizeAnalysisResult(AnalysisResult *result,
         return false;
     }
     populateDuplicateAndCandidateFlags(result, whitelistIds);
+    DeepCleanupService().populateCandidates(result);
     result->analysisReportText = buildAnalysisReport(*result);
     result->plannedChangesReportText = buildDryRunReport(*result, QVector<int>{});
     return true;
@@ -617,6 +618,7 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
     report += QStringLiteral("Duplicate XML content groups: %1\n").arg(result.duplicateContentGroups.size());
     report += QStringLiteral("Suspicious empty nodes: %1\n").arg(result.suspiciousEmptyNodeIndices.size());
     report += QStringLiteral("Possible unused candidates: %1\n").arg(result.possibleUnusedNodeIndices.size());
+    report += QStringLiteral("Deep cleanup candidates: %1\n").arg(result.deepCleanupCandidates.size());
     int blockedUnused = 0;
     for (const UnusedCandidateInfo &info : result.unusedCandidates)
         if (info.state == CandidateState::Blocked)
@@ -705,6 +707,21 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
                       .arg(info.dataCollectionReferences)
                       .arg(info.scriptReferences)
                       .arg(info.whitelisted ? QStringLiteral("yes") : QStringLiteral("no"), info.riskLevel);
+    }
+
+    report += QStringLiteral("\nDeep cleanup candidates\n");
+    for (const DeepCleanupCandidate &candidate : result.deepCleanupCandidates)
+    {
+        const QString state = candidate.state == CandidateState::Safe ? QStringLiteral("Safe")
+            : candidate.state == CandidateState::Risky ? QStringLiteral("Risky")
+                                                       : QStringLiteral("Blocked");
+        report += QStringLiteral("- %1 | %2 | %3 | %4 | %5 | %6\n")
+                      .arg(state,
+                           deepCleanupKindName(candidate.kind),
+                           deepCleanupActionName(candidate.action),
+                           candidate.label,
+                           candidate.filePath,
+                           candidate.reason);
     }
 
     report += QStringLiteral("\nParse errors\n");
@@ -821,9 +838,7 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
         return false;
     }
 
-    QHash<QString, QSet<QString>> locationsByFile;
-    QSet<QString> removedIds;
-    int plannedRemovals = 0;
+    QVector<int> validRows;
     for (int row : selectedRows)
     {
         if (row < 0 || row >= result.nodes.size())
@@ -840,7 +855,8 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
                                             { return info.nodeIndex == row; });
         if (whitelistIds.contains(node.id) || candidate == result.unusedCandidates.cend()
             || candidate->state != CandidateState::Safe
-            || candidate->usageState != UsageState::Disconnected)
+            || (candidate->usageState != UsageState::Disconnected
+                && candidate->usageState != UsageState::UnusedSubgraph))
         {
             if (skippedNodes)
             {
@@ -848,27 +864,61 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
             }
             continue;
         }
+        if (!validRows.contains(row))
+            validRows.append(row);
+    }
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        QSet<QString> selectedIds;
+        for (int row : validRows)
+            selectedIds.insert(result.nodes[row].id);
+
+        QVector<int> keptRows;
+        for (int row : validRows) {
+            const auto candidate = std::find_if(result.unusedCandidates.cbegin(), result.unusedCandidates.cend(),
+                                                [row](const UnusedCandidateInfo &info) { return info.nodeIndex == row; });
+            bool keep = true;
+            if (candidate != result.unusedCandidates.cend()) {
+                for (const QString &sourceId : candidate->incomingXmlSources) {
+                    if (!selectedIds.contains(sourceId)) {
+                        keep = false;
+                        break;
+                    }
+                }
+            }
+            if (keep) {
+                keptRows.append(row);
+            } else {
+                changed = true;
+                if (skippedNodes)
+                    ++(*skippedNodes);
+            }
+        }
+        validRows = keptRows;
+    }
+
+    QHash<QString, QSet<QString>> locationsByFile;
+    QSet<QString> removedIds;
+    int plannedRemovals = 0;
+    for (int row : validRows) {
+        const DataNode &node = result.nodes[row];
         const int beforeCount = locationsByFile[node.sourceFile].size();
         locationsByFile[node.sourceFile].insert(node.originalLocation);
         removedIds.insert(node.id);
         if (locationsByFile[node.sourceFile].size() > beforeCount)
-        {
             ++plannedRemovals;
-        }
     }
-    for (int row : selectedRows) {
-        const auto candidate = std::find_if(result.unusedCandidates.cbegin(), result.unusedCandidates.cend(),
-                                             [row](const UnusedCandidateInfo &info) { return info.nodeIndex == row; });
-        if (candidate == result.unusedCandidates.cend() || candidate->state != CandidateState::Safe
-            || candidate->usageState != UsageState::Disconnected) continue;
-        for (const QString &sourceId : candidate->incomingXmlSources) {
-            if (!removedIds.contains(sourceId)) {
-                if (errorMessage) *errorMessage = QStringLiteral("Partial unused-subgraph deletion blocked: %1 still references %2.")
-                                                    .arg(sourceId, result.nodes[row].id);
-                return false;
-            }
-        }
+
+    if (locationsByFile.isEmpty()) {
+        if (changedFiles)
+            changedFiles->clear();
+        if (removedNodes)
+            *removedNodes = 0;
+        return true;
     }
+
     QSet<QString> idsStillPresent;
     for (const DataNode &node : result.nodes) {
         if (!removedIds.contains(node.id)) continue;

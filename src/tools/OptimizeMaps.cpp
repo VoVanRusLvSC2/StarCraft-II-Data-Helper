@@ -2,6 +2,7 @@
 #include "core/DataCollectionAliasMapper.h"
 #include "core/DataCollectionPreservation.h"
 #include "core/DataCollectionUnitBuilder.h"
+#include "core/DeepCleanupService.h"
 #include "core/FolderAnalyzer.h"
 #include "core/ReferenceRenamer.h"
 #include "core/Sc2Archive.h"
@@ -71,6 +72,9 @@ struct MapReport
     int safeUnusedBefore = 0;
     int unusedDeleted = 0;
     int unusedSkipped = 0;
+    int deepCleanupCandidates = 0;
+    int deepCleanupChanges = 0;
+    int deepCleanupSkipped = 0;
     int renamePlansApplied = 0;
     int idsRenamed = 0;
     int referencesUpdated = 0;
@@ -428,23 +432,28 @@ void applyArchiveReferenceSafety(AnalysisResult *analysis, const ArchiveReferenc
     }
 }
 
-int safeDisconnectedUnusedCount(const AnalysisResult &analysis)
+bool isSafeUnusedRemovalCandidate(const UnusedCandidateInfo &candidate)
+{
+    return candidate.state == CandidateState::Safe
+        && (candidate.usageState == UsageState::Disconnected
+            || candidate.usageState == UsageState::UnusedSubgraph);
+}
+
+int safeUnusedRemovalCount(const AnalysisResult &analysis)
 {
     int count = 0;
     for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates) {
-        if (candidate.state == CandidateState::Safe
-            && candidate.usageState == UsageState::Disconnected)
+        if (isSafeUnusedRemovalCandidate(candidate))
             ++count;
     }
     return count;
 }
 
-QVector<int> safeDisconnectedUnusedRows(const AnalysisResult &analysis)
+QVector<int> safeUnusedRemovalRows(const AnalysisResult &analysis)
 {
     QVector<int> rows;
     for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates) {
-        if (candidate.state == CandidateState::Safe
-            && candidate.usageState == UsageState::Disconnected)
+        if (isSafeUnusedRemovalCandidate(candidate))
             rows.append(candidate.nodeIndex);
     }
     return rows;
@@ -878,7 +887,7 @@ bool verifyOptimizedMap(const QString &archivePath, MapReport *report, QString *
     applyArchiveReferenceSafety(&analysis, referenceStats);
 
     report->objectsAfter = analysis.totalDataNodes();
-    report->finalSafeUnused = safeDisconnectedUnusedCount(analysis);
+    report->finalSafeUnused = safeUnusedRemovalCount(analysis);
     report->finalDuplicateMergeCandidates = duplicateMergeCandidateCount(analysis);
 
     const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(
@@ -957,10 +966,42 @@ bool optimizeMap(const QString &mapPath, MapReport *report)
     report->archiveReferenceIdsFound = referenceStats.idsFound;
     applyArchiveReferenceSafety(&analysis, referenceStats);
     report->objectsBefore = analysis.totalDataNodes();
-    report->safeUnusedBefore = safeDisconnectedUnusedCount(analysis);
+    report->safeUnusedBefore = safeUnusedRemovalCount(analysis);
 
     QStringList changedFiles;
-    const QVector<int> unusedRows = safeDisconnectedUnusedRows(analysis);
+    QVector<int> deepCleanupRows;
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates) {
+        if (candidate.state == CandidateState::Safe
+            && candidate.recommended
+            && candidate.action != DeepCleanupAction::ReportOnly)
+            deepCleanupRows.append(candidate.index);
+    }
+    report->deepCleanupCandidates = deepCleanupRows.size();
+    if (!deepCleanupRows.isEmpty()) {
+        logProgress(report->mapPath, QStringLiteral("deep_cleanup_start"),
+                    QStringLiteral("rows=%1").arg(deepCleanupRows.size()));
+        const DeepCleanupApplyResult cleanup = DeepCleanupService().apply(analysis, deepCleanupRows, workspace.path(), false);
+        if (!cleanup.success) {
+            report->error = cleanup.error;
+            return false;
+        }
+        report->deepCleanupChanges = cleanup.filesDeleted + cleanup.textLinesRemoved
+            + cleanup.xmlNodesRemoved + cleanup.xmlAttributesRemoved;
+        report->deepCleanupSkipped = cleanup.reportOnlySkipped;
+        changedFiles.append(cleanup.changedFiles);
+        changedFiles.removeDuplicates();
+        logProgress(report->mapPath, QStringLiteral("deep_cleanup_done"),
+                    QStringLiteral("changes=%1 skipped=%2")
+                        .arg(report->deepCleanupChanges)
+                        .arg(report->deepCleanupSkipped));
+        if (!analyzeWorkspace(workspace.path(), &analysis, &error)) {
+            report->error = error;
+            return false;
+        }
+        applyArchiveReferenceSafety(&analysis, referenceStats);
+    }
+
+    const QVector<int> unusedRows = safeUnusedRemovalRows(analysis);
     if (!unusedRows.isEmpty()) {
         logProgress(report->mapPath, QStringLiteral("unused_delete_start"),
                     QStringLiteral("rows=%1").arg(unusedRows.size()));
@@ -1088,6 +1129,9 @@ void printReport(const MapReport &report, QTextStream &out)
     out << "safe_unused_before=" << report.safeUnusedBefore << '\n';
     out << "unused_deleted=" << report.unusedDeleted << '\n';
     out << "unused_skipped=" << report.unusedSkipped << '\n';
+    out << "deep_cleanup_candidates=" << report.deepCleanupCandidates << '\n';
+    out << "deep_cleanup_changes=" << report.deepCleanupChanges << '\n';
+    out << "deep_cleanup_skipped=" << report.deepCleanupSkipped << '\n';
     out << "rename_plans_applied=" << report.renamePlansApplied << '\n';
     out << "ids_renamed=" << report.idsRenamed << '\n';
     out << "references_updated=" << report.referencesUpdated << '\n';

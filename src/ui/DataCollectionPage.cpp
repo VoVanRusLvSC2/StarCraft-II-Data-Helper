@@ -217,7 +217,7 @@ QTableWidget *DataCollectionPage::createEntryTable() const
 void DataCollectionPage::setAnalysisResult(const AnalysisResult &result)
 {
     QSettings settings;
-    const DataCollectionMode mode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("Unit")).toString()
+    const DataCollectionMode mode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString()
             .compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
         ? DataCollectionMode::UnitAbilWeapon : DataCollectionMode::Unit;
     m_result = result; m_families = UnitFamilyDetector().detectCollectionFamilies(result, mode);

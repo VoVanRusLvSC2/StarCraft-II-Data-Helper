@@ -9,6 +9,7 @@
 #include "core/DataCollectionAliasMapper.h"
 #include "core/DataCollectionPreservation.h"
 #include "core/DataCollectionUnitBuilder.h"
+#include "core/DeepCleanupService.h"
 #include "core/Sc2Archive.h"
 #include "core/XmlLoader.h"
 #include "ui/ObjectFilterProxyModel.h"
@@ -135,7 +136,10 @@ private slots:
     void mergeRollbackOnFailure();
     void unusedSafetyClassification();
     void unusedReachabilityDistinguishesStatesAndPaths();
+    void unusedDeletionRemovesWholeUnusedChain();
+    void unusedDeletionSkipsPartialChainWithoutFailingBatch();
     void unusedDeletionPreservesDataCollectionLinks();
+    void deepCleanupAppliesSafeCandidates();
     void unitFamilyDetectionAndStandardPlanning();
     void renamePlannerBlocksConflicts();
     void referenceRenamePreviewAndApply();
@@ -224,7 +228,7 @@ void CoreTests::dataCollectionCreatePreviewAndApply()
     QVERIFY(writeTextFile(path, original));
     FolderAnalyzer analyzer; AnalysisResult analysis; QString error;
     QVERIFY(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error));
-    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis);
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::Unit);
     QCOMPARE(families.size(), 1);
     DataCollectionBuildRequest request; request.family = families.front();
     DataCollectionUnitBuilder builder;
@@ -284,7 +288,7 @@ void CoreTests::dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign()
     QString error;
     QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
 
-    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis);
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::Unit);
     QCOMPARE(families.size(), 1);
     QCOMPARE(families.front().rootId, QStringLiteral("Archon"));
 
@@ -940,7 +944,7 @@ void CoreTests::dataCollectionUpdatePreservesAndSorts()
         "<CDataCollectionUnit id=\"Vassel\" parent=\"CustomParent\" custom=\"keep\"><EditorCategories value=\"DataGroup:Unit,ObjectType:Unit\"/><Metadata value=\"PreserveNode\"/>"
         "<DataRecord Entry=\"Actor,Vassel@Actor\" custom=\"preserve-attribute\"/><DataRecord Entry=\"Other,PreserveMe\"/><DataRecord Entry=\"Actor,Vassel@Actor\"/></CDataCollectionUnit></Catalog>")));
     FolderAnalyzer analyzer; AnalysisResult analysis; QString error; QVERIFY(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error));
-    DataCollectionBuildRequest request; request.family = UnitFamilyDetector().detectCollectionFamilies(analysis).front();
+    DataCollectionBuildRequest request; request.family = UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::Unit).front();
     request.parent = QStringLiteral("CustomParent"); request.editorCategories = QStringLiteral("DataGroup:Unit,ObjectType:Unit");
     DataCollectionUnitBuilder builder; const DataCollectionPreviewReport preview = builder.preview(analysis, request);
     QVERIFY(preview.existingCollection);
@@ -1234,11 +1238,94 @@ void CoreTests::unusedReachabilityDistinguishesStatesAndPaths()
     QCOMPARE(byId[QStringLiteral("OrphanAbil")].usageState, UsageState::UnusedSubgraph);
     QCOMPARE(byId[QStringLiteral("OrphanAbil")].state, CandidateState::Safe);
     QVERIFY(analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("OrphanAbil")].nodeIndex));
-    QCOMPARE(byId[QStringLiteral("OrphanEffect")].usageState, UsageState::Risky);
+    QCOMPARE(byId[QStringLiteral("OrphanEffect")].usageState, UsageState::UnusedSubgraph);
+    QCOMPARE(byId[QStringLiteral("OrphanEffect")].state, CandidateState::Safe);
+    QVERIFY(analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("OrphanEffect")].nodeIndex));
     QCOMPARE(byId[QStringLiteral("DisconnectedUnit")].usageState, UsageState::Disconnected);
     QVERIFY(analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("DisconnectedUnit")].nodeIndex));
     QCOMPARE(byId[QStringLiteral("CollectionOnly")].usageState, UsageState::Disconnected);
     QCOMPARE(byId[QStringLiteral("CollectionOnly")].dataCollectionReferences, 1);
+}
+
+void CoreTests::unusedDeletionRemovesWholeUnusedChain()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Reachability.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CPlacedUnit id=\"Placement01\" Unit=\"UsedUnit\"/>"
+        "<CUnit id=\"UsedUnit\"><WeaponArray Link=\"UsedWeapon\"/></CUnit>"
+        "<CWeaponLegacy id=\"UsedWeapon\"><Effect value=\"UsedDamage\"/></CWeaponLegacy>"
+        "<CEffectDamage id=\"UsedDamage\"/>"
+        "<CAbilEffectTarget id=\"OrphanAbil\"><Effect value=\"OrphanEffect\"/></CAbilEffectTarget>"
+        "<CEffectDamage id=\"OrphanEffect\"/>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    QVector<int> rows;
+    for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates) {
+        const QString id = analysis.nodes[candidate.nodeIndex].id;
+        if (id == QStringLiteral("OrphanAbil") || id == QStringLiteral("OrphanEffect"))
+            rows.append(candidate.nodeIndex);
+    }
+    QCOMPARE(rows.size(), 2);
+
+    QString backup;
+    QStringList changed;
+    int removed = 0;
+    int skipped = 0;
+    QVERIFY2(analyzer.applySelectedChanges(analysis, rows, dir.path(), {}, &backup, &error, &changed, &removed, &skipped), qPrintable(error));
+    QFile output(path);
+    QVERIFY(output.open(QIODevice::ReadOnly));
+    const QByteArray xml = output.readAll();
+    QVERIFY(!xml.contains("OrphanAbil"));
+    QVERIFY(!xml.contains("OrphanEffect"));
+    QVERIFY(xml.contains("UsedDamage"));
+    QCOMPARE(removed, 2);
+    QCOMPARE(skipped, 0);
+}
+
+void CoreTests::unusedDeletionSkipsPartialChainWithoutFailingBatch()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Reachability.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CAbilEffectTarget id=\"OrphanAbil\"><Effect value=\"OrphanEffect\"/></CAbilEffectTarget>"
+        "<CEffectDamage id=\"OrphanEffect\"/>"
+        "<CUnit id=\"LonelyUnused\"/>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    QVector<int> rows;
+    for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates) {
+        const QString id = analysis.nodes[candidate.nodeIndex].id;
+        if (id == QStringLiteral("OrphanEffect") || id == QStringLiteral("LonelyUnused"))
+            rows.append(candidate.nodeIndex);
+    }
+    QCOMPARE(rows.size(), 2);
+
+    QString backup;
+    QStringList changed;
+    int removed = 0;
+    int skipped = 0;
+    QVERIFY2(analyzer.applySelectedChanges(analysis, rows, dir.path(), {}, &backup, &error, &changed, &removed, &skipped), qPrintable(error));
+    QFile output(path);
+    QVERIFY(output.open(QIODevice::ReadOnly));
+    const QByteArray xml = output.readAll();
+    QVERIFY(xml.contains("OrphanEffect"));
+    QVERIFY(xml.contains("OrphanAbil"));
+    QVERIFY(!xml.contains("LonelyUnused"));
+    QCOMPARE(removed, 1);
+    QCOMPARE(skipped, 1);
 }
 
 void CoreTests::unusedDeletionPreservesDataCollectionLinks()
@@ -1265,6 +1352,69 @@ void CoreTests::unusedDeletionPreservesDataCollectionLinks()
     QVERIFY(!xml.contains("id=\"UnusedUnit\""));
     QVERIFY(xml.contains("Unit,UnusedUnit"));
     QCOMPARE(removed, 1);
+}
+
+void CoreTests::deepCleanupAppliesSafeCandidates()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("enUS.SC2Data/LocalizedData")));
+    const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/Data.xml"));
+    const QString locPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("enUS.SC2Data/LocalizedData/GameStrings.txt"));
+    const QString assetPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Unused.dds"));
+    QVERIFY(writeTextFile(xmlPath, QByteArrayLiteral(
+        "<Catalog>"
+        "<CActor id=\"Actor\"><Event>Effect,MissingFx</Event><Event>Effect,ExistingFx</Event></CActor>"
+        "<CEffectDamage id=\"ExistingFx\"/>"
+        "<CUnit id=\"Parent\" Life=\"100\" flag=\"same\"/>"
+        "<CUnit id=\"Child\" parent=\"Parent\" Life=\"100\" flag=\"diff\"/>"
+        "</Catalog>")));
+    QVERIFY(writeTextFile(locPath, QByteArrayLiteral("Unit/Name/MissingUnit=Old name\r\nUnit/Name/ExistingFx=Keep\r\n")));
+    QVERIFY(writeTextFile(assetPath, QByteArrayLiteral("unused asset bytes")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    auto hasKind = [&](DeepCleanupKind kind) {
+        return std::any_of(analysis.deepCleanupCandidates.cbegin(), analysis.deepCleanupCandidates.cend(),
+                           [kind](const DeepCleanupCandidate &candidate) {
+                               return candidate.kind == kind && candidate.state == CandidateState::Safe;
+                           });
+    };
+    QVERIFY(hasKind(DeepCleanupKind::UnusedAsset));
+    QVERIFY(hasKind(DeepCleanupKind::LocalizationEntry));
+    QVERIFY(hasKind(DeepCleanupKind::RedundantDefaultField));
+    QVERIFY(hasKind(DeepCleanupKind::BrokenActorEvent));
+
+    QVector<int> selected;
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates)
+        if (candidate.state == CandidateState::Safe && candidate.recommended && candidate.action != DeepCleanupAction::ReportOnly)
+            selected.append(candidate.index);
+    QVERIFY(!selected.isEmpty());
+
+    const DeepCleanupApplyResult applied = DeepCleanupService().apply(analysis, selected, dir.path(), true);
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QVERIFY(applied.filesDeleted >= 1);
+    QVERIFY(applied.textLinesRemoved >= 1);
+    QVERIFY(applied.xmlAttributesRemoved >= 1);
+    QVERIFY(applied.xmlNodesRemoved >= 1);
+    QVERIFY(!QFileInfo::exists(assetPath));
+
+    QFile xmlFile(xmlPath);
+    QVERIFY(xmlFile.open(QIODevice::ReadOnly));
+    const QByteArray xml = xmlFile.readAll();
+    QVERIFY(!xml.contains("Effect,MissingFx"));
+    QVERIFY(xml.contains("Effect,ExistingFx"));
+    QVERIFY(!xml.contains("id=\"Child\" parent=\"Parent\" Life=\"100\""));
+
+    QFile locFile(locPath);
+    QVERIFY(locFile.open(QIODevice::ReadOnly));
+    const QByteArray loc = locFile.readAll();
+    QVERIFY(!loc.contains("MissingUnit"));
+    QVERIFY(loc.contains("ExistingFx"));
 }
 
 void CoreTests::objectFileFilterUsesFullSourcePath()

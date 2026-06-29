@@ -11,11 +11,14 @@ catalog file.
 
 ## What it does
 
-- Analyze XML catalogs, references, duplicate bodies, and unused objects
-- Build and update Data Collections for supported editor catalog objects
-- Preview and safely remove unused objects with backup-first flow
+- Analyze XML catalogs, references, duplicate bodies, unused chains, assets,
+  localization, and archive metadata
+- Build and update typed Data Collections for supported editor catalog objects
+- Preview and safely remove unused objects and whole unused object chains
 - Find exact duplicate XML bodies, redirect references, and merge safely
-- Preview Rename To Standard operations for unit-family style data
+- Preview and apply Rename To Standard operations for unit-family style data
+- Run Deep Cleanup for unused assets, stale strings, redundant default fields,
+  broken actor events, and archive/helper trash
 - Show full XML source with syntax highlighting
 - Open an Optimization Wizard for batch review before apply
 
@@ -32,6 +35,8 @@ Supported workflow:
 - add missing `DataRecord` entries for supported real objects
 - keep existing records, metadata, and unrelated XML nodes
 - update archive `(listfile)` when needed
+- default to `UnitAbilWeapon` mode, creating separate Unit, Ability, and Weapon
+  collections where the data supports it
 
 The tool works with real SC2 object IDs. It can also handle non-standard naming
 when the map already contains existing custom IDs outside the `CollectionID@Child`
@@ -41,33 +46,52 @@ style.
 
 Destructive operations are preview-first and backup-first.
 
-- No automatic deletion
+- No blind automatic deletion
 - Duplicate merge redirects references before delete
-- Unused-object cleanup is manual only
+- Unused-object cleanup skips unsafe rows instead of stopping the whole batch
 - Rollback is used on apply failure
 - Archive mode stays conservative when binary references cannot be proven
+- Data Collection records are preserved even when related objects are deleted
 
 ## Main tools
 
 ### Unused Objects
 
 Find catalog objects with no incoming XML references and no script/text usage.
-Whitelisted, protected, and referenced objects are blocked.
+Whitelisted, protected, and referenced objects are blocked. Linked unused
+subgraphs can be removed as chains when every incoming XML source is also part
+of the selected deletion set.
 
 ### Duplicate Merge
 
 Detect exact duplicate normalized XML bodies for the same object type, preview
 reference redirects, then keep one object and remove the duplicate safely.
+Duplicate Merge is enabled by default in the Optimization Wizard.
+
+### Deep Cleanup
+
+Find and optionally apply safe cleanup outside normal catalog-object deletion:
+
+- unused imported assets in folders or extracted map/mod data
+- stale localization lines for object IDs that no longer exist
+- redundant attributes that duplicate a local parent object's value
+- broken actor event XML nodes that reference only missing typed IDs
+- temporary, report, backup, and pending helper files
+- dependency metadata as review-only candidates
+
+Dependency removal is intentionally review-only because hidden editor/runtime
+links can break a map even when XML references look unused.
 
 ### Rename To Standard
 
-Preview rename plans for unit-family style data. This remains review-first
-because many maps use custom naming rules.
+Preview and apply rename plans for unit-family style data, including archive
+mode. This remains review-first because many maps use custom naming rules.
 
 ### Optimization Wizard
 
 Build one batch plan, review every step, apply changes, refresh analysis, then
-close the wizard.
+close the wizard. One unsafe unused-chain row no longer cancels the whole apply;
+it is skipped and reported while the rest of the selected safe work continues.
 
 ## Typical usage
 

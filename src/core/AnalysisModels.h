@@ -40,6 +40,21 @@ struct DuplicateContentGroup
 
 enum class CandidateState { Safe, Risky, Blocked };
 enum class UsageState { Used, Disconnected, UnusedSubgraph, Risky, Blocked };
+enum class DeepCleanupKind {
+    UnusedAsset,
+    LocalizationEntry,
+    RedundantDefaultField,
+    BrokenActorEvent,
+    DependencyEntry,
+    ArchiveTrash
+};
+enum class DeepCleanupAction {
+    DeleteFile,
+    RemoveTextLine,
+    RemoveXmlNode,
+    RemoveXmlAttribute,
+    ReportOnly
+};
 
 struct UnusedCandidateInfo
 {
@@ -60,6 +75,23 @@ struct UnusedCandidateInfo
     QStringList usagePath;
 };
 
+struct DeepCleanupCandidate
+{
+    int index = -1;
+    DeepCleanupKind kind = DeepCleanupKind::UnusedAsset;
+    DeepCleanupAction action = DeepCleanupAction::ReportOnly;
+    CandidateState state = CandidateState::Risky;
+    QString filePath;
+    QString label;
+    QString reason;
+    QString detail;
+    QString xmlLocation;
+    QString attributeName;
+    int lineNumber = -1;
+    qint64 bytes = 0;
+    bool recommended = false;
+};
+
 struct AnalysisResult
 {
     QString rootFolder;
@@ -72,6 +104,7 @@ struct AnalysisResult
     QVector<int> suspiciousEmptyNodeIndices;
     QVector<int> possibleUnusedNodeIndices;
     QVector<UnusedCandidateInfo> unusedCandidates;
+    QVector<DeepCleanupCandidate> deepCleanupCandidates;
     QString analysisReportText;
     QString plannedChangesReportText;
 
