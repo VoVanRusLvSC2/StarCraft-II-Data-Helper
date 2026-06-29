@@ -37,6 +37,7 @@ constexpr int kAuditStep = 6;
 
 QTableWidget *makeTable(const QStringList &headers) {
     auto *value = new QTableWidget; value->setColumnCount(headers.size()); value->setHorizontalHeaderLabels(headers);
+    value->setProperty("optimizationTable", true);
     value->setSelectionBehavior(QAbstractItemView::SelectRows); value->horizontalHeader()->setStretchLastSection(true);
     value->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn); value->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     value->setVerticalScrollMode(QAbstractItemView::ScrollPerItem); value->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -224,6 +225,7 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
 }
 }
 FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
+    setObjectName(QStringLiteral("optimizationWizardPage"));
     auto *layout = new QVBoxLayout(this); layout->setContentsMargins(18, 18, 18, 18); layout->setSpacing(12);
     auto *title = new QLabel(QStringLiteral("Optimization Wizard"), this); title->setObjectName(QStringLiteral("panelTitle"));
     layout->addWidget(title);
@@ -238,11 +240,18 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
                           QStringLiteral("Current ID"), QStringLiteral("Proposed ID"),
                           QStringLiteral("@ change"), QStringLiteral("Risk / Conflict")});
     m_collection = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Existing records"), QStringLiteral("Can add"), QStringLiteral("Move out"), QStringLiteral("Warnings")});
+    m_unused->setObjectName(QStringLiteral("optimizationUnusedTable"));
+    m_duplicates->setObjectName(QStringLiteral("optimizationDuplicateTable"));
+    m_deepCleanup->setObjectName(QStringLiteral("optimizationDeepCleanupTable"));
+    m_rename->setObjectName(QStringLiteral("optimizationRenameTable"));
+    m_collection->setObjectName(QStringLiteral("optimizationCollectionTable"));
     m_summary = new QPlainTextEdit; m_summary->setReadOnly(true);
+    m_summary->setObjectName(QStringLiteral("optimizationSummary"));
     m_summary->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_summary->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
     new XmlTextHighlighter(m_summary->document());
     m_audit = new QPlainTextEdit; m_audit->setReadOnly(true);
+    m_audit->setObjectName(QStringLiteral("optimizationAudit"));
     m_audit->setLineWrapMode(QPlainTextEdit::NoWrap);
     m_audit->document()->setDefaultFont(QFont(QStringLiteral("Consolas"), 10));
     m_steps->addTab(m_unused, QStringLiteral("Unused Objects")); m_steps->addTab(m_duplicates, QStringLiteral("Duplicate Merge"));
@@ -259,6 +268,7 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_details->setMinimumWidth(420);
     m_details->setPlaceholderText(QStringLiteral("Select an item to inspect its XML or compare Keep / Remove objects."));
     auto *content = new QSplitter(Qt::Horizontal, this);
+    content->setObjectName(QStringLiteral("optimizationContent"));
     content->addWidget(m_steps);
     content->addWidget(m_details);
     content->setStretchFactor(0, 3);

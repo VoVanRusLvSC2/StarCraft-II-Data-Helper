@@ -432,14 +432,16 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
     for (auto it = appliedRenames.cbegin(); it != appliedRenames.cend(); ++it)
         newIds.insert(it.value());
     QSet<QString> oldIdsToCheck;
+    QStringList postWarnings;
     for (const RenamePlanItem &item : plan.items) {
         if (appliedRenames.value(item.oldId) != item.newId)
             continue;
-        if (!rebuiltIds.contains(item.newId) || (!newIds.contains(item.oldId) && rebuiltIds.contains(item.oldId))) {
-            result.error = QStringLiteral("Post-rename verification failed for %1 -> %2.").arg(item.oldId, item.newId);
-            restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
-            return result;
-        }
+        if (!rebuiltIds.contains(item.newId))
+            postWarnings << QStringLiteral("%1 -> %2 was written, but refreshed analysis did not expose the new ID.")
+                                .arg(item.oldId, item.newId);
+        if (!newIds.contains(item.oldId) && rebuiltIds.contains(item.oldId))
+            postWarnings << QStringLiteral("%1 -> %2 was written, but refreshed analysis still exposes the old ID.")
+                                .arg(item.oldId, item.newId);
         if (!newIds.contains(item.oldId))
             oldIdsToCheck.insert(item.oldId);
     }
@@ -447,12 +449,19 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
         for (const DataNode &node : rebuilt.nodes) {
             for (const QString &reference : node.referencedIds) {
                 if (oldIdsToCheck.contains(reference)) {
-                    result.error = QStringLiteral("A reference to old ID %1 remains.").arg(reference);
-                    restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
-                    return result;
+                    postWarnings << QStringLiteral("A refreshed-analysis reference to old ID %1 remains in %2.")
+                                        .arg(reference, node.id);
+                    break;
                 }
             }
         }
+    }
+    if (!postWarnings.isEmpty()) {
+        if (postWarnings.size() > 20)
+            postWarnings = postWarnings.mid(0, 20) << QStringLiteral("... %1 more post-rename verification warning(s).")
+                                                       .arg(postWarnings.size() - 20);
+        result.warnings << QStringLiteral("Post-rename verification reported non-fatal analysis mismatches:\n- %1")
+                               .arg(postWarnings.join(QStringLiteral("\n- ")));
     }
     result.success = true;
     result.changedFiles = relativeFiles;

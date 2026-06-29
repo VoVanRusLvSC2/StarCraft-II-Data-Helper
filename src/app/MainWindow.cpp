@@ -144,6 +144,7 @@ namespace
         {
             setObjectName(QStringLiteral("sc2OpenFileDialog"));
             setWindowTitle(QStringLiteral("Open SC2 File"));
+            setWindowFlags((windowFlags() | Qt::FramelessWindowHint) & ~Qt::WindowContextHelpButtonHint);
             setModal(true);
             resize(1220, 780);
             setMinimumSize(900, 560);
@@ -160,8 +161,29 @@ namespace
             };
 
             auto *layout = new QVBoxLayout(this);
-            layout->setContentsMargins(18, 16, 18, 16);
+            layout->setContentsMargins(18, 10, 18, 16);
             layout->setSpacing(10);
+
+            auto *titleBar = new QFrame(this);
+            titleBar->setObjectName(QStringLiteral("sc2OpenFileTitleBar"));
+            titleBar->setMouseTracking(true);
+            auto *titleBarLayout = new QHBoxLayout(titleBar);
+            titleBarLayout->setContentsMargins(8, 4, 4, 4);
+            titleBarLayout->setSpacing(8);
+            auto *windowIcon = new QLabel(titleBar);
+            windowIcon->setObjectName(QStringLiteral("sc2OpenFileWindowIcon"));
+            windowIcon->setPixmap(QPixmap(QStringLiteral(":/icons/Icon.png")).scaled(18, 18, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            auto *windowTitle = new QLabel(QStringLiteral("Open SC2 File"), titleBar);
+            windowTitle->setObjectName(QStringLiteral("sc2OpenFileWindowTitle"));
+            auto *closeButton = new QPushButton(QStringLiteral("X"), titleBar);
+            closeButton->setObjectName(QStringLiteral("sc2OpenFileCloseButton"));
+            closeButton->setFixedSize(34, 28);
+            titleBarLayout->addWidget(windowIcon);
+            titleBarLayout->addWidget(windowTitle);
+            titleBarLayout->addStretch(1);
+            titleBarLayout->addWidget(closeButton);
+            layout->addWidget(titleBar);
+            connect(closeButton, &QPushButton::clicked, this, &QDialog::reject);
 
             auto *title = new QLabel(QStringLiteral("OPEN SC2 FILE"), this);
             title->setObjectName(QStringLiteral("panelTitle"));
@@ -174,15 +196,21 @@ namespace
 
             m_path = new QLineEdit(this);
             m_path->setObjectName(QStringLiteral("sc2OpenFilePath"));
+            m_path->setMinimumHeight(42);
+            m_path->setMaximumHeight(42);
             m_path->setPlaceholderText(QStringLiteral("Current folder..."));
             layout->addWidget(m_path);
 
             auto *searchRow = new QHBoxLayout;
             m_search = new QLineEdit(this);
             m_search->setObjectName(QStringLiteral("sc2OpenFileSearch"));
+            m_search->setMinimumHeight(44);
+            m_search->setMaximumHeight(44);
             m_search->setPlaceholderText(QStringLiteral("Search files and folders..."));
             m_filter = new QComboBox(this);
             m_filter->setObjectName(QStringLiteral("sc2OpenFileFilter"));
+            m_filter->setMinimumHeight(44);
+            m_filter->setMaximumHeight(44);
             for (const Sc2FileOpenFilter &filter : m_filters)
                 m_filter->addItem(filter.label);
             searchRow->addWidget(m_search, 1);
@@ -220,6 +248,8 @@ namespace
             nameLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
             m_name = new QLineEdit(this);
             m_name->setObjectName(QStringLiteral("sc2OpenFileName"));
+            m_name->setMinimumHeight(42);
+            m_name->setMaximumHeight(42);
             m_name->setPlaceholderText(QStringLiteral("Selected file or folder..."));
             nameRow->addWidget(nameLabel);
             nameRow->addWidget(m_name, 1);
@@ -304,6 +334,37 @@ namespace
                 return;
             }
             QDialog::keyPressEvent(event);
+        }
+
+        void mousePressEvent(QMouseEvent *event) override
+        {
+            QWidget *child = event ? childAt(event->pos()) : nullptr;
+            const QString childName = child ? child->objectName() : QString();
+            const bool titleDrag = childName == QStringLiteral("sc2OpenFileTitleBar")
+                                   || childName.startsWith(QStringLiteral("sc2OpenFileWindow"));
+            if (event && event->button() == Qt::LeftButton && titleDrag) {
+                m_dragPosition = event->globalPosition().toPoint() - frameGeometry().topLeft();
+                m_dragging = true;
+                event->accept();
+                return;
+            }
+            QDialog::mousePressEvent(event);
+        }
+
+        void mouseMoveEvent(QMouseEvent *event) override
+        {
+            if (m_dragging && event && (event->buttons() & Qt::LeftButton)) {
+                move(event->globalPosition().toPoint() - m_dragPosition);
+                event->accept();
+                return;
+            }
+            QDialog::mouseMoveEvent(event);
+        }
+
+        void mouseReleaseEvent(QMouseEvent *event) override
+        {
+            m_dragging = false;
+            QDialog::mouseReleaseEvent(event);
         }
 
     private:
@@ -532,6 +593,8 @@ namespace
         QPushButton *m_cancel = nullptr;
         QString m_currentDir;
         QString m_selectedFile;
+        QPoint m_dragPosition;
+        bool m_dragging = false;
     };
 
     QString openSc2FileStyled(QWidget *parent, const QString &startPath)
@@ -3142,6 +3205,7 @@ void MainWindow::showDryRunTab(bool autoBuild)
     if (m_result.nodes.isEmpty())
         return;
     QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("optimizationWizardDialog"));
     m_optimizationDialog = &dialog;
     dialog.setWindowTitle(QStringLiteral("SC2 Data Optimization Wizard"));
     dialog.setWindowFlags(dialog.windowFlags() | Qt::WindowMinMaxButtonsHint | Qt::WindowCloseButtonHint);
