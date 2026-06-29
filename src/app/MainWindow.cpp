@@ -142,7 +142,7 @@ namespace
         explicit Sc2FileOpenDialog(QWidget *parent, const QString &startPath)
             : QDialog(parent)
         {
-            setObjectName(QStringLiteral("toolDialog"));
+            setObjectName(QStringLiteral("sc2OpenFileDialog"));
             setWindowTitle(QStringLiteral("Open SC2 File"));
             setModal(true);
             resize(1220, 780);
@@ -173,13 +173,16 @@ namespace
             layout->addWidget(m_status);
 
             m_path = new QLineEdit(this);
+            m_path->setObjectName(QStringLiteral("sc2OpenFilePath"));
             m_path->setPlaceholderText(QStringLiteral("Current folder..."));
             layout->addWidget(m_path);
 
             auto *searchRow = new QHBoxLayout;
             m_search = new QLineEdit(this);
+            m_search->setObjectName(QStringLiteral("sc2OpenFileSearch"));
             m_search->setPlaceholderText(QStringLiteral("Search files and folders..."));
             m_filter = new QComboBox(this);
+            m_filter->setObjectName(QStringLiteral("sc2OpenFileFilter"));
             for (const Sc2FileOpenFilter &filter : m_filters)
                 m_filter->addItem(filter.label);
             searchRow->addWidget(m_search, 1);
@@ -187,6 +190,7 @@ namespace
             layout->addLayout(searchRow);
 
             auto *splitter = new QSplitter(Qt::Horizontal, this);
+            splitter->setObjectName(QStringLiteral("sc2OpenFileSplitter"));
             m_places = new QListWidget(splitter);
             m_places->setObjectName(QStringLiteral("fileOpenPlaces"));
             m_places->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -215,6 +219,7 @@ namespace
             auto *nameLabel = new QLabel(QStringLiteral("Selected:"), this);
             nameLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
             m_name = new QLineEdit(this);
+            m_name->setObjectName(QStringLiteral("sc2OpenFileName"));
             m_name->setPlaceholderText(QStringLiteral("Selected file or folder..."));
             nameRow->addWidget(nameLabel);
             nameRow->addWidget(m_name, 1);
@@ -229,6 +234,8 @@ namespace
             buttonRow->addStretch(1);
             m_open = new QPushButton(QStringLiteral("Open"), this);
             m_cancel = new QPushButton(QStringLiteral("Cancel"), this);
+            m_open->setObjectName(QStringLiteral("sc2OpenFileOpenButton"));
+            m_cancel->setObjectName(QStringLiteral("sc2OpenFileCancelButton"));
             m_open->setMinimumWidth(150);
             m_cancel->setMinimumWidth(150);
             buttonRow->addWidget(m_open);
@@ -3251,6 +3258,126 @@ void MainWindow::applyOptimizationWizardPlan()
     {
         return ref.sourceFile + QChar(0x1f) + ref.originalLocation + QChar(0x1f) + ref.elementName + QChar(0x1f) + ref.id;
     };
+    const auto buildCombinedRenamePlan = [this](const AnalysisResult &analysis,
+                                                const QVector<WizardRenameSelection> &renameSelection,
+                                                QStringList *planWarnings)
+    {
+        RenamePlan combined;
+        combined.targetRootId = QStringLiteral("Batch");
+        if (renameSelection.isEmpty())
+            return combined;
+
+        QHash<QString, QVector<WizardNodeRef>> renameByFamily;
+        for (const WizardRenameSelection &item : renameSelection)
+            renameByFamily[item.familyRootId].append(item.node);
+        if (renameByFamily.isEmpty())
+            return combined;
+
+        const QVector<UnitFamily> families = UnitFamilyDetector().detect(analysis);
+        QHash<QString, UnitFamily> familyByRoot;
+        for (const UnitFamily &family : families)
+            familyByRoot.insert(family.rootId, family);
+
+        QSet<QString> existingIds;
+        for (const DataNode &node : analysis.nodes)
+            existingIds.insert(node.id);
+
+        StandardNamePlanner planner;
+        QVector<RenamePlanItem> candidates;
+        QSet<int> selectedNodes;
+        QHash<QString, int> proposedNewCounts;
+
+        for (auto it = renameByFamily.cbegin(); it != renameByFamily.cend(); ++it)
+        {
+            const auto familyIt = familyByRoot.constFind(it.key());
+            if (familyIt == familyByRoot.cend())
+            {
+                if (planWarnings)
+                    *planWarnings << QStringLiteral("Skipped rename family %1 because it is no longer present after apply.").arg(it.key());
+                continue;
+            }
+            QSet<int> includedNodeIndices;
+            for (const WizardNodeRef &ref : it.value())
+            {
+                const int index = findNodeIndex(analysis, ref);
+                if (index >= 0)
+                    includedNodeIndices.insert(index);
+            }
+            if (includedNodeIndices.isEmpty())
+                continue;
+
+            const RenamePlan plan = planner.plan(analysis, familyIt.value(), familyIt.value().rootId, includedNodeIndices);
+            if (!plan.valid)
+            {
+                if (planWarnings)
+                    *planWarnings << QStringLiteral("Skipped rename family %1 because the refreshed plan is no longer valid.").arg(it.key());
+                continue;
+            }
+            if (combined.family.rootId.isEmpty())
+                combined.family = plan.family;
+            combined.warnings.append(plan.warnings);
+
+            for (const RenamePlanItem &item : plan.items)
+            {
+                if (!item.selected || item.blocked || item.oldId == item.newId)
+                    continue;
+                if (selectedNodes.contains(item.nodeIndex))
+                {
+                    if (planWarnings)
+                        *planWarnings << QStringLiteral("Skipped duplicate rename item for %1.").arg(item.oldId);
+                    continue;
+                }
+                selectedNodes.insert(item.nodeIndex);
+                candidates.append(item);
+                ++proposedNewCounts[item.newId.toLower()];
+            }
+        }
+
+        QVector<RenamePlanItem> filtered;
+        filtered.reserve(candidates.size());
+        for (const RenamePlanItem &item : candidates)
+        {
+            if (proposedNewCounts.value(item.newId.toLower()) > 1)
+            {
+                if (planWarnings)
+                    *planWarnings << QStringLiteral("Skipped rename %1 -> %2 because another selected item uses the same target ID.")
+                                      .arg(item.oldId, item.newId);
+                continue;
+            }
+            filtered.append(item);
+        }
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            QSet<QString> movingOldIds;
+            for (const RenamePlanItem &item : filtered)
+                movingOldIds.insert(item.oldId);
+
+            QVector<RenamePlanItem> next;
+            next.reserve(filtered.size());
+            for (const RenamePlanItem &item : filtered)
+            {
+                if (existingIds.contains(item.newId) && !movingOldIds.contains(item.newId))
+                {
+                    if (planWarnings)
+                        *planWarnings << QStringLiteral("Skipped rename %1 -> %2 because the target ID is still occupied.")
+                                          .arg(item.oldId, item.newId);
+                    changed = true;
+                    continue;
+                }
+                next.append(item);
+            }
+            filtered = next;
+        }
+
+        combined.items = filtered;
+        combined.valid = !combined.items.isEmpty();
+        if (!combined.valid)
+            combined.conflicts << QStringLiteral("No safe rename items remained after batch validation.");
+        return combined;
+    };
 
     if (m_sourceKind == SourceKind::ArchiveFile)
     {
@@ -3344,8 +3471,8 @@ void MainWindow::applyOptimizationWizardPlan()
                 group.first = item.keep;
                 group.second.append(item.remove);
             }
-            updateApplyProgress(35, QStringLiteral("Applying duplicate merges"), QStringLiteral("Redirecting references and removing duplicate objects"));
-            for (auto it = mergeGroups.cbegin(); failure.isEmpty() && it != mergeGroups.cend(); ++it)
+            QVector<MergeRequest> mergeRequests;
+            for (auto it = mergeGroups.cbegin(); it != mergeGroups.cend(); ++it)
             {
                 const int keepIndex = findNodeIndex(current, it.value().first);
                 if (keepIndex < 0)
@@ -3363,76 +3490,63 @@ void MainWindow::applyOptimizationWizardPlan()
                 }
                 if (request.removeNodeIndices.isEmpty())
                     continue;
-                const MergeApplyResult result = m_mergeService.apply(current, request, workspace.path(), m_whitelistIds);
+                mergeRequests.append(request);
+            }
+            if (failure.isEmpty() && !mergeRequests.isEmpty())
+            {
+                updateApplyProgress(35, QStringLiteral("Applying duplicate merges"), QStringLiteral("Redirecting references and removing duplicate objects"));
+                const MergeApplyResult result = m_mergeService.applyBatch(
+                    current, mergeRequests, workspace.path(), m_whitelistIds,
+                    [&](int fileIndex, int totalFiles, const QString &file) {
+                        const int percent = 35 + ((fileIndex * 15) / qMax(1, totalFiles));
+                        updateApplyProgress(percent, QStringLiteral("Applying duplicate merges"),
+                                            QStringLiteral("Scanning file %1 of %2: %3")
+                                                .arg(qMin(fileIndex + 1, totalFiles))
+                                                .arg(totalFiles)
+                                                .arg(QFileInfo(file).fileName()));
+                    });
                 if (!result.success)
                 {
                     failure = result.error;
-                    break;
                 }
-                removedDuplicates += result.nodesDeleted;
-                redirectedReferences += result.referencesRedirected;
-                changedFiles.append(result.changedFiles);
-                changedFiles.removeDuplicates();
-                if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                else
                 {
-                    failure = error;
-                    break;
+                    removedDuplicates += result.nodesDeleted;
+                    redirectedReferences += result.referencesRedirected;
+                    changedFiles.append(result.changedFiles);
+                    changedFiles.removeDuplicates();
+                    if (result.skippedMerges > 0)
+                        warnings << QStringLiteral("Skipped %1 duplicate merge item(s) that were no longer valid.").arg(result.skippedMerges);
+                    warnings.append(result.warnings);
+                    if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                        failure = error;
                 }
             }
 
-            QHash<QString, QVector<WizardNodeRef>> renameByFamily;
-            for (const WizardRenameSelection &item : selection.rename)
-                renameByFamily[item.familyRootId].append(item.node);
-            if (!renameByFamily.isEmpty())
+            if (failure.isEmpty() && !selection.rename.isEmpty())
             {
-                QVector<UnitFamily> renameFamilies = UnitFamilyDetector().detect(current);
-                QHash<QString, UnitFamily> renameFamilyByRoot;
-                for (const UnitFamily &family : renameFamilies)
-                    renameFamilyByRoot.insert(family.rootId, family);
-                StandardNamePlanner planner;
-                updateApplyProgress(55, QStringLiteral("Applying rename changes"), QStringLiteral("Updating real XML IDs and references"));
-                for (auto it = renameByFamily.cbegin(); failure.isEmpty() && it != renameByFamily.cend(); ++it)
+                updateApplyProgress(55, QStringLiteral("Applying rename changes"), QStringLiteral("Building one safe batch rename plan"));
+                const RenamePlan combinedRenamePlan = buildCombinedRenamePlan(current, selection.rename, &warnings);
+                if (combinedRenamePlan.valid)
                 {
-                    const auto familyIt = renameFamilyByRoot.constFind(it.key());
-                    if (familyIt == renameFamilyByRoot.cend())
-                    {
-                        warnings << QStringLiteral("Skipped rename family %1 because it is no longer present after apply.").arg(it.key());
-                        continue;
-                    }
-                    QSet<int> includedNodeIndices;
-                    for (const WizardNodeRef &ref : it.value())
-                    {
-                        const int index = findNodeIndex(current, ref);
-                        if (index >= 0)
-                            includedNodeIndices.insert(index);
-                    }
-                    if (includedNodeIndices.isEmpty())
-                        continue;
-                    const RenamePlan plan = planner.plan(current, familyIt.value(), familyIt.value().rootId, includedNodeIndices);
-                    if (!plan.valid)
-                    {
-                        warnings << QStringLiteral("Skipped rename family %1 because the refreshed plan is no longer valid.").arg(it.key());
-                        continue;
-                    }
-                    const RenameApplyResult result = m_referenceRenamer.apply(current, plan, workspace.path(), m_whitelistIds);
+                    updateApplyProgress(56, QStringLiteral("Applying rename changes"),
+                                        QStringLiteral("Updating %1 real XML IDs and references in one pass")
+                                            .arg(combinedRenamePlan.items.size()));
+                    const RenameApplyResult result = m_referenceRenamer.apply(current, combinedRenamePlan, workspace.path(), m_whitelistIds);
                     if (!result.success)
                     {
                         failure = result.error;
-                        break;
                     }
-                    renamedIds += result.identitiesRenamed;
-                    changedFiles.append(result.changedFiles);
-                    changedFiles.removeDuplicates();
-                    if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                    else
                     {
-                        failure = error;
-                        break;
+                        renamedIds += result.identitiesRenamed;
+                        changedFiles.append(result.changedFiles);
+                        changedFiles.removeDuplicates();
+                        if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                            failure = error;
+                        else
+                            applyArchiveReferenceSafety(&current);
                     }
-                    applyArchiveReferenceSafety(&current);
-                    renameFamilies = UnitFamilyDetector().detect(current);
-                    renameFamilyByRoot.clear();
-                    for (const UnitFamily &family : renameFamilies)
-                        renameFamilyByRoot.insert(family.rootId, family);
                 }
             }
 
@@ -3563,8 +3677,8 @@ void MainWindow::applyOptimizationWizardPlan()
             group.first = item.keep;
             group.second.append(item.remove);
         }
-        updateApplyProgress(45, QStringLiteral("Applying duplicate merges"), QStringLiteral("Redirecting references and removing duplicate objects"));
-        for (auto it = mergeGroups.cbegin(); failure.isEmpty() && it != mergeGroups.cend(); ++it)
+        QVector<MergeRequest> mergeRequests;
+        for (auto it = mergeGroups.cbegin(); it != mergeGroups.cend(); ++it)
         {
             const int keepIndex = findNodeIndex(current, it.value().first);
             if (keepIndex < 0)
@@ -3582,69 +3696,58 @@ void MainWindow::applyOptimizationWizardPlan()
             }
             if (request.removeNodeIndices.isEmpty())
                 continue;
-            const MergeApplyResult result = m_mergeService.apply(current, request, m_rootFolder, m_whitelistIds);
+            mergeRequests.append(request);
+        }
+        if (failure.isEmpty() && !mergeRequests.isEmpty())
+        {
+            updateApplyProgress(45, QStringLiteral("Applying duplicate merges"), QStringLiteral("Redirecting references and removing duplicate objects"));
+            const MergeApplyResult result = m_mergeService.applyBatch(
+                current, mergeRequests, m_rootFolder, m_whitelistIds,
+                [&](int fileIndex, int totalFiles, const QString &file) {
+                    const int percent = 45 + ((fileIndex * 15) / qMax(1, totalFiles));
+                    updateApplyProgress(percent, QStringLiteral("Applying duplicate merges"),
+                                        QStringLiteral("Scanning file %1 of %2: %3")
+                                            .arg(qMin(fileIndex + 1, totalFiles))
+                                            .arg(totalFiles)
+                                            .arg(QFileInfo(file).fileName()));
+                });
             if (!result.success)
             {
                 failure = result.error;
-                break;
             }
-            removedDuplicates += result.nodesDeleted;
-            redirectedReferences += result.referencesRedirected;
-            if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
+            else
             {
-                failure = error;
-                break;
+                removedDuplicates += result.nodesDeleted;
+                redirectedReferences += result.referencesRedirected;
+                if (result.skippedMerges > 0)
+                    warnings << QStringLiteral("Skipped %1 duplicate merge item(s) that were no longer valid.").arg(result.skippedMerges);
+                warnings.append(result.warnings);
+                if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
+                    failure = error;
             }
         }
 
-        QVector<UnitFamily> families = UnitFamilyDetector().detect(current);
-        QHash<QString, UnitFamily> familyByRoot;
-        for (const UnitFamily &family : families)
-            familyByRoot.insert(family.rootId, family);
-        QHash<QString, QVector<WizardNodeRef>> renameByFamily;
-        for (const WizardRenameSelection &item : selection.rename)
-            renameByFamily[item.familyRootId].append(item.node);
-        StandardNamePlanner planner;
-        updateApplyProgress(60, QStringLiteral("Applying rename changes"), QStringLiteral("Updating IDs and references"));
-        for (auto it = renameByFamily.cbegin(); failure.isEmpty() && it != renameByFamily.cend(); ++it)
+        if (failure.isEmpty() && !selection.rename.isEmpty())
         {
-            const auto familyIt = familyByRoot.constFind(it.key());
-            if (familyIt == familyByRoot.cend())
+            updateApplyProgress(60, QStringLiteral("Applying rename changes"), QStringLiteral("Building one safe batch rename plan"));
+            const RenamePlan combinedRenamePlan = buildCombinedRenamePlan(current, selection.rename, &warnings);
+            if (combinedRenamePlan.valid)
             {
-                warnings << QStringLiteral("Skipped rename family %1 because it is no longer present after apply.").arg(it.key());
-                continue;
+                updateApplyProgress(61, QStringLiteral("Applying rename changes"),
+                                    QStringLiteral("Updating %1 IDs and references in one pass")
+                                        .arg(combinedRenamePlan.items.size()));
+                const RenameApplyResult result = m_referenceRenamer.apply(current, combinedRenamePlan, m_rootFolder, m_whitelistIds);
+                if (!result.success)
+                {
+                    failure = result.error;
+                }
+                else
+                {
+                    renamedIds += result.identitiesRenamed;
+                    if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
+                        failure = error;
+                }
             }
-            QSet<int> includedNodeIndices;
-            for (const WizardNodeRef &ref : it.value())
-            {
-                const int index = findNodeIndex(current, ref);
-                if (index >= 0)
-                    includedNodeIndices.insert(index);
-            }
-            if (includedNodeIndices.isEmpty())
-                continue;
-            const RenamePlan plan = planner.plan(current, familyIt.value(), familyIt.value().rootId, includedNodeIndices);
-            if (!plan.valid)
-            {
-                warnings << QStringLiteral("Skipped rename family %1 because the refreshed plan is no longer valid.").arg(it.key());
-                continue;
-            }
-            const RenameApplyResult result = m_referenceRenamer.apply(current, plan, m_rootFolder, m_whitelistIds);
-            if (!result.success)
-            {
-                failure = result.error;
-                break;
-            }
-            renamedIds += result.identitiesRenamed;
-            if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
-            {
-                failure = error;
-                break;
-            }
-            families = UnitFamilyDetector().detect(current);
-            familyByRoot.clear();
-            for (const UnitFamily &family : families)
-                familyByRoot.insert(family.rootId, family);
         }
 
         const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(current, configuredDataCollectionMode());

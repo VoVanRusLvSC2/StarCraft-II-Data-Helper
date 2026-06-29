@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QSet>
 #include <QStringList>
+#include <functional>
 
 struct MergeRequest
 {
@@ -34,6 +35,8 @@ struct MergeApplyResult
     QStringList changedFiles;
     int referencesRedirected = 0;
     int nodesDeleted = 0;
+    int skippedMerges = 0;
+    QStringList warnings;
     QString error;
 };
 
@@ -45,6 +48,11 @@ public:
                            const MergeRequest &request,
                            const QString &rootFolder,
                            const QSet<QString> &whitelistIds) const;
+    MergeApplyResult applyBatch(const AnalysisResult &analysis,
+                                const QVector<MergeRequest> &requests,
+                                const QString &rootFolder,
+                                const QSet<QString> &whitelistIds,
+                                const std::function<void(int, int, const QString &)> &progress = {}) const;
 
     static int replaceIdTokens(QString *value, const QString &oldId, const QString &newId);
     static int countIdTokens(const QString &value, const QString &id);

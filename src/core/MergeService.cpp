@@ -22,6 +22,45 @@ QRegularExpression idExpression(const QString &id)
                                   .arg(QRegularExpression::escape(id)));
 }
 
+QRegularExpression redirectExpression(const QHash<QString, QString> &redirects)
+{
+    QStringList ids = redirects.keys();
+    std::sort(ids.begin(), ids.end(), [](const QString &left, const QString &right) {
+        return left.size() > right.size();
+    });
+    QStringList escaped;
+    escaped.reserve(ids.size());
+    for (const QString &id : ids)
+        escaped << QRegularExpression::escape(id);
+    return QRegularExpression(QStringLiteral("(?<![A-Za-z0-9_@])(%1)(?![A-Za-z0-9_@])")
+                                  .arg(escaped.join(QLatin1Char('|'))));
+}
+
+int replaceRedirectTokens(QString *value,
+                          const QHash<QString, QString> &redirects,
+                          const QRegularExpression &expression)
+{
+    if (!value || value->isEmpty() || redirects.isEmpty())
+        return 0;
+    QString output;
+    qsizetype last = 0;
+    int replacements = 0;
+    auto matches = expression.globalMatch(*value);
+    while (matches.hasNext()) {
+        const QRegularExpressionMatch match = matches.next();
+        output += value->mid(last, match.capturedStart() - last);
+        const QString oldId = match.captured(1);
+        output += redirects.value(oldId, oldId);
+        last = match.capturedEnd();
+        ++replacements;
+    }
+    if (replacements > 0) {
+        output += value->mid(last);
+        *value = output;
+    }
+    return replacements;
+}
+
 QString relativePath(const QString &root, const QString &file)
 {
     return QDir(root).relativeFilePath(file);
@@ -73,6 +112,7 @@ struct RewriteStats {
 
 void rewriteNode(pugi::xml_node node,
                  const QHash<QString, QString> &redirects,
+                 const QRegularExpression &redirectRegex,
                  const QString &file,
                  const QSet<QString> &removedIdentityLocations,
                  RewriteStats *stats)
@@ -86,10 +126,7 @@ void rewriteNode(pugi::xml_node node,
             }
             QString value = QString::fromUtf8(attribute.value());
             const QString before = value;
-            int replacements = 0;
-            for (auto it = redirects.cbegin(); it != redirects.cend(); ++it) {
-                replacements += MergeService::replaceIdTokens(&value, it.key(), it.value());
-            }
+            const int replacements = replaceRedirectTokens(&value, redirects, redirectRegex);
             if (replacements > 0) {
                 attribute.set_value(value.toUtf8().constData());
                 ++stats->fields;
@@ -102,10 +139,7 @@ void rewriteNode(pugi::xml_node node,
     if (node.type() == pugi::node_pcdata || node.type() == pugi::node_cdata) {
         QString value = QString::fromUtf8(node.value());
         const QString before = value;
-        int replacements = 0;
-        for (auto it = redirects.cbegin(); it != redirects.cend(); ++it) {
-            replacements += MergeService::replaceIdTokens(&value, it.key(), it.value());
-        }
+        const int replacements = replaceRedirectTokens(&value, redirects, redirectRegex);
         if (replacements > 0) {
             node.set_value(value.toUtf8().constData());
             ++stats->fields;
@@ -115,7 +149,7 @@ void rewriteNode(pugi::xml_node node,
         }
     }
     for (pugi::xml_node child = node.first_child(); child; child = child.next_sibling()) {
-        rewriteNode(child, redirects, file, removedIdentityLocations, stats);
+        rewriteNode(child, redirects, redirectRegex, file, removedIdentityLocations, stats);
     }
 }
 
@@ -201,6 +235,7 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
         preview.warnings << QStringLiteral("Select at least one exact duplicate to remove.");
         return preview;
     }
+    const QRegularExpression redirectsRegex = redirectExpression(redirects);
 
     for (const ScannedFileInfo &info : analysis.scannedFiles) {
         if (!info.isXml) continue;
@@ -216,7 +251,7 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
             continue;
         }
         RewriteStats stats;
-        rewriteNode(doc, redirects, info.filePath, removedLocations.value(info.filePath), &stats);
+        rewriteNode(doc, redirects, redirectsRegex, info.filePath, removedLocations.value(info.filePath), &stats);
         if (stats.fields) files.insert(info.filePath);
         preview.fieldsChanged += stats.fields;
         preview.referencesRedirected += stats.references;
@@ -255,6 +290,7 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
         redirects.insert(node.id, plan.keptId);
         removals[node.sourceFile].append(&node);
     }
+    const QRegularExpression redirectsRegex = redirectExpression(redirects);
 
     QHash<QString, QByteArray> staged;
     RewriteStats totals;
@@ -269,7 +305,7 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
         RewriteStats fileStats;
         QSet<QString> identityLocations;
         for (const DataNode *remove : removals.value(info.filePath)) identityLocations.insert(remove->originalLocation);
-        rewriteNode(doc, redirects, info.filePath, identityLocations, &fileStats);
+        rewriteNode(doc, redirects, redirectsRegex, info.filePath, identityLocations, &fileStats);
         int deleted = 0;
         for (const DataNode *remove : removals.value(info.filePath)) {
             pugi::xml_node node = findObject(doc, remove->elementName, remove->id);
@@ -283,11 +319,10 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
             std::ostringstream stream;
             doc.save(stream, "  ", pugi::format_default, pugi::encoding_utf8);
             const QByteArray output = QByteArray::fromStdString(stream.str());
-            for (auto it = redirects.cbegin(); it != redirects.cend(); ++it) {
-                if (MergeService::countIdTokens(QString::fromUtf8(output), it.key()) != 0) {
-                    result.error = QStringLiteral("Verification failed: references or object identity for %1 remain in %2.").arg(it.key(), info.filePath);
-                    return result;
-                }
+            const QRegularExpressionMatch remaining = redirectsRegex.match(QString::fromUtf8(output));
+            if (remaining.hasMatch()) {
+                result.error = QStringLiteral("Verification failed: references or object identity for %1 remain in %2.").arg(remaining.captured(1), info.filePath);
+                return result;
             }
             staged.insert(info.filePath, output);
             totals.fields += fileStats.fields;
@@ -344,5 +379,207 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     result.changedFiles = relativeFiles;
     result.referencesRedirected = totals.references;
     result.nodesDeleted = plan.nodesDeleted;
+    return result;
+}
+
+MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
+                                          const QVector<MergeRequest> &requests,
+                                          const QString &rootFolder,
+                                          const QSet<QString> &whitelistIds,
+                                          const std::function<void(int, int, const QString &)> &progress) const
+{
+    MergeApplyResult result;
+    if (requests.isEmpty()) {
+        result.error = QStringLiteral("No duplicate merge requests selected.");
+        return result;
+    }
+
+    QSet<QString> idsSelectedForRemoval;
+    for (const MergeRequest &request : requests) {
+        for (int index : request.removeNodeIndices) {
+            if (index >= 0 && index < analysis.nodes.size())
+                idsSelectedForRemoval.insert(analysis.nodes[index].id);
+        }
+    }
+
+    QHash<QString, QString> redirects;
+    QHash<QString, QVector<const DataNode *>> removals;
+    QSet<int> removedNodeIndexes;
+    QStringList removedIds;
+
+    const auto isRelatedMergeCandidate = [&](int keepIndex, int removeIndex) {
+        for (const DuplicateContentGroup &group : analysis.duplicateContentGroups) {
+            if (group.mergeCandidate
+                && group.nodeIndices.contains(keepIndex)
+                && group.nodeIndices.contains(removeIndex)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (const MergeRequest &request : requests) {
+        if (request.keepNodeIndex < 0 || request.keepNodeIndex >= analysis.nodes.size()) {
+            ++result.skippedMerges;
+            result.warnings << QStringLiteral("Skipped duplicate merge with missing keep object.");
+            continue;
+        }
+        const DataNode &keep = analysis.nodes[request.keepNodeIndex];
+        if (idsSelectedForRemoval.contains(keep.id)) {
+            ++result.skippedMerges;
+            result.warnings << QStringLiteral("Skipped duplicate merge for %1 because its keep ID is also selected for removal.").arg(keep.id);
+            continue;
+        }
+        for (int removeIndex : request.removeNodeIndices) {
+            if (removeIndex < 0 || removeIndex >= analysis.nodes.size() || removeIndex == request.keepNodeIndex) {
+                ++result.skippedMerges;
+                continue;
+            }
+            if (removedNodeIndexes.contains(removeIndex)) {
+                ++result.skippedMerges;
+                continue;
+            }
+            const DataNode &remove = analysis.nodes[removeIndex];
+            if (remove.id == keep.id
+                || remove.elementName != keep.elementName
+                || remove.contentHash != keep.contentHash
+                || !isRelatedMergeCandidate(request.keepNodeIndex, removeIndex)) {
+                ++result.skippedMerges;
+                result.warnings << QStringLiteral("Skipped invalid duplicate merge %1 -> %2.").arg(remove.id, keep.id);
+                continue;
+            }
+            redirects.insert(remove.id, keep.id);
+            removals[remove.sourceFile].append(&remove);
+            removedNodeIndexes.insert(removeIndex);
+            removedIds << remove.id;
+        }
+    }
+
+    if (redirects.isEmpty()) {
+        result.success = true;
+        result.error.clear();
+        return result;
+    }
+    const QRegularExpression redirectsRegex = redirectExpression(redirects);
+
+    QHash<QString, QByteArray> staged;
+    RewriteStats totals;
+    QString error;
+    int fileIndex = 0;
+    const int totalFiles = analysis.scannedFiles.size();
+    for (const ScannedFileInfo &info : analysis.scannedFiles) {
+        if (progress)
+            progress(fileIndex, totalFiles, info.filePath);
+        ++fileIndex;
+        if (!info.isXml)
+            continue;
+        QByteArray bytes;
+        if (!loadFile(info.filePath, &bytes, &error)) {
+            result.error = error;
+            return result;
+        }
+        pugi::xml_document doc;
+        const auto parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
+        if (!parsed) {
+            result.error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description());
+            return result;
+        }
+
+        RewriteStats fileStats;
+        QSet<QString> identityLocations;
+        for (const DataNode *remove : removals.value(info.filePath))
+            identityLocations.insert(remove->originalLocation);
+        rewriteNode(doc, redirects, redirectsRegex, info.filePath, identityLocations, &fileStats);
+
+        int deleted = 0;
+        for (const DataNode *remove : removals.value(info.filePath)) {
+            pugi::xml_node node = findObject(doc, remove->elementName, remove->id);
+            if (!node || !node.parent().remove_child(node)) {
+                result.error = QStringLiteral("Unable to delete %1 from %2.").arg(remove->id, info.filePath);
+                return result;
+            }
+            ++deleted;
+        }
+
+        if (fileStats.fields || deleted) {
+            std::ostringstream stream;
+            doc.save(stream, "  ", pugi::format_default, pugi::encoding_utf8);
+            const QByteArray output = QByteArray::fromStdString(stream.str());
+            const QRegularExpressionMatch remaining = redirectsRegex.match(QString::fromUtf8(output));
+            if (remaining.hasMatch()) {
+                result.error = QStringLiteral("Verification failed: references or object identity for %1 remain in %2.").arg(remaining.captured(1), info.filePath);
+                return result;
+            }
+            staged.insert(info.filePath, output);
+            totals.fields += fileStats.fields;
+            totals.references += fileStats.references;
+        }
+    }
+    if (progress)
+        progress(totalFiles, totalFiles, QString());
+
+    if (staged.isEmpty()) {
+        result.success = true;
+        return result;
+    }
+
+    QStringList relativeFiles;
+    for (const QString &file : staged.keys())
+        relativeFiles << relativePath(rootFolder, file);
+    std::sort(relativeFiles.begin(), relativeFiles.end());
+
+    QString reportText = QStringLiteral("Batch Merge Apply\nRemoved objects: %1\nReferences redirected: %2\nFiles changed: %3\nWarnings: %4\n")
+                             .arg(removedIds.size())
+                             .arg(totals.references)
+                             .arg(relativeFiles.size())
+                             .arg(result.warnings.isEmpty() ? QStringLiteral("none") : result.warnings.join(QStringLiteral("; ")));
+    BackupManager backups;
+    if (!backups.createFolderBackup(rootFolder, relativeFiles, analysis.analysisReportText,
+                                    reportText, &result.backupFolder, &result.error))
+        return result;
+    if (m_failureInjectionStep == QStringLiteral("after-backup")) {
+        result.error = QStringLiteral("Injected failure after backup.");
+        return result;
+    }
+
+    QStringList committed;
+    for (auto it = staged.cbegin(); it != staged.cend(); ++it) {
+        QSaveFile file(it.key());
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || file.write(it.value()) != it.value().size()
+            || !file.commit()) {
+            result.error = QStringLiteral("Failed to commit %1.").arg(it.key());
+            restoreBackup(rootFolder, result.backupFolder, committed, &result.error);
+            return result;
+        }
+        committed << relativePath(rootFolder, it.key());
+    }
+    if (m_failureInjectionStep == QStringLiteral("after-commit")) {
+        result.error = QStringLiteral("Injected failure after commit.");
+        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
+    }
+
+    FolderAnalyzer analyzer;
+    AnalysisResult rebuilt;
+    if (!analyzer.analyzeFolder(rootFolder, whitelistIds, &rebuilt, &error)) {
+        result.error = QStringLiteral("Registry rebuild failed: %1").arg(error);
+        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
+    }
+    for (const QString &removed : removedIds) {
+        for (const DataNode &node : rebuilt.nodes) {
+            if (node.id == removed || node.referencedIds.contains(removed)) {
+                result.error = QStringLiteral("Post-merge verification failed for %1.").arg(removed);
+                restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
+                return result;
+            }
+        }
+    }
+
+    result.success = true;
+    result.changedFiles = relativeFiles;
+    result.referencesRedirected = totals.references;
+    result.nodesDeleted = removedIds.size();
     return result;
 }

@@ -97,10 +97,10 @@ public:
     int pixelMetric(PixelMetric metric, const QStyleOption *option = nullptr, const QWidget *widget = nullptr) const override
     {
         if (metric == PM_ScrollBarExtent) {
-            return 16;
+            return 22;
         }
         if (metric == PM_ScrollBarSliderMin) {
-            return 38;
+            return 52;
         }
         if (metric == PM_IndicatorWidth || metric == PM_IndicatorHeight) {
             return 24;
@@ -179,8 +179,8 @@ public:
             return;
         }
 
-        static const QPixmap track(QStringLiteral(":/textures/ui_nova_global_scrollbar_bg2.png"));
-        static const QPixmap handle(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_normal2.png"));
+        static const QPixmap track(QStringLiteral(":/textures/ui_nova_global_scrollbar_bg.png"));
+        static const QPixmap handle(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_normal4.png"));
         static const QPixmap handleOver(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_over.png"));
         drawAxisTexture(painter, subControlRect(control, option, SC_ScrollBarGroove, widget), track, slider->orientation);
         const bool hover = (slider->state & State_MouseOver) && (slider->activeSubControls & SC_ScrollBarSlider);

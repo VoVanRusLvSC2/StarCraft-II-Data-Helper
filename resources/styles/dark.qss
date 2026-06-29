@@ -403,7 +403,7 @@ QScrollBar:horizontal {
 QScrollBar::handle:vertical {
     background: transparent;
     border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal.png) 14 7 14 7 stretch stretch;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 14 7 14 7 stretch stretch;
     min-height: 52px;
     margin: 2px 3px;
 }
@@ -411,7 +411,7 @@ QScrollBar::handle:vertical {
 QScrollBar::handle:horizontal {
     background: transparent;
     border: none;
-    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal.png) 7 14 7 14 stretch stretch;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 7 14 7 14 stretch stretch;
     min-width: 72px;
     margin: 2px 3px;
 }
@@ -713,6 +713,130 @@ QTableView#cleanupTable {
 
 QLabel#inspectorSubtitle {
     color: #9ab8b2;
+}
+
+QDialog#sc2OpenFileDialog {
+    background: transparent;
+    border: 10px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_backgroundframe.png) 18 18 18 18 stretch stretch;
+    padding: 8px;
+}
+
+QDialog#sc2OpenFileDialog QLabel,
+QDialog#sc2OpenFileDialog QLineEdit,
+QDialog#sc2OpenFileDialog QComboBox,
+QDialog#sc2OpenFileDialog QTableWidget,
+QDialog#sc2OpenFileDialog QListWidget {
+    color: #9fffdc;
+}
+
+QDialog#sc2OpenFileDialog QLabel#panelTitle {
+    color: #eafff6;
+}
+
+QDialog#sc2OpenFileDialog QLabel#inspectorSubtitle {
+    color: #93e8cc;
+}
+
+QDialog#sc2OpenFileDialog QLineEdit {
+    background: transparent;
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    color: #9fffdc;
+    selection-background-color: rgba(75, 218, 176, 130);
+    selection-color: #ffffff;
+}
+
+QDialog#sc2OpenFileDialog QLineEdit:hover,
+QDialog#sc2OpenFileDialog QLineEdit:focus {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+}
+
+QComboBox#sc2OpenFileFilter {
+    background: transparent;
+    border: 8px solid transparent;
+    border-image: url(:/textures/ui_glue_dropdownbutton_normal_terran.png) 16 16 16 16 stretch stretch;
+    color: #9fffdc;
+    padding: 2px 42px 2px 12px;
+}
+
+QComboBox#sc2OpenFileFilter:hover,
+QComboBox#sc2OpenFileFilter:focus {
+    border-image: url(:/textures/ui_glue_dropdownbutton_over_terran.png) 16 16 16 16 stretch stretch;
+    color: #ffffff;
+}
+
+QComboBox#sc2OpenFileFilter:on {
+    border-image: url(:/textures/ui_glue_dropdownbutton_Pressed_terran.png) 16 16 16 16 stretch stretch;
+    color: #ffffff;
+}
+
+QComboBox#sc2OpenFileFilter::drop-down {
+    width: 38px;
+    border: none;
+    background: transparent;
+}
+
+QDialog#sc2OpenFileDialog QSplitter::handle {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal4.png) 14 7 14 7 stretch stretch;
+}
+
+QDialog#sc2OpenFileDialog QSplitter::handle:hover {
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 14 7 14 7 stretch stretch;
+}
+
+QListWidget#fileOpenPlaces,
+QTableWidget#fileOpenTable {
+    background: transparent;
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    alternate-background-color: rgba(5, 20, 18, 215);
+    color: #9fffdc;
+    selection-color: #ffffff;
+}
+
+QListWidget#fileOpenPlaces::item,
+QTableWidget#fileOpenTable::item {
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    color: #9fffdc;
+    padding: 5px 10px;
+}
+
+QListWidget#fileOpenPlaces::item:hover,
+QTableWidget#fileOpenTable::item:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+}
+
+QListWidget#fileOpenPlaces::item:selected,
+QTableWidget#fileOpenTable::item:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+    font-weight: 700;
+}
+
+QDialog#sc2OpenFileDialog QHeaderView::section {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    color: #b7ffe8;
+}
+
+QDialog#sc2OpenFileDialog QHeaderView::section:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+}
+
+QDialog#sc2OpenFileDialog QPushButton {
+    color: #d3ffe9;
+}
+
+QDialog#sc2OpenFileDialog QPushButton:hover {
+    color: #ffffff;
 }
 
 QLabel#modeBadge,
