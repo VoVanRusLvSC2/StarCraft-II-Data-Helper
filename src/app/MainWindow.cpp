@@ -28,6 +28,7 @@
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDebug>
@@ -142,18 +143,65 @@ namespace
 
     void drawCoverPixmap(QPainter &painter, const QRect &target, const QPixmap &pixmap);
 
+    QPixmap makeFrameHighlightDelta(const QPixmap &basePixmap, const QPixmap &highlightPixmap)
+    {
+        if (highlightPixmap.isNull() || basePixmap.isNull())
+            return highlightPixmap;
+
+        const QImage base = basePixmap.toImage().convertToFormat(QImage::Format_ARGB32);
+        const QImage highlight = highlightPixmap.toImage().convertToFormat(QImage::Format_ARGB32);
+        QImage delta(highlight.size(), QImage::Format_ARGB32_Premultiplied);
+        delta.fill(Qt::transparent);
+
+        const int width = qMin(base.width(), highlight.width());
+        const int height = qMin(base.height(), highlight.height());
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                const QColor baseColor = QColor::fromRgba(base.pixel(x, y));
+                const QColor highlightColor = QColor::fromRgba(highlight.pixel(x, y));
+                if (highlightColor.alpha() <= 0)
+                    continue;
+
+                const int gainR = highlightColor.red() - baseColor.red();
+                const int gainG = highlightColor.green() - baseColor.green();
+                const int gainB = highlightColor.blue() - baseColor.blue();
+                const int colorGain = qMax(0, qMax(gainR, qMax(gainG, gainB)));
+                const int alphaGain = highlightColor.alpha() - baseColor.alpha();
+                const int keep = qMax(colorGain, alphaGain);
+                if (keep < 6)
+                    continue;
+
+                const int alpha = qBound(0, highlightColor.alpha() * qMin(255, keep * 9) / 255, 220);
+                if (alpha <= 0)
+                    continue;
+
+                delta.setPixelColor(x, y, QColor(highlightColor.red(), highlightColor.green(), highlightColor.blue(), alpha));
+            }
+        }
+
+        return QPixmap::fromImage(delta);
+    }
+
     class Sc2FrameHighlightOverlay final : public QWidget
     {
     public:
         explicit Sc2FrameHighlightOverlay(QWidget *parent = nullptr)
             : QWidget(parent),
-              m_highlight(QStringLiteral(":/textures/ui_nova_archives_backgroundframehighlight.png")),
+              m_base(QStringLiteral(":/textures/ui_nova_archives_backgroundframe.png")),
+              m_highlight(makeFrameHighlightDelta(m_base, QPixmap(QStringLiteral(":/textures/ui_nova_archives_backgroundframehighlight.png")))),
               m_highlightMask(QStringLiteral(":/textures/ui_nova_archives_backgroundframehighlightmask.png"))
         {
             setObjectName(QStringLiteral("sc2OpenFileHighlightOverlay"));
             setAttribute(Qt::WA_TransparentForMouseEvents);
             setAttribute(Qt::WA_NoSystemBackground);
             setAttribute(Qt::WA_TranslucentBackground);
+        }
+
+        static constexpr int periodFrames()
+        {
+            return kPeriod;
         }
 
         void setPhase(int phase)
@@ -171,33 +219,51 @@ namespace
             if (rect().isEmpty() || m_highlight.isNull() || m_highlightMask.isNull())
                 return;
 
-            QImage layer(size(), QImage::Format_ARGB32_Premultiplied);
-            layer.fill(Qt::transparent);
+            QImage composed(size(), QImage::Format_ARGB32_Premultiplied);
+            composed.fill(Qt::transparent);
 
-            QPainter layerPainter(&layer);
-            layerPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            drawCoverPixmap(layerPainter, layer.rect(), m_highlight);
-            layerPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-            QImage mask(size(), QImage::Format_ARGB32_Premultiplied);
-            mask.fill(Qt::transparent);
-            QPainter maskPainter(&mask);
-            maskPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             QEasingCurve easing(QEasingCurve::OutCubic);
-            const qreal linearProgress = qreal(m_phase) / qreal(qMax(1, kPeriod - 1));
-            const qreal progress = easing.valueForProgress(qBound<qreal>(0.0, linearProgress, 1.0));
             const qreal travel = height() * 4.0 / 3.0;
-            const int offsetY = qRound(-travel + progress * travel * 2.0);
-            drawCoverPixmap(maskPainter, QRect(0, offsetY, width(), height()), m_highlightMask);
-            maskPainter.end();
-            layerPainter.drawImage(QPoint(0, 0), mask);
-            layerPainter.end();
+            const qreal baseProgress = qreal(m_phase) / qreal(qMax(1, kPeriod - 1));
+
+            QPainter composedPainter(&composed);
+            composedPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            for (int pass = 0; pass < kPassCount; ++pass)
+            {
+                const qreal shiftedProgress = std::fmod(baseProgress + (qreal(pass) / qreal(kPassCount)), 1.0);
+                const qreal progress = easing.valueForProgress(qBound<qreal>(0.0, shiftedProgress, 1.0));
+                const int offsetY = qRound(-travel + progress * travel * 2.0);
+
+                QImage layer(size(), QImage::Format_ARGB32_Premultiplied);
+                layer.fill(Qt::transparent);
+                QPainter layerPainter(&layer);
+                layerPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+                drawCoverPixmap(layerPainter, layer.rect(), m_highlight);
+                layerPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+
+                QImage mask(size(), QImage::Format_ARGB32_Premultiplied);
+                mask.fill(Qt::transparent);
+                QPainter maskPainter(&mask);
+                maskPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+                drawCoverPixmap(maskPainter, QRect(0, offsetY, width(), height()), m_highlightMask);
+                maskPainter.end();
+
+                layerPainter.drawImage(QPoint(0, 0), mask);
+                layerPainter.end();
+
+                composedPainter.setOpacity(pass == 0 ? 0.86 : 0.58);
+                composedPainter.drawImage(QPoint(0, 0), layer);
+            }
+            composedPainter.end();
 
             QPainter painter(this);
-            painter.drawImage(QPoint(0, 0), layer);
+            painter.drawImage(QPoint(0, 0), composed);
         }
 
     private:
-        static constexpr int kPeriod = 240;
+        static constexpr int kPeriod = 600;
+        static constexpr int kPassCount = 3;
+        QPixmap m_base;
         QPixmap m_highlight;
         QPixmap m_highlightMask;
         int m_phase = 0;
@@ -624,14 +690,14 @@ namespace
             m_highlightTimer = new QTimer(this);
             connect(m_highlightTimer, &QTimer::timeout, this, [this]()
                     {
-                m_highlightPhase = (m_highlightPhase + 1) % 240;
+                m_highlightPhase = (m_highlightPhase + 1) % Sc2FrameHighlightOverlay::periodFrames();
                 if (m_highlightOverlay)
                 {
                     m_highlightOverlay->raise();
                     m_highlightOverlay->setPhase(m_highlightPhase);
                 }
             });
-            m_highlightTimer->start(33);
+            m_highlightTimer->start(40);
 
             auto *titleBar = new QFrame(this);
             titleBar->setObjectName(QStringLiteral("sc2OpenFileTitleBar"));
