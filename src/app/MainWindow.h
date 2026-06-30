@@ -83,8 +83,9 @@ private:
     void loadDefaultFolder();
     void writeAnalysisReportFile() const;
     QString runtimePath(const QString &relativePath) const;
+    bool validateArchiveCatalogSchema(const QString &archivePath, QString *errorMessage) const;
     void setCurrentSourcePath(const QString &path);
-    void logLine(const QString &line);
+    void logLine(const QString &line) const;
     void refreshPages();
     bool loadPathAndAnalyze(const QString &path);
     bool analyzeFolderPath(const QString &folderPath, QString *errorMessage);

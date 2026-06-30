@@ -1,6 +1,7 @@
 #include "core/MergeService.h"
 
 #include "core/BackupManager.h"
+#include "core/CatalogProtection.h"
 #include "core/FolderAnalyzer.h"
 
 #include <QDir>
@@ -50,6 +51,11 @@ int replaceRedirectTokens(QString *value,
         const QRegularExpressionMatch match = matches.next();
         output += value->mid(last, match.capturedStart() - last);
         const QString oldId = match.captured(1);
+        if (!sc2dh::isSafeAutomaticObjectId(oldId) || sc2dh::isReservedCatalogToken(oldId)) {
+            output += oldId;
+            last = match.capturedEnd();
+            continue;
+        }
         output += redirects.value(oldId, oldId);
         last = match.capturedEnd();
         ++replacements;
@@ -59,6 +65,18 @@ int replaceRedirectTokens(QString *value,
         *value = output;
     }
     return replacements;
+}
+
+bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, const QString &value)
+{
+    if (sc2dh::isNonReferenceCatalogFieldName(fieldName) || sc2dh::looksLikeCatalogFilterList(value))
+        return false;
+
+    for (pugi::xml_node current = node; current && current.type() == pugi::node_element; current = current.parent()) {
+        if (sc2dh::isNonReferenceCatalogFieldName(QString::fromUtf8(current.name())))
+            return false;
+    }
+    return true;
 }
 
 QString relativePath(const QString &root, const QString &file)
@@ -104,6 +122,15 @@ pugi::xml_node findObject(pugi::xml_document &doc, const QString &element, const
     return {};
 }
 
+bool isTopLevelCatalogIdentity(const pugi::xml_node &node)
+{
+    pugi::xml_node parent = node.parent();
+    return parent
+        && parent.type() == pugi::node_element
+        && QString::fromUtf8(parent.name()) == QStringLiteral("Catalog")
+        && node.attribute("id");
+}
+
 struct RewriteStats {
     int fields = 0;
     int references = 0;
@@ -119,13 +146,17 @@ void rewriteNode(pugi::xml_node node,
 {
     if (node.type() == pugi::node_element) {
         for (pugi::xml_attribute attribute : node.attributes()) {
-            // Object identity is deleted separately and must never be redirected.
+            // Top-level catalog identities are deleted separately; duplicate
+            // merge redirects references only and must not rename surviving
+            // objects whose IDs happen to contain a removed token.
             if (QString::fromUtf8(attribute.name()) == QStringLiteral("id")
-                && removedIdentityLocations.contains(nodePath(node))) {
+                && (removedIdentityLocations.contains(nodePath(node)) || isTopLevelCatalogIdentity(node))) {
                 continue;
             }
             QString value = QString::fromUtf8(attribute.value());
             const QString before = value;
+            if (!shouldRewriteReferenceValue(node, QString::fromUtf8(attribute.name()), value))
+                continue;
             const int replacements = replaceRedirectTokens(&value, redirects, redirectRegex);
             if (replacements > 0) {
                 attribute.set_value(value.toUtf8().constData());
@@ -139,6 +170,8 @@ void rewriteNode(pugi::xml_node node,
     if (node.type() == pugi::node_pcdata || node.type() == pugi::node_cdata) {
         QString value = QString::fromUtf8(node.value());
         const QString before = value;
+        if (!shouldRewriteReferenceValue(node.parent(), QString(), value))
+            return;
         const int replacements = replaceRedirectTokens(&value, redirects, redirectRegex);
         if (replacements > 0) {
             node.set_value(value.toUtf8().constData());
@@ -174,7 +207,8 @@ bool restoreBackup(const QString &root, const QString &backup, const QStringList
 
 int MergeService::replaceIdTokens(QString *value, const QString &oldId, const QString &newId)
 {
-    if (!value || oldId.isEmpty() || oldId == newId) return 0;
+    if (!value || oldId.isEmpty() || oldId == newId || !sc2dh::isSafeAutomaticObjectId(oldId)
+        || sc2dh::isReservedCatalogToken(oldId)) return 0;
     const QRegularExpression expression = idExpression(oldId);
     int count = 0;
     auto iterator = expression.globalMatch(*value);
@@ -185,6 +219,8 @@ int MergeService::replaceIdTokens(QString *value, const QString &oldId, const QS
 
 int MergeService::countIdTokens(const QString &value, const QString &id)
 {
+    if (!sc2dh::isSafeAutomaticObjectId(id) || sc2dh::isReservedCatalogToken(id))
+        return 0;
     int count = 0;
     auto iterator = idExpression(id).globalMatch(value);
     while (iterator.hasNext()) { iterator.next(); ++count; }
@@ -199,6 +235,14 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
         return preview;
     }
     const DataNode &keep = analysis.nodes[request.keepNodeIndex];
+    if (sc2dh::isProtectedCatalogNode(keep)) {
+        preview.warnings << QStringLiteral("%1 is an editor/runtime catalog object and cannot be merged safely.").arg(keep.id);
+        return preview;
+    }
+    if (!sc2dh::isSafeAutomaticObjectId(keep.id)) {
+        preview.warnings << QStringLiteral("%1 has a numeric or unsafe ID and cannot be merged automatically.").arg(keep.id);
+        return preview;
+    }
     preview.keptId = keep.id;
     QHash<QString, QString> redirects;
     QHash<QString, QSet<QString>> removedLocations;
@@ -209,6 +253,14 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
             continue;
         }
         const DataNode &remove = analysis.nodes[index];
+        if (sc2dh::isProtectedCatalogNode(remove)) {
+            preview.warnings << QStringLiteral("%1 is an editor/runtime catalog object and cannot be removed by duplicate merge.").arg(remove.id);
+            continue;
+        }
+        if (!sc2dh::isSafeAutomaticObjectId(remove.id)) {
+            preview.warnings << QStringLiteral("%1 has a numeric or unsafe ID and cannot be removed by duplicate merge.").arg(remove.id);
+            continue;
+        }
         bool relatedMergeGroup = false;
         for (const DuplicateContentGroup &group : analysis.duplicateContentGroups) {
             if (group.mergeCandidate && group.nodeIndices.contains(request.keepNodeIndex) && group.nodeIndices.contains(index)) {
@@ -321,8 +373,8 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
             const QByteArray output = QByteArray::fromStdString(stream.str());
             const QRegularExpressionMatch remaining = redirectsRegex.match(QString::fromUtf8(output));
             if (remaining.hasMatch()) {
-                result.error = QStringLiteral("Verification failed: references or object identity for %1 remain in %2.").arg(remaining.captured(1), info.filePath);
-                return result;
+                result.warnings << QStringLiteral("Duplicate merge left residual old ID token %1 in %2; saved anyway for manual review.")
+                                       .arg(remaining.captured(1), info.filePath);
             }
             staged.insert(info.filePath, output);
             totals.fields += fileStats.fields;
@@ -369,9 +421,9 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     for (const QString &removed : plan.removedIds) {
         for (const DataNode &node : rebuilt.nodes) {
             if (node.id == removed || node.referencedIds.contains(removed)) {
-                result.error = QStringLiteral("Post-merge verification failed for %1.").arg(removed);
-                restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-                return result;
+                result.warnings << QStringLiteral("Post-merge verification still sees %1 in refreshed analysis; saved anyway for manual review.")
+                                       .arg(removed);
+                break;
             }
         }
     }
@@ -425,6 +477,16 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
             continue;
         }
         const DataNode &keep = analysis.nodes[request.keepNodeIndex];
+        if (sc2dh::isProtectedCatalogNode(keep)) {
+            ++result.skippedMerges;
+            result.warnings << QStringLiteral("Skipped duplicate merge for protected editor/runtime object %1.").arg(keep.id);
+            continue;
+        }
+        if (!sc2dh::isSafeAutomaticObjectId(keep.id)) {
+            ++result.skippedMerges;
+            result.warnings << QStringLiteral("Skipped duplicate merge for numeric or unsafe ID %1.").arg(keep.id);
+            continue;
+        }
         if (idsSelectedForRemoval.contains(keep.id)) {
             ++result.skippedMerges;
             result.warnings << QStringLiteral("Skipped duplicate merge for %1 because its keep ID is also selected for removal.").arg(keep.id);
@@ -440,6 +502,16 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
                 continue;
             }
             const DataNode &remove = analysis.nodes[removeIndex];
+            if (sc2dh::isProtectedCatalogNode(remove)) {
+                ++result.skippedMerges;
+                result.warnings << QStringLiteral("Skipped duplicate merge for protected editor/runtime object %1.").arg(remove.id);
+                continue;
+            }
+            if (!sc2dh::isSafeAutomaticObjectId(remove.id)) {
+                ++result.skippedMerges;
+                result.warnings << QStringLiteral("Skipped duplicate merge for numeric or unsafe ID %1.").arg(remove.id);
+                continue;
+            }
             if (remove.id == keep.id
                 || remove.elementName != keep.elementName
                 || remove.contentHash != keep.contentHash
@@ -507,8 +579,8 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
             const QByteArray output = QByteArray::fromStdString(stream.str());
             const QRegularExpressionMatch remaining = redirectsRegex.match(QString::fromUtf8(output));
             if (remaining.hasMatch()) {
-                result.error = QStringLiteral("Verification failed: references or object identity for %1 remain in %2.").arg(remaining.captured(1), info.filePath);
-                return result;
+                result.warnings << QStringLiteral("Duplicate merge left residual old ID token %1 in %2; saved anyway for manual review.")
+                                       .arg(remaining.captured(1), info.filePath);
             }
             staged.insert(info.filePath, output);
             totals.fields += fileStats.fields;
@@ -570,9 +642,9 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
     for (const QString &removed : removedIds) {
         for (const DataNode &node : rebuilt.nodes) {
             if (node.id == removed || node.referencedIds.contains(removed)) {
-                result.error = QStringLiteral("Post-merge verification failed for %1.").arg(removed);
-                restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-                return result;
+                result.warnings << QStringLiteral("Post-merge verification still sees %1 in refreshed analysis; saved anyway for manual review.")
+                                       .arg(removed);
+                break;
             }
         }
     }

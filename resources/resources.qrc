@@ -138,6 +138,7 @@
     <file alias="cursor.png">cursors/cursor.png</file>
   </qresource>
   <qresource prefix="/">
+    <file>catalog_link_schema.tsv</file>
     <file>styles/dark.qss</file>
   </qresource>
 </RCC>

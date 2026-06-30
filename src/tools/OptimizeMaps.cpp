@@ -1,4 +1,6 @@
 #include "core/BackupManager.h"
+#include "core/ArchiveReferenceRewriter.h"
+#include "core/CatalogEnumRepair.h"
 #include "core/DataCollectionAliasMapper.h"
 #include "core/DataCollectionPreservation.h"
 #include "core/DataCollectionUnitBuilder.h"
@@ -14,6 +16,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -27,7 +30,7 @@
 
 namespace {
 
-constexpr int kRenamePassLimit = 10000;
+constexpr int kRenamePassLimit = 1;
 
 struct MaterializeStats
 {
@@ -132,6 +135,137 @@ bool readBytes(const QString &path, QByteArray *bytes, QString *error)
     }
     if (bytes)
         *bytes = file.readAll();
+    return true;
+}
+
+QString firstExistingFile(const QStringList &candidates)
+{
+    for (const QString &candidate : candidates) {
+        const QString cleaned = QDir::cleanPath(candidate);
+        if (QFileInfo::exists(cleaned) && QFileInfo(cleaned).isFile())
+            return cleaned;
+    }
+    return {};
+}
+
+QString schemaValidatorScriptPath()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    return firstExistingFile({
+        QDir(appDir).absoluteFilePath(QStringLiteral("scripts/validate_sc2_catalogs.py")),
+        QDir(appDir).absoluteFilePath(QStringLiteral("../scripts/validate_sc2_catalogs.py")),
+        QDir(appDir).absoluteFilePath(QStringLiteral("../../scripts/validate_sc2_catalogs.py")),
+        QDir::current().absoluteFilePath(QStringLiteral("scripts/validate_sc2_catalogs.py"))
+    });
+}
+
+QString catalogXsdPath()
+{
+    const QString appDir = QCoreApplication::applicationDirPath();
+    return firstExistingFile({
+        QDir(appDir).absoluteFilePath(QStringLiteral("resources/catalogsData.xsd")),
+        QDir(appDir).absoluteFilePath(QStringLiteral("../resources/catalogsData.xsd")),
+        QDir(appDir).absoluteFilePath(QStringLiteral("../../resources/catalogsData.xsd")),
+        QDir::current().absoluteFilePath(QStringLiteral("resources/catalogsData.xsd"))
+    });
+}
+
+QString compactProcessOutput(QString text, int maxChars = 2400)
+{
+    text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    text.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    text = text.trimmed();
+    if (text.size() > maxChars)
+        text = text.left(maxChars) + QStringLiteral("\n...");
+    return text;
+}
+
+bool validateArchiveCatalogSchema(const QString &archivePath, QString *error)
+{
+    const QString scriptPath = schemaValidatorScriptPath();
+    const QString xsdPath = catalogXsdPath();
+    if (scriptPath.isEmpty() || xsdPath.isEmpty())
+        return true;
+
+    QProcess process;
+    process.setProgram(QStringLiteral("python"));
+    process.setArguments({
+        scriptPath,
+        archivePath,
+        QStringLiteral("--xsd"),
+        xsdPath,
+        QStringLiteral("--max-errors"),
+        QStringLiteral("16")
+    });
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    if (!process.waitForStarted(5000))
+        return true;
+    if (!process.waitForFinished(180000)) {
+        process.kill();
+        process.waitForFinished(5000);
+        if (error)
+            *error = QStringLiteral("XSD catalog validation timed out before archive save.");
+        return false;
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        if (error) {
+            const QString output = compactProcessOutput(QString::fromUtf8(process.readAll()));
+            *error = QStringLiteral("XSD catalog validation failed before archive save:\n%1").arg(output);
+        }
+        return false;
+    }
+    return true;
+}
+
+QString normalizedArchiveName(QString name)
+{
+    return QDir::cleanPath(name).replace('\\', '/').toCaseFolded();
+}
+
+QString replacementKeyForArchiveEntry(const QHash<QString, QByteArray> &replacements, const QString &archiveEntry)
+{
+    const QString wanted = normalizedArchiveName(archiveEntry);
+    for (auto it = replacements.cbegin(); it != replacements.cend(); ++it) {
+        if (normalizedArchiveName(it.key()) == wanted)
+            return it.key();
+    }
+    return {};
+}
+
+bool addCatalogEnumRepairs(const Sc2Archive &archive,
+                           QHash<QString, QByteArray> *replacements,
+                           int *repairCount,
+                           QString *error)
+{
+    if (repairCount)
+        *repairCount = 0;
+    if (!replacements)
+        return true;
+
+    int total = 0;
+    for (const QString &entry : archive.gameDataXmlEntries()) {
+        const QString existingKey = replacementKeyForArchiveEntry(*replacements, entry);
+        QByteArray bytes;
+        const QString replacementKey = existingKey.isEmpty() ? entry : existingKey;
+        if (existingKey.isEmpty()) {
+            if (!archive.readEntry(entry, &bytes, error))
+                return false;
+        } else {
+            bytes = replacements->value(existingKey);
+        }
+
+        int changes = 0;
+        if (!sc2dh::repairKnownCatalogEnumDamage(&bytes, &changes, error))
+            return false;
+        if (changes <= 0)
+            continue;
+        replacements->insert(replacementKey, bytes);
+        total += changes;
+    }
+
+    if (repairCount)
+        *repairCount = total;
     return true;
 }
 
@@ -374,6 +508,33 @@ bool materializeArchiveXml(const Sc2Archive &archive, const QString &tempRoot,
     return writeBytes(QDir(tempRoot).absoluteFilePath(QStringLiteral("(listfile)")), listfileBytes, error);
 }
 
+QStringList materializeArchiveReferenceEntries(const Sc2Archive &archive, const QString &tempRoot, QString *error)
+{
+    QStringList materialized;
+    for (const QString &entry : archive.allEntries()) {
+        if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive)
+            || !isArchiveReferenceEntry(entry))
+            continue;
+        QByteArray bytes;
+        if (!archive.readEntry(entry, &bytes, error)) {
+            if (error)
+                *error = QStringLiteral("%1: %2").arg(entry, *error);
+            return {};
+        }
+        const QString relative = QDir::cleanPath(entry).replace('\\', '/');
+        if (relative.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(relative)) {
+            if (error)
+                *error = QStringLiteral("Unsafe archive entry path: %1").arg(entry);
+            return {};
+        }
+        if (!writeBytes(QDir(tempRoot).absoluteFilePath(relative), bytes, error))
+            return {};
+        materialized << relative;
+    }
+    materialized.removeDuplicates();
+    return materialized;
+}
+
 bool analyzeWorkspace(const QString &workspace, AnalysisResult *analysis, QString *error)
 {
     FolderAnalyzer analyzer;
@@ -485,13 +646,16 @@ int usableRenameItemCount(const RenamePlan &plan)
 }
 
 bool applyRenamePlans(QString workspace, AnalysisResult *analysis,
-                      const ArchiveReferenceStats &referenceStats, MapReport *report,
+                      const ArchiveReferenceStats &referenceStats,
+                      const QStringList &archiveReferenceEntries,
+                      MapReport *report,
                       QStringList *changedFiles, QString *error)
 {
     if (!analysis || !report || !changedFiles)
         return false;
 
     QSet<QString> skippedArchiveRoots;
+    bool appliedAnyRenamePass = false;
     for (int pass = 0; pass < kRenamePassLimit; ++pass) {
         const QVector<UnitFamily> families = UnitFamilyDetector().detect(*analysis);
         RenamePlan combined;
@@ -507,7 +671,7 @@ bool applyRenamePlans(QString workspace, AnalysisResult *analysis,
             RenamePlan plan = StandardNamePlanner().plan(*analysis, family, family.rootId);
             if (!plan.valid || usableRenameItemCount(plan) == 0)
                 continue;
-            if (hasArchiveReferencedRenameItem(plan, referenceStats.referencedIds)) {
+            if (!referenceStats.complete && hasArchiveReferencedRenameItem(plan, referenceStats.referencedIds)) {
                 if (!skippedArchiveRoots.contains(family.rootId)) {
                     skippedArchiveRoots.insert(family.rootId);
                     ++report->renameSkippedArchiveRefs;
@@ -548,17 +712,31 @@ bool applyRenamePlans(QString workspace, AnalysisResult *analysis,
                 *error = result.error;
             return false;
         }
+        appliedAnyRenamePass = true;
         report->renamePlansApplied += batchFamilyPlans;
         report->idsRenamed += result.identitiesRenamed;
         report->referencesUpdated += result.referencesUpdated;
         changedFiles->append(result.changedFiles);
         changedFiles->removeDuplicates();
 
+        sc2dh::ArchiveReferenceRewriteReport archiveRewrite;
+        if (!sc2dh::rewriteArchiveReferenceFiles(workspace, archiveReferenceEntries,
+                                                 result.appliedRenames, &archiveRewrite, error)) {
+            return false;
+        }
+        if (archiveRewrite.replacements > 0) {
+            report->referencesUpdated += archiveRewrite.replacements;
+            changedFiles->append(archiveRewrite.changedFiles);
+            changedFiles->removeDuplicates();
+        }
+
         if (!analyzeWorkspace(workspace, analysis, error))
             return false;
         applyArchiveReferenceSafety(analysis, referenceStats);
     }
 
+    if (appliedAnyRenamePass)
+        return true;
     if (error)
         *error = QStringLiteral("Rename safety limit exceeded.");
     return false;
@@ -829,6 +1007,11 @@ bool commitArchiveChanges(const QString &archivePath, const QString &tempRoot,
         replacements.insert(archiveName, replacementBytes);
     }
 
+    int enumRepairCount = 0;
+    if (!addCatalogEnumRepairs(archive, &replacements, &enumRepairCount, error))
+        return false;
+    Q_UNUSED(enumRepairCount);
+
     BackupManager backupManager;
     QString backup;
     if (!backupManager.createBackup(archivePath, &backup, error))
@@ -837,6 +1020,10 @@ bool commitArchiveChanges(const QString &archivePath, const QString &tempRoot,
     const QString pending = archivePath + QStringLiteral(".sc2dh.pending");
     QFile::remove(pending);
     if (!archive.saveCopy(pending, replacements, {}, error)) {
+        QFile::remove(pending);
+        return false;
+    }
+    if (!validateArchiveCatalogSchema(pending, error)) {
         QFile::remove(pending);
         return false;
     }
@@ -964,6 +1151,12 @@ bool optimizeMap(const QString &mapPath, MapReport *report)
                     .arg(referenceStats.complete ? 1 : 0));
     report->archiveReferenceEntriesScanned = referenceStats.entriesScanned;
     report->archiveReferenceIdsFound = referenceStats.idsFound;
+    error.clear();
+    QStringList archiveReferenceEntries = materializeArchiveReferenceEntries(archive, workspace.path(), &error);
+    if (!error.isEmpty() && archiveReferenceEntries.isEmpty()) {
+        report->error = error;
+        return false;
+    }
     applyArchiveReferenceSafety(&analysis, referenceStats);
     report->objectsBefore = analysis.totalDataNodes();
     report->safeUnusedBefore = safeUnusedRemovalCount(analysis);
@@ -1029,7 +1222,7 @@ bool optimizeMap(const QString &mapPath, MapReport *report)
     }
 
     logProgress(report->mapPath, QStringLiteral("rename_start"));
-    if (!applyRenamePlans(workspace.path(), &analysis, referenceStats, report,
+    if (!applyRenamePlans(workspace.path(), &analysis, referenceStats, archiveReferenceEntries, report,
                           &changedFiles, &error)) {
         report->error = error;
         return false;

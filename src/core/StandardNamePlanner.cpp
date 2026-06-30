@@ -1,5 +1,7 @@
 #include "core/StandardNamePlanner.h"
 
+#include "core/CatalogProtection.h"
+
 #include <QHash>
 #include <QRegularExpression>
 
@@ -9,9 +11,14 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
     RenamePlan result;
     result.family = family;
     result.targetRootId = targetRootId.trimmed();
+    if (result.targetRootId.endsWith(QStringLiteral("@Unit"), Qt::CaseInsensitive))
+        result.targetRootId.chop(5);
     const QRegularExpression validId(QStringLiteral("^[A-Za-z][A-Za-z0-9_]*$"));
     if (!validId.match(result.targetRootId).hasMatch() || result.targetRootId.contains(QLatin1Char('@'))) {
         result.conflicts << QStringLiteral("Target root ID must be a real XML ID without @.");
+    }
+    if (sc2dh::isReservedCatalogToken(result.targetRootId) || sc2dh::isKnownBlizzardCatalogId(result.targetRootId)) {
+        result.conflicts << QStringLiteral("Target root ID is a reserved SC2/Blizzard catalog token and cannot be renamed automatically.");
     }
     QSet<QString> existingIds;
     for (const DataNode &node : analysis.nodes) existingIds.insert(node.id);
@@ -23,6 +30,27 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
     for (const UnitFamilyObject &object : family.objects) {
         const DataNode &node = analysis.nodes[object.nodeIndex];
         if (!includedNodeIndices.isEmpty() && !includedNodeIndices.contains(object.nodeIndex)) continue;
+        if (sc2dh::isProtectedCatalogNode(node)) {
+            UnitFamilyObject manual = object;
+            manual.confidence = QStringLiteral("Low");
+            manual.reason += QStringLiteral("; protected standard/dependency catalog object");
+            result.manualReview << manual;
+            continue;
+        }
+        if (sc2dh::isReservedCatalogToken(node.id)) {
+            UnitFamilyObject manual = object;
+            manual.confidence = QStringLiteral("Low");
+            manual.reason += QStringLiteral("; reserved SC2 engine token, not a safe object identity for automatic rename");
+            result.manualReview << manual;
+            continue;
+        }
+        if (!sc2dh::isSafeAutomaticObjectId(node.id)) {
+            UnitFamilyObject manual = object;
+            manual.confidence = QStringLiteral("Low");
+            manual.reason += QStringLiteral("; object ID is numeric or not safe for automatic reference rewriting");
+            result.manualReview << manual;
+            continue;
+        }
         if (object.role == UnitFamilyRole::ManualReview || object.role == UnitFamilyRole::Other) {
             result.manualReview << object;
             continue;
@@ -30,7 +58,9 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         const QString role = unitFamilyRoleName(object.role);
         QString expected;
         if (object.nodeIndex == family.rootNodeIndex) {
-            expected = result.targetRootId;
+            expected = object.role == UnitFamilyRole::Unit
+                ? result.targetRootId + QLatin1Char('@') + role
+                : result.targetRootId;
         } else {
             const int ordinal = ++roleOrdinals[object.role];
             QString suffix;

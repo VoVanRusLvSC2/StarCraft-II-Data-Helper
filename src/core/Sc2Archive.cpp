@@ -9,7 +9,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QCoreApplication>
-#include <QRegularExpression>
 #include <QProcess>
 #include <QSaveFile>
 #include <QStandardPaths>
@@ -544,24 +543,17 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         return false;
     }
     for (auto it = replacementEntries.cbegin(); it != replacementEntries.cend(); ++it) {
+        // The MPQ listfile is managed by StormLib when files are added or
+        // removed. We intentionally do not write it above, so verifying it as
+        // a normal payload creates false content-mismatch failures.
+        if (it.key().compare(QStringLiteral("(listfile)"), Qt::CaseInsensitive) == 0) continue;
         QByteArray actual;
         if (!verification.readEntry(it.key(), &actual, &verifyError)) {
             QFile::remove(tempPath);
             if (errorMessage) *errorMessage = QStringLiteral("Rewritten entry verification failed: %1 (%2)").arg(it.key(), verifyError);
             return false;
         }
-        bool contentMatches = actual == it.value();
-        if (it.key().compare(QStringLiteral("(listfile)"), Qt::CaseInsensitive) == 0) {
-            const QString actualText = QString::fromUtf8(actual).replace('/', '\\');
-            contentMatches = true;
-            for (const QString &line : QString::fromUtf8(it.value()).split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts)) {
-                if (!actualText.contains(line.trimmed().replace('/', '\\'), Qt::CaseInsensitive)) {
-                    contentMatches = false;
-                    break;
-                }
-            }
-        }
-        if (!contentMatches) {
+        if (actual != it.value()) {
             QFile::remove(tempPath);
             if (errorMessage) *errorMessage = QStringLiteral("Rewritten entry verification failed: %1 (content mismatch)").arg(it.key());
             return false;
@@ -788,6 +780,9 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         return false;
     }
     for (auto it = replacementEntries.cbegin(); it != replacementEntries.cend(); ++it) {
+        // MPQEditor owns the special listfile too. It is not written as a
+        // replacement entry above, so do not verify it as if it were normal XML.
+        if (it.key().compare(QStringLiteral("(listfile)"), Qt::CaseInsensitive) == 0) continue;
         QByteArray actual;
         bool matched = false;
         QElapsedTimer wait;
@@ -795,20 +790,8 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         do {
             verifyError.clear();
             bool contentMatches = false;
-            if (verification.readEntry(it.key(), &actual, &verifyError)) {
-                if (it.key().compare(QStringLiteral("(listfile)"), Qt::CaseInsensitive) == 0) {
-                    const QString actualText = QString::fromUtf8(actual).replace('/', '\\');
-                    contentMatches = true;
-                    for (const QString &line : QString::fromUtf8(it.value()).split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts)) {
-                        if (!actualText.contains(line.trimmed().replace('/', '\\'), Qt::CaseInsensitive)) {
-                            contentMatches = false;
-                            break;
-                        }
-                    }
-                } else {
-                    contentMatches = actual == it.value();
-                }
-            }
+            if (verification.readEntry(it.key(), &actual, &verifyError))
+                contentMatches = actual == it.value();
             if (contentMatches) {
                 matched = true;
                 break;

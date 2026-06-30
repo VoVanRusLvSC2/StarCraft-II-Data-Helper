@@ -52,6 +52,13 @@ target_sources(SC2DataHelper PRIVATE
     src/core/XmlLoader.h
     src/core/XmlLoader.cpp
     src/core/DataNode.h
+    src/core/CatalogProtection.h
+    src/core/CatalogEnumRepair.h
+    src/core/CatalogEnumRepair.cpp
+    src/core/CatalogLinkSchema.h
+    src/core/CatalogLinkSchema.cpp
+    src/core/ArchiveReferenceRewriter.h
+    src/core/ArchiveReferenceRewriter.cpp
     src/core/AnalysisModels.h
     src/core/AnalysisModels.cpp
     src/core/FolderAnalyzer.h
@@ -117,6 +124,10 @@ target_sources(SC2DataHelper PRIVATE
     resources/resources.qrc
 )
 
+if (WIN32)
+    target_sources(SC2DataHelper PRIVATE resources/app_icon.rc)
+endif()
+
 target_include_directories(SC2DataHelper PRIVATE src)
 
 target_link_libraries(SC2DataHelper PRIVATE
@@ -151,12 +162,17 @@ else()
 endif()
 
 set(SC2DH_RUNTIME_RESOURCES_DIR ${CMAKE_CURRENT_BINARY_DIR}/resources)
+set(SC2DH_RUNTIME_SCRIPTS_DIR ${CMAKE_CURRENT_BINARY_DIR}/scripts)
 file(MAKE_DIRECTORY "${SC2DH_RUNTIME_RESOURCES_DIR}/styles")
 file(MAKE_DIRECTORY "${SC2DH_RUNTIME_RESOURCES_DIR}/config")
+file(MAKE_DIRECTORY "${SC2DH_RUNTIME_SCRIPTS_DIR}")
 
 configure_file(resources/styles/dark.qss "${SC2DH_RUNTIME_RESOURCES_DIR}/styles/dark.qss" COPYONLY)
+configure_file(resources/catalog_link_schema.tsv "${SC2DH_RUNTIME_RESOURCES_DIR}/catalog_link_schema.tsv" COPYONLY)
+configure_file(resources/catalogsData.xsd "${SC2DH_RUNTIME_RESOURCES_DIR}/catalogsData.xsd" COPYONLY)
 configure_file(resources/config/rules.json "${SC2DH_RUNTIME_RESOURCES_DIR}/config/rules.json" COPYONLY)
 configure_file(resources/config/whitelist.json "${SC2DH_RUNTIME_RESOURCES_DIR}/config/whitelist.json" COPYONLY)
+configure_file(scripts/validate_sc2_catalogs.py "${SC2DH_RUNTIME_SCRIPTS_DIR}/validate_sc2_catalogs.py" COPYONLY)
 
 install(TARGETS SC2DataHelper)
 
@@ -165,6 +181,9 @@ enable_testing()
 add_executable(SC2DataHelperTests
     tests/test_core.cpp
     src/core/AnalysisModels.cpp
+    src/core/CatalogEnumRepair.cpp
+    src/core/CatalogLinkSchema.cpp
+    src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
     src/core/BackupManager.cpp
     src/core/Sc2Archive.cpp
@@ -208,8 +227,12 @@ add_test(NAME SC2DataHelperTests COMMAND SC2DataHelperTests)
 add_executable(SC2OptimizeFolder
     src/tools/OptimizeFolder.cpp
     src/core/AnalysisModels.cpp
+    src/core/CatalogLinkSchema.cpp
+    src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
     src/core/BackupManager.cpp
+    src/core/Sc2Archive.cpp
+    src/core/CatalogEnumRepair.cpp
     src/core/XmlLoader.cpp
     src/core/DuplicateFinder.cpp
     src/core/MergeService.cpp
@@ -220,15 +243,30 @@ target_include_directories(SC2OptimizeFolder PRIVATE src)
 target_link_libraries(SC2OptimizeFolder PRIVATE
     Qt6::Widgets
     pugixml
+    StormLib::storm
     nlohmann_json::nlohmann_json
 )
+target_compile_definitions(SC2OptimizeFolder PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
+
+if (SC2DH_HAVE_LIBZIP)
+    target_compile_definitions(SC2OptimizeFolder PRIVATE SC2DH_USE_LIBZIP=1)
+    if (TARGET libzip::zip)
+        target_link_libraries(SC2OptimizeFolder PRIVATE libzip::zip)
+    else()
+        target_link_libraries(SC2OptimizeFolder PRIVATE ${LIBZIP_LIBRARY})
+        target_include_directories(SC2OptimizeFolder PRIVATE ${LIBZIP_INCLUDE_DIR})
+    endif()
+endif()
 
 add_executable(SC2DataCollectionProbe
     src/tools/DataCollectionProbe.cpp
     src/core/AnalysisModels.cpp
+    src/core/CatalogLinkSchema.cpp
+    src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
     src/core/BackupManager.cpp
     src/core/Sc2Archive.cpp
+    src/core/CatalogEnumRepair.cpp
     src/core/XmlLoader.cpp
     src/core/DuplicateFinder.cpp
     src/core/MergeService.cpp
@@ -262,9 +300,12 @@ endif()
 add_executable(SC2OptimizeMaps
     src/tools/OptimizeMaps.cpp
     src/core/AnalysisModels.cpp
+    src/core/CatalogLinkSchema.cpp
+    src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
     src/core/BackupManager.cpp
     src/core/Sc2Archive.cpp
+    src/core/CatalogEnumRepair.cpp
     src/core/XmlLoader.cpp
     src/core/DuplicateFinder.cpp
     src/core/MergeService.cpp
@@ -292,5 +333,29 @@ if (SC2DH_HAVE_LIBZIP)
     else()
         target_link_libraries(SC2OptimizeMaps PRIVATE ${LIBZIP_LIBRARY})
         target_include_directories(SC2OptimizeMaps PRIVATE ${LIBZIP_INCLUDE_DIR})
+    endif()
+endif()
+
+add_executable(SC2RepairMapEnums
+    src/tools/RepairMapEnums.cpp
+    src/core/CatalogEnumRepair.cpp
+    src/core/Sc2Archive.cpp
+)
+target_include_directories(SC2RepairMapEnums PRIVATE src)
+target_link_libraries(SC2RepairMapEnums PRIVATE
+    Qt6::Core
+    pugixml
+    StormLib::storm
+    nlohmann_json::nlohmann_json
+)
+target_compile_definitions(SC2RepairMapEnums PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
+
+if (SC2DH_HAVE_LIBZIP)
+    target_compile_definitions(SC2RepairMapEnums PRIVATE SC2DH_USE_LIBZIP=1)
+    if (TARGET libzip::zip)
+        target_link_libraries(SC2RepairMapEnums PRIVATE libzip::zip)
+    else()
+        target_link_libraries(SC2RepairMapEnums PRIVATE ${LIBZIP_LIBRARY})
+        target_include_directories(SC2RepairMapEnums PRIVATE ${LIBZIP_INCLUDE_DIR})
     endif()
 endif()

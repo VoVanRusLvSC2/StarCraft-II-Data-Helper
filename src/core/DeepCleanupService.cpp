@@ -1,6 +1,7 @@
 #include "core/DeepCleanupService.h"
 
 #include "core/BackupManager.h"
+#include "core/CatalogProtection.h"
 #include "core/Sc2Archive.h"
 #include "core/XmlLoader.h"
 
@@ -66,13 +67,41 @@ bool isLocalizationFile(const QString &relative);
 
 bool isEditorManagedMapFile(const QString &relative)
 {
-    const QString fileName = QFileInfo(QDir::cleanPath(relative).replace('\\', '/')).fileName().toLower();
+    const QString normalized = QDir::cleanPath(relative).replace('\\', '/').toLower();
+    const QString fileName = QFileInfo(normalized).fileName().toLower();
     static const QSet<QString> fileNames = {
         QStringLiteral("minimap.tga"),
         QStringLiteral("lightingmap.tga"),
-        QStringLiteral("preloadassetdb.txt")
+        QStringLiteral("preloadassetdb.txt"),
+        QStringLiteral("descindex.sc2layout"),
+        QStringLiteral("descindex.version")
     };
-    return fileNames.contains(fileName);
+    if (fileNames.contains(fileName))
+        return true;
+    return normalized == QStringLiteral("base.sc2data/ui/layout/descindex.sc2layout")
+        || normalized == QStringLiteral("base.sc2data/ui/layout/descindex.version");
+}
+
+bool isMapPreviewImage(const QFileInfo &info, const QString &relative)
+{
+    const QString normalized = QDir::cleanPath(relative).replace('\\', '/').toLower();
+    const QString fileName = QFileInfo(normalized).fileName().toLower();
+    static const QSet<QString> imageExtensions = {
+        QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("png"),
+        QStringLiteral("tga"), QStringLiteral("bmp"), QStringLiteral("dds")
+    };
+    if (!imageExtensions.contains(info.suffix().toLower()))
+        return false;
+    return fileName.contains(QStringLiteral("thumbnail"))
+        || fileName.contains(QStringLiteral("thumnail"))
+        || fileName.contains(QStringLiteral("screenshot"))
+        || fileName.contains(QStringLiteral("screen_shot"))
+        || fileName.contains(QStringLiteral("preview"))
+        || fileName.contains(QStringLiteral("loading"))
+        || normalized.contains(QStringLiteral("/screenshots/"))
+        || normalized.contains(QStringLiteral("/screenshot/"))
+        || normalized.contains(QStringLiteral("/preview/"))
+        || normalized.contains(QStringLiteral("/loading/"));
 }
 
 bool isAssetFile(const QFileInfo &info, const QString &relative)
@@ -86,7 +115,8 @@ bool isAssetFile(const QFileInfo &info, const QString &relative)
     };
     if (info.exists() && !info.isFile())
         return false;
-    if (isBackupOrTrashName(relative) || isLocalizationFile(relative) || isEditorManagedMapFile(relative))
+    if (isBackupOrTrashName(relative) || isLocalizationFile(relative) || isEditorManagedMapFile(relative)
+        || isMapPreviewImage(info, relative))
         return false;
     return extensions.contains(info.suffix().toLower());
 }
@@ -251,6 +281,37 @@ bool actorEventLike(const pugi::xml_node &node)
     return name.contains(QStringLiteral("event")) || name == QStringLiteral("on") || name.contains(QStringLiteral("term"));
 }
 
+bool isTrueAttribute(const pugi::xml_node &node, const char *name)
+{
+    const QString value = QString::fromUtf8(node.attribute(name).value()).trimmed().toLower();
+    return value == QStringLiteral("1") || value == QStringLiteral("true");
+}
+
+QString brokenActorEventReason(const pugi::xml_node &node)
+{
+    if (isTrueAttribute(node, "removed"))
+        return {};
+
+    const QString nodeName = QString::fromUtf8(node.name()).toLower();
+    if (nodeName != QStringLiteral("on"))
+        return {};
+
+    const pugi::xml_attribute termsAttr = node.attribute("Terms");
+    const pugi::xml_attribute sendAttr = node.attribute("Send");
+    const QString terms = QString::fromUtf8(termsAttr.value()).trimmed();
+    const QString send = QString::fromUtf8(sendAttr.value()).trimmed();
+    const bool missingTerms = !termsAttr || terms.isEmpty();
+    const bool missingSend = !sendAttr || send.isEmpty();
+
+    if (missingTerms && missingSend)
+        return QStringLiteral("Actor event has no triggering Terms and no Send action.");
+    if (missingSend)
+        return QStringLiteral("Actor event has triggering Terms but no Send action.");
+    if (missingTerms)
+        return QStringLiteral("Actor event has a Send action but no triggering Terms.");
+    return {};
+}
+
 void appendActorEventCandidates(const AnalysisResult &analysis,
                                 const QSet<QString> &ids,
                                 QVector<DeepCleanupCandidate> *candidates)
@@ -270,6 +331,22 @@ void appendActorEventCandidates(const AnalysisResult &analysis,
                 if (child.type() != pugi::node_element || !actorEventLike(child))
                     continue;
                 const QString xml = serializeNode(child);
+                const QString structuralReason = brokenActorEventReason(child);
+                if (!structuralReason.isEmpty()) {
+                    DeepCleanupCandidate candidate;
+                    candidate.index = candidates->size();
+                    candidate.kind = DeepCleanupKind::BrokenActorEvent;
+                    candidate.action = DeepCleanupAction::RemoveXmlNode;
+                    candidate.state = CandidateState::Safe;
+                    candidate.recommended = true;
+                    candidate.filePath = it.key();
+                    candidate.label = QStringLiteral("%1 event in %2").arg(QString::fromUtf8(child.name()), node.id);
+                    candidate.xmlLocation = buildPathFromNode(child);
+                    candidate.reason = structuralReason;
+                    candidate.detail = xml.left(600);
+                    candidates->append(candidate);
+                    continue;
+                }
                 const QStringList refs = typedReferences(xml);
                 if (refs.isEmpty())
                     continue;
@@ -279,6 +356,7 @@ void appendActorEventCandidates(const AnalysisResult &analysis,
                         ++existing;
                 DeepCleanupCandidate candidate;
                 candidate.kind = DeepCleanupKind::BrokenActorEvent;
+                candidate.index = candidates->size();
                 candidate.filePath = it.key();
                 candidate.label = QStringLiteral("%1 event in %2").arg(QString::fromUtf8(child.name()), node.id);
                 candidate.xmlLocation = buildPathFromNode(child);
@@ -463,6 +541,8 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
     for (const DataNode &node : analysis->nodes)
         nodesByTypeAndId.insert(node.elementName.toLower() + QChar(0x1f) + node.id.toLower(), &node);
     for (const DataNode &node : analysis->nodes) {
+        if (sc2dh::isProtectedCatalogNode(node))
+            continue;
         const QString parentId = node.attributes.value(QStringLiteral("parent"));
         if (parentId.isEmpty())
             continue;

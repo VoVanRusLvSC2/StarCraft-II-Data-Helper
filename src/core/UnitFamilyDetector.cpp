@@ -1,6 +1,7 @@
 #include "core/UnitFamilyDetector.h"
 
 #include "core/DataCollectionAliasMapper.h"
+#include "core/CatalogProtection.h"
 
 #include <QHash>
 #include <QQueue>
@@ -25,11 +26,13 @@ void traceCollectionDetect(const QString &stage, const QString &detail = {})
 
 bool isCatalogType(const QString &type)
 {
+    if (sc2dh::isEditorRuntimeCatalogType(type))
+        return false;
     static const QStringList types = {QStringLiteral("CActor"), QStringLiteral("CModel"), QStringLiteral("CSound"),
         QStringLiteral("CButton"), QStringLiteral("CWeapon"), QStringLiteral("CAbil"), QStringLiteral("CEffect"),
         QStringLiteral("CBehavior"), QStringLiteral("CValidator"), QStringLiteral("CRequirement"), QStringLiteral("CUpgrade"),
         QStringLiteral("CMover"), QStringLiteral("CTurret"), QStringLiteral("CFootprint"), QStringLiteral("CSiteOp"),
-        QStringLiteral("CBeam"), QStringLiteral("CTexture")};
+        QStringLiteral("CBeam")};
     for (const QString &prefix : types) if (type.startsWith(prefix, Qt::CaseInsensitive)) return true;
     return false;
 }
@@ -71,6 +74,8 @@ UnitFamilyRole roleFromNode(const DataNode &node, const QString &root, QString *
     const QString id = node.id.toLower();
     const QString rootLower = root.toLower();
     const auto contains = [&id](const char *text) { return id.contains(QString::fromLatin1(text), Qt::CaseInsensitive); };
+    if (sc2dh::isEditorRuntimeCatalogType(node.elementName))
+        return UnitFamilyRole::ManualReview;
     if (type == QStringLiteral("cunit")) return UnitFamilyRole::Unit;
     if (type.startsWith(QStringLiteral("cactorunit"))) {
         if (node.attributes.value(QStringLiteral("unitName")) == root || node.referencedIds.contains(root)) {
@@ -111,7 +116,6 @@ UnitFamilyRole roleFromNode(const DataNode &node, const QString &root, QString *
     if (type.startsWith(QStringLiteral("cfootprint"))) return UnitFamilyRole::Footprint;
     if (type.startsWith(QStringLiteral("csiteop"))) return UnitFamilyRole::SiteOp;
     if (type.startsWith(QStringLiteral("cbeam"))) return UnitFamilyRole::Beam;
-    if (type.startsWith(QStringLiteral("ctexture"))) return UnitFamilyRole::Texture;
     if (id.startsWith(rootLower) || id.endsWith(rootLower)) return UnitFamilyRole::Other;
     return UnitFamilyRole::ManualReview;
 }

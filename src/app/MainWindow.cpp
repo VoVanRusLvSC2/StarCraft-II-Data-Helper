@@ -14,6 +14,8 @@
 #include "ui/RenameIdsPage.h"
 #include "ui/UnusedPage.h"
 #include "ui/XmlSourcePage.h"
+#include "core/ArchiveReferenceRewriter.h"
+#include "core/CatalogEnumRepair.h"
 #include "core/Sc2Archive.h"
 #include "core/DataCollectionPreservation.h"
 #include "core/DeepCleanupService.h"
@@ -53,6 +55,8 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSaveFile>
+#include <QScrollArea>
+#include <QScreen>
 #include <QStandardPaths>
 #include <QAbstractAnimation>
 #include <QPropertyAnimation>
@@ -73,6 +77,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPixmap>
+#include <QProcess>
 #include <QSizePolicy>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -138,6 +143,373 @@ namespace
                                 : QStringLiteral("%1 file").arg(suffix.toUpper());
     }
 
+    QStringList archiveReferenceFilesForWorkspace(const AnalysisResult &analysis, const QString &rootFolder)
+    {
+        QStringList files;
+        const QDir root(rootFolder);
+        for (const ScannedFileInfo &file : analysis.scannedFiles)
+        {
+            if (file.isXml || !file.isSc2DataLike)
+                continue;
+            QString relative = root.relativeFilePath(file.filePath);
+            relative = QDir::cleanPath(relative).replace('\\', '/');
+            if (!relative.startsWith(QStringLiteral("../")) && !QDir::isAbsolutePath(relative))
+                files << relative;
+        }
+        files.removeDuplicates();
+        return files;
+    }
+
+    QString firstExistingFile(const QStringList &candidates)
+    {
+        for (const QString &candidate : candidates)
+        {
+            const QString cleaned = QDir::cleanPath(candidate);
+            if (QFileInfo::exists(cleaned) && QFileInfo(cleaned).isFile())
+                return cleaned;
+        }
+        return {};
+    }
+
+    QString schemaValidatorScriptPath()
+    {
+        const QString appDir = QCoreApplication::applicationDirPath();
+        return firstExistingFile({
+            QDir(appDir).absoluteFilePath(QStringLiteral("scripts/validate_sc2_catalogs.py")),
+            QDir(appDir).absoluteFilePath(QStringLiteral("../scripts/validate_sc2_catalogs.py")),
+            QDir(appDir).absoluteFilePath(QStringLiteral("../../scripts/validate_sc2_catalogs.py")),
+            QDir::current().absoluteFilePath(QStringLiteral("scripts/validate_sc2_catalogs.py"))
+        });
+    }
+
+    QString catalogXsdPath()
+    {
+        const QString appDir = QCoreApplication::applicationDirPath();
+        return firstExistingFile({
+            QDir(appDir).absoluteFilePath(QStringLiteral("resources/catalogsData.xsd")),
+            QDir(appDir).absoluteFilePath(QStringLiteral("../resources/catalogsData.xsd")),
+            QDir(appDir).absoluteFilePath(QStringLiteral("../../resources/catalogsData.xsd")),
+            QDir::current().absoluteFilePath(QStringLiteral("resources/catalogsData.xsd"))
+        });
+    }
+
+    QString compactProcessOutput(QString text, int maxChars = 2400)
+    {
+        text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+        text.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+        text = text.trimmed();
+        if (text.size() > maxChars)
+            text = text.left(maxChars) + QStringLiteral("\n...");
+        return text;
+    }
+
+    QString normalizedArchiveName(QString name)
+    {
+        return QDir::cleanPath(name).replace('\\', '/').toCaseFolded();
+    }
+
+    QString replacementKeyForArchiveEntry(const QHash<QString, QByteArray> &replacements, const QString &archiveEntry)
+    {
+        const QString wanted = normalizedArchiveName(archiveEntry);
+        for (auto it = replacements.cbegin(); it != replacements.cend(); ++it) {
+            if (normalizedArchiveName(it.key()) == wanted)
+                return it.key();
+        }
+        return {};
+    }
+
+    bool isRemovedArchiveEntry(const QStringList &removedEntries, const QString &archiveEntry)
+    {
+        const QString wanted = normalizedArchiveName(archiveEntry);
+        for (const QString &removed : removedEntries) {
+            if (normalizedArchiveName(removed) == wanted)
+                return true;
+        }
+        return false;
+    }
+
+    bool addCatalogEnumRepairs(const Sc2Archive &archive,
+                               QHash<QString, QByteArray> *replacements,
+                               const QStringList &removedEntries,
+                               int *repairCount,
+                               QString *errorMessage)
+    {
+        if (repairCount)
+            *repairCount = 0;
+        if (!replacements)
+            return true;
+
+        int total = 0;
+        for (const QString &entry : archive.gameDataXmlEntries()) {
+            if (isRemovedArchiveEntry(removedEntries, entry))
+                continue;
+
+            const QString existingKey = replacementKeyForArchiveEntry(*replacements, entry);
+            QByteArray bytes;
+            QString replacementKey = existingKey.isEmpty() ? entry : existingKey;
+            if (existingKey.isEmpty()) {
+                if (!archive.readEntry(entry, &bytes, errorMessage))
+                    return false;
+            } else {
+                bytes = replacements->value(existingKey);
+            }
+
+            int changes = 0;
+            if (!sc2dh::repairKnownCatalogEnumDamage(&bytes, &changes, errorMessage))
+                return false;
+            if (changes <= 0)
+                continue;
+            replacements->insert(replacementKey, bytes);
+            total += changes;
+        }
+
+        if (repairCount)
+            *repairCount = total;
+        return true;
+    }
+
+    class Sc2DialogDragFilter final : public QObject
+    {
+    public:
+        Sc2DialogDragFilter(QDialog *dialog, QPoint *dragPosition, bool *dragging)
+            : QObject(dialog), m_dialog(dialog), m_dragPosition(dragPosition), m_dragging(dragging)
+        {
+        }
+
+    protected:
+        bool eventFilter(QObject *watched, QEvent *event) override
+        {
+            Q_UNUSED(watched);
+            if (!m_dialog || !m_dragPosition || !m_dragging)
+                return false;
+            if (event->type() == QEvent::MouseButtonPress) {
+                auto *mouse = static_cast<QMouseEvent *>(event);
+                if (mouse->button() == Qt::LeftButton) {
+                    *m_dragPosition = mouse->globalPosition().toPoint() - m_dialog->frameGeometry().topLeft();
+                    *m_dragging = true;
+                    return true;
+                }
+            } else if (event->type() == QEvent::MouseMove) {
+                auto *mouse = static_cast<QMouseEvent *>(event);
+                if (*m_dragging && (mouse->buttons() & Qt::LeftButton)) {
+                    m_dialog->move(mouse->globalPosition().toPoint() - *m_dragPosition);
+                    return true;
+                }
+            } else if (event->type() == QEvent::MouseButtonRelease) {
+                *m_dragging = false;
+            }
+            return false;
+        }
+
+    private:
+        QDialog *m_dialog = nullptr;
+        QPoint *m_dragPosition = nullptr;
+        bool *m_dragging = nullptr;
+    };
+
+    QMessageBox::StandardButton showSc2MessageDialog(QWidget *parent,
+                                                     QMessageBox::Icon icon,
+                                                     const QString &title,
+                                                     const QString &message,
+                                                     QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+                                                     int minimumWidth = 620)
+    {
+        QDialog dialog(parent);
+        dialog.setObjectName(QStringLiteral("sc2MessageDialog"));
+        dialog.setWindowTitle(title);
+        dialog.setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
+        dialog.setWindowFlags((dialog.windowFlags() | Qt::FramelessWindowHint) & ~Qt::WindowContextHelpButtonHint);
+        dialog.setModal(true);
+        dialog.setMinimumWidth(minimumWidth);
+
+        auto *layout = new QVBoxLayout(&dialog);
+        layout->setContentsMargins(12, 10, 12, 12);
+        layout->setSpacing(10);
+
+        auto *titleBar = new QFrame(&dialog);
+        titleBar->setObjectName(QStringLiteral("sc2MessageTitleBar"));
+        auto *titleLayout = new QHBoxLayout(titleBar);
+        titleLayout->setContentsMargins(8, 4, 4, 4);
+        titleLayout->setSpacing(8);
+        auto *appIcon = new QLabel(titleBar);
+        appIcon->setPixmap(QPixmap(QStringLiteral(":/icons/Icon.png")).scaled(18, 18, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        auto *titleLabel = new QLabel(title, titleBar);
+        titleLabel->setObjectName(QStringLiteral("sc2MessageTitle"));
+        auto *closeButton = new QPushButton(QStringLiteral("X"), titleBar);
+        closeButton->setObjectName(QStringLiteral("sc2MessageCloseButton"));
+        closeButton->setFixedSize(38, 32);
+        closeButton->setFocusPolicy(Qt::NoFocus);
+        titleLayout->addWidget(appIcon);
+        titleLayout->addWidget(titleLabel, 1);
+        titleLayout->addWidget(closeButton);
+        layout->addWidget(titleBar);
+
+        auto *body = new QHBoxLayout;
+        body->setContentsMargins(4, 2, 4, 0);
+        body->setSpacing(14);
+        auto *iconLabel = new QLabel(&dialog);
+        iconLabel->setObjectName(QStringLiteral("sc2MessageIcon"));
+        const QStyle::StandardPixmap standardIcon = icon == QMessageBox::Critical ? QStyle::SP_MessageBoxCritical
+            : icon == QMessageBox::Warning ? QStyle::SP_MessageBoxWarning
+            : icon == QMessageBox::Question ? QStyle::SP_MessageBoxQuestion
+                                            : QStyle::SP_MessageBoxInformation;
+        iconLabel->setPixmap(dialog.style()->standardIcon(standardIcon).pixmap(34, 34));
+        iconLabel->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+        body->addWidget(iconLabel);
+
+        auto *scroll = new QScrollArea(&dialog);
+        scroll->setObjectName(QStringLiteral("sc2MessageScroll"));
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto *textLabel = new QLabel(message, scroll);
+        textLabel->setObjectName(QStringLiteral("sc2MessageText"));
+        textLabel->setWordWrap(true);
+        textLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        textLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        textLabel->setMinimumWidth(qMax(420, minimumWidth - 150));
+        scroll->setWidget(textLabel);
+        body->addWidget(scroll, 1);
+        layout->addLayout(body, 1);
+
+        auto *buttonRow = new QHBoxLayout;
+        buttonRow->setSpacing(10);
+        buttonRow->addStretch(1);
+
+        QMessageBox::StandardButton clicked = QMessageBox::NoButton;
+        const auto addButton = [&](QMessageBox::StandardButton button, const QString &text, bool defaultButton = false)
+        {
+            if (!buttons.testFlag(button))
+                return;
+            auto *push = new QPushButton(text, &dialog);
+            push->setMinimumWidth(84);
+            push->setFocusPolicy(Qt::NoFocus);
+            if (defaultButton)
+                push->setDefault(true);
+            QObject::connect(push, &QPushButton::clicked, &dialog, [&dialog, &clicked, button]
+            {
+                clicked = button;
+                dialog.accept();
+            });
+            buttonRow->addWidget(push);
+        };
+
+        addButton(QMessageBox::Yes, QStringLiteral("Yes"), buttons.testFlag(QMessageBox::Yes));
+        addButton(QMessageBox::No, QStringLiteral("No"), !buttons.testFlag(QMessageBox::Yes) && buttons.testFlag(QMessageBox::No));
+        addButton(QMessageBox::Ok, QStringLiteral("OK"), buttons == QMessageBox::Ok);
+        addButton(QMessageBox::Cancel, QStringLiteral("Cancel"));
+        layout->addLayout(buttonRow);
+
+        QObject::connect(closeButton, &QPushButton::clicked, &dialog, [&dialog, &clicked, buttons]
+        {
+            clicked = buttons.testFlag(QMessageBox::No) ? QMessageBox::No
+                : buttons.testFlag(QMessageBox::Cancel) ? QMessageBox::Cancel
+                                                       : QMessageBox::Ok;
+            dialog.reject();
+        });
+
+        QPoint dragPosition;
+        bool dragging = false;
+        titleBar->installEventFilter(new Sc2DialogDragFilter(&dialog, &dragPosition, &dragging));
+
+        dialog.resize(minimumWidth, qMin(720, qMax(230, textLabel->sizeHint().height() + 130)));
+        dialog.exec();
+        return clicked == QMessageBox::NoButton ? QMessageBox::Ok : clicked;
+    }
+
+    class TextureHoverAnimator final : public QObject
+    {
+    public:
+        explicit TextureHoverAnimator(QObject *parent = nullptr)
+            : QObject(parent)
+        {
+        }
+
+        void installOn(QWidget *widget)
+        {
+            if (!widget)
+                return;
+            auto *effect = new QGraphicsDropShadowEffect(widget);
+            effect->setOffset(0, 0);
+            effect->setBlurRadius(0);
+            effect->setColor(QColor(92, 255, 203, 0));
+            widget->setGraphicsEffect(effect);
+            widget->setAttribute(Qt::WA_Hover, true);
+            widget->installEventFilter(this);
+
+            State state;
+            state.effect = effect;
+            state.glowColor = QColor(92, 255, 203, 185);
+            m_states.insert(widget, state);
+        }
+
+    protected:
+        bool eventFilter(QObject *watched, QEvent *event) override
+        {
+            auto it = m_states.find(watched);
+            if (it == m_states.end())
+                return QObject::eventFilter(watched, event);
+
+            auto *widget = qobject_cast<QWidget *>(watched);
+            if (!widget || !widget->isEnabled())
+                return QObject::eventFilter(watched, event);
+
+            switch (event->type())
+            {
+            case QEvent::Enter:
+            case QEvent::FocusIn:
+                animate(widget, 18.0, true);
+                break;
+            case QEvent::Leave:
+                if (!widget->hasFocus())
+                    animate(widget, 0.0, false);
+                break;
+            case QEvent::FocusOut:
+                if (!widget->underMouse())
+                    animate(widget, 0.0, false);
+                break;
+            case QEvent::MouseButtonPress:
+                animate(widget, 26.0, true);
+                break;
+            case QEvent::MouseButtonRelease:
+                animate(widget, widget->underMouse() || widget->hasFocus() ? 18.0 : 0.0,
+                        widget->underMouse() || widget->hasFocus());
+                break;
+            default:
+                break;
+            }
+
+            return QObject::eventFilter(watched, event);
+        }
+
+    private:
+        struct State
+        {
+            QGraphicsDropShadowEffect *effect = nullptr;
+            QColor glowColor;
+        };
+
+        void animate(QWidget *widget, qreal blurRadius, bool active)
+        {
+            State &state = m_states[widget];
+            if (!state.effect)
+                return;
+
+            state.effect->setColor(active
+                                       ? state.glowColor
+                                       : QColor(state.glowColor.red(), state.glowColor.green(), state.glowColor.blue(), 0));
+            auto *animation = new QPropertyAnimation(state.effect, "blurRadius", state.effect);
+            animation->setDuration(active ? 150 : 190);
+            animation->setStartValue(state.effect->blurRadius());
+            animation->setEndValue(blurRadius);
+            animation->setEasingCurve(active ? QEasingCurve::OutCubic : QEasingCurve::OutQuad);
+            connect(animation, &QPropertyAnimation::finished, animation, &QObject::deleteLater);
+            animation->start();
+        }
+
+        QHash<QObject *, State> m_states;
+    };
+
     class Sc2FileOpenDialog final : public QDialog
     {
     public:
@@ -148,8 +520,14 @@ namespace
             setWindowTitle(QStringLiteral("Open SC2 File"));
             setWindowFlags((windowFlags() | Qt::FramelessWindowHint) & ~Qt::WindowContextHelpButtonHint);
             setModal(true);
-            resize(1220, 780);
-            setMinimumSize(900, 560);
+            setMinimumSize(940, 560);
+            QSize targetSize(1220, 760);
+            if (const QScreen *screen = parent ? parent->screen() : QApplication::primaryScreen()) {
+                const QRect available = screen->availableGeometry();
+                targetSize.setWidth(qMin(targetSize.width(), qMax(940, available.width() - 80)));
+                targetSize.setHeight(qMin(targetSize.height(), qMax(560, available.height() - 100)));
+            }
+            resize(targetSize);
 
             m_filters = {
                 {QStringLiteral("Supported (*.SC2Map, *.SC2Mod, *.SC2Components, *.SC2Campaign, *.SC2Archive, *.xml)"),
@@ -163,8 +541,8 @@ namespace
             };
 
             auto *layout = new QVBoxLayout(this);
-            layout->setContentsMargins(18, 10, 18, 16);
-            layout->setSpacing(10);
+            layout->setContentsMargins(16, 8, 16, 12);
+            layout->setSpacing(7);
 
             auto *titleBar = new QFrame(this);
             titleBar->setObjectName(QStringLiteral("sc2OpenFileTitleBar"));
@@ -189,54 +567,73 @@ namespace
 
             auto *title = new QLabel(QStringLiteral("OPEN SC2 FILE"), this);
             title->setObjectName(QStringLiteral("panelTitle"));
+            title->setMaximumHeight(24);
             layout->addWidget(title);
 
             m_status = new QLabel(this);
             m_status->setObjectName(QStringLiteral("inspectorSubtitle"));
             m_status->setWordWrap(false);
+            m_status->setMaximumHeight(28);
             layout->addWidget(m_status);
 
             m_path = new QLineEdit(this);
             m_path->setObjectName(QStringLiteral("sc2OpenFilePath"));
-            m_path->setMinimumHeight(42);
-            m_path->setMaximumHeight(42);
+            m_path->setMinimumHeight(38);
+            m_path->setMaximumHeight(38);
             m_path->setPlaceholderText(QStringLiteral("Current folder..."));
             layout->addWidget(m_path);
 
             auto *searchRow = new QHBoxLayout;
+            m_parentButton = new QPushButton(QStringLiteral("Up"), this);
+            m_parentButton->setObjectName(QStringLiteral("sc2OpenFileParentButton"));
+            m_parentButton->setToolTip(QStringLiteral("Open parent directory"));
+            m_parentButton->setMinimumSize(82, 40);
+            m_parentButton->setMaximumHeight(40);
             m_search = new QLineEdit(this);
             m_search->setObjectName(QStringLiteral("sc2OpenFileSearch"));
-            m_search->setMinimumHeight(44);
-            m_search->setMaximumHeight(44);
+            m_search->setMinimumHeight(40);
+            m_search->setMaximumHeight(40);
             m_search->setPlaceholderText(QStringLiteral("Search files and folders..."));
             m_filter = new QComboBox(this);
             m_filter->setObjectName(QStringLiteral("sc2OpenFileFilter"));
-            m_filter->setMinimumHeight(44);
-            m_filter->setMaximumHeight(44);
+            m_filter->setMinimumHeight(40);
+            m_filter->setMaximumHeight(40);
             for (const Sc2FileOpenFilter &filter : m_filters)
                 m_filter->addItem(filter.label);
+            searchRow->addWidget(m_parentButton);
             searchRow->addWidget(m_search, 1);
             searchRow->addWidget(m_filter);
             layout->addLayout(searchRow);
 
             auto *splitter = new QSplitter(Qt::Horizontal, this);
             splitter->setObjectName(QStringLiteral("sc2OpenFileSplitter"));
+            splitter->setChildrenCollapsible(false);
             m_places = new QListWidget(splitter);
             m_places->setObjectName(QStringLiteral("fileOpenPlaces"));
+            m_places->setProperty("textureType", QStringLiteral("border"));
+            m_places->setProperty("texturetype", QStringLiteral("border"));
+            m_places->viewport()->setObjectName(QStringLiteral("fileOpenPlacesViewport"));
             m_places->setSelectionMode(QAbstractItemView::SingleSelection);
             m_places->setSpacing(3);
+            m_places->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            m_places->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
             m_table = new QTableWidget(splitter);
             m_table->setObjectName(QStringLiteral("fileOpenTable"));
+            m_table->setProperty("textureType", QStringLiteral("border"));
+            m_table->setProperty("texturetype", QStringLiteral("border"));
+            m_table->viewport()->setObjectName(QStringLiteral("fileOpenTableViewport"));
+            m_table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
             m_table->setColumnCount(4);
             m_table->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Type"),
                                                 QStringLiteral("Size"), QStringLiteral("Modified")});
             m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
             m_table->setSelectionMode(QAbstractItemView::SingleSelection);
             m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            m_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
             m_table->setShowGrid(false);
             m_table->verticalHeader()->hide();
-            m_table->verticalHeader()->setDefaultSectionSize(40);
-            m_table->horizontalHeader()->setFixedHeight(44);
+            m_table->verticalHeader()->setDefaultSectionSize(38);
+            m_table->horizontalHeader()->setFixedHeight(40);
             m_table->horizontalHeader()->setStretchLastSection(true);
             m_table->setColumnWidth(0, 470);
             m_table->setColumnWidth(1, 130);
@@ -253,8 +650,8 @@ namespace
             nameLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
             m_name = new QLineEdit(this);
             m_name->setObjectName(QStringLiteral("sc2OpenFileName"));
-            m_name->setMinimumHeight(42);
-            m_name->setMaximumHeight(42);
+            m_name->setMinimumHeight(38);
+            m_name->setMaximumHeight(38);
             m_name->setPlaceholderText(QStringLiteral("Selected file or folder..."));
             nameRow->addWidget(nameLabel);
             nameRow->addWidget(m_name, 1);
@@ -263,10 +660,13 @@ namespace
             m_selection = new QLabel(this);
             m_selection->setObjectName(QStringLiteral("inspectorSubtitle"));
             m_selection->setTextInteractionFlags(Qt::TextSelectableByMouse);
-            layout->addWidget(m_selection);
+            m_selection->setMinimumHeight(34);
+            m_selection->setMaximumHeight(38);
+            m_selection->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
 
             auto *buttonRow = new QHBoxLayout;
-            buttonRow->addStretch(1);
+            buttonRow->setSpacing(12);
+            buttonRow->addWidget(m_selection, 1);
             m_open = new QPushButton(QStringLiteral("Open"), this);
             m_cancel = new QPushButton(QStringLiteral("Cancel"), this);
             m_open->setObjectName(QStringLiteral("sc2OpenFileOpenButton"));
@@ -383,6 +783,8 @@ namespace
                     { populateFiles(); });
             connect(m_filter, &QComboBox::currentIndexChanged, this, [this]
                     { populateFiles(); });
+            connect(m_parentButton, &QPushButton::clicked, this, [this]
+                    { openParent(); });
             connect(m_places, &QListWidget::itemClicked, this, [this](QListWidgetItem *item)
                     {
                 if (!item) return;
@@ -443,6 +845,11 @@ namespace
             }
             m_currentDir = info.absoluteFilePath();
             m_path->setText(QDir::toNativeSeparators(m_currentDir));
+            if (m_parentButton)
+            {
+                QDir parentDir(m_currentDir);
+                m_parentButton->setEnabled(parentDir.cdUp());
+            }
             m_name->setText(suggestedFile);
             m_selection->setText(QDir::toNativeSeparators(suggestedFile.isEmpty()
                                                               ? m_currentDir
@@ -596,6 +1003,7 @@ namespace
         QLabel *m_selection = nullptr;
         QPushButton *m_open = nullptr;
         QPushButton *m_cancel = nullptr;
+        QPushButton *m_parentButton = nullptr;
         QString m_currentDir;
         QString m_selectedFile;
         QPoint m_dragPosition;
@@ -825,7 +1233,13 @@ namespace
         bool eventFilter(QObject *watched, QEvent *event) override
         {
             auto *bar = qobject_cast<QTabBar *>(watched);
-            if (!bar || (event->type() != QEvent::ToolTip && event->type() != QEvent::MouseMove))
+            if (!bar)
+                return QObject::eventFilter(watched, event);
+            if (event->type() == QEvent::FocusIn) {
+                bar->clearFocus();
+                return false;
+            }
+            if (event->type() != QEvent::ToolTip && event->type() != QEvent::MouseMove)
                 return QObject::eventFilter(watched, event);
             QPoint position;
             if (auto *help = dynamic_cast<QHelpEvent *>(event))
@@ -1306,12 +1720,17 @@ void MainWindow::setupUi()
     m_tabs->tabBar()->setExpanding(false);
     m_tabs->tabBar()->setUsesScrollButtons(true);
     m_tabs->tabBar()->setElideMode(Qt::ElideNone);
+    m_tabs->setFocusPolicy(Qt::NoFocus);
+    m_tabs->tabBar()->setFocusPolicy(Qt::NoFocus);
     for (int index = 0; index < m_tabs->count(); ++index)
     {
         const QString title = m_tabs->tabText(index);
         m_tabs->setTabToolTip(index, title);
         auto *label = new QLabel(title, m_tabs->tabBar());
+        label->setObjectName(QStringLiteral("workspaceTabLabel"));
         label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        label->setFocusPolicy(Qt::NoFocus);
+        label->setTextInteractionFlags(Qt::NoTextInteraction);
         QFont labelFont = label->font();
         labelFont.setBold(true);
         label->setFont(labelFont);
@@ -1698,7 +2117,65 @@ QString MainWindow::runtimePath(const QString &relativePath) const
     return QCoreApplication::applicationDirPath() + QStringLiteral("/") + relativePath;
 }
 
-void MainWindow::logLine(const QString &line)
+bool MainWindow::validateArchiveCatalogSchema(const QString &archivePath, QString *errorMessage) const
+{
+    const QString scriptPath = schemaValidatorScriptPath();
+    if (scriptPath.isEmpty())
+    {
+        logLine(QStringLiteral("XSD validation skipped: scripts/validate_sc2_catalogs.py was not found."));
+        return true;
+    }
+
+    const QString xsdPath = catalogXsdPath();
+    if (xsdPath.isEmpty())
+    {
+        logLine(QStringLiteral("XSD validation skipped: resources/catalogsData.xsd was not found."));
+        return true;
+    }
+
+    QProcess process;
+    process.setProgram(QStringLiteral("python"));
+    process.setArguments({
+        scriptPath,
+        archivePath,
+        QStringLiteral("--xsd"),
+        xsdPath,
+        QStringLiteral("--max-errors"),
+        QStringLiteral("16")
+    });
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+
+    if (!process.waitForStarted(5000))
+    {
+        logLine(QStringLiteral("XSD validation skipped: Python could not be started."));
+        return true;
+    }
+
+    if (!process.waitForFinished(180000))
+    {
+        process.kill();
+        process.waitForFinished(5000);
+        if (errorMessage)
+            *errorMessage = QStringLiteral("XSD catalog validation timed out before archive save.");
+        return false;
+    }
+
+    const QString output = compactProcessOutput(QString::fromUtf8(process.readAll()));
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+    {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("XSD catalog validation failed before archive save:\n%1").arg(output);
+        return false;
+    }
+
+    logLine(output.isEmpty()
+                ? QStringLiteral("XSD catalog validation passed.")
+                : QStringLiteral("XSD catalog validation passed: %1").arg(output.section(QLatin1Char('\n'), -1)));
+    return true;
+}
+
+void MainWindow::logLine(const QString &line) const
 {
     if (m_logger)
     {
@@ -2644,6 +3121,12 @@ bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList
     }
     removedEntries.removeDuplicates();
 
+    int enumRepairCount = 0;
+    if (!addCatalogEnumRepairs(archive, &replacements, removedEntries, &enumRepairCount, errorMessage))
+        return false;
+    if (enumRepairCount > 0)
+        logLine(QStringLiteral("Catalog enum self-repair fixed %1 legacy invalid value(s) before archive save.").arg(enumRepairCount));
+
     BackupManager backupManager;
     QString backup;
     if (!backupManager.createBackup(m_currentSourcePath, &backup, errorMessage))
@@ -2652,6 +3135,11 @@ bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList
     QFile::remove(pending);
     if (!archive.saveCopy(pending, replacements, removedEntries, errorMessage))
         return false;
+    if (!validateArchiveCatalogSchema(pending, errorMessage))
+    {
+        QFile::remove(pending);
+        return false;
+    }
 
     QFile pendingFile(pending);
     if (!pendingFile.open(QIODevice::ReadOnly))
@@ -3085,8 +3573,21 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
             QMessageBox::critical(this, QStringLiteral("Rename failed"), result.error + QStringLiteral("\nThe archive was not changed."));
             return;
         }
+        QStringList changedFiles = result.changedFiles;
+        sc2dh::ArchiveReferenceRewriteReport archiveRewrite;
+        if (!sc2dh::rewriteArchiveReferenceFiles(workspace.path(),
+                                                 archiveReferenceFilesForWorkspace(materialized, workspace.path()),
+                                                 result.appliedRenames,
+                                                 &archiveRewrite,
+                                                 &error))
+        {
+            QMessageBox::critical(this, QStringLiteral("Rename failed"), error + QStringLiteral("\nThe archive was not changed."));
+            return;
+        }
+        changedFiles.append(archiveRewrite.changedFiles);
+        changedFiles.removeDuplicates();
         QString archiveBackup;
-        if (!commitArchiveChanges(workspace.path(), result.changedFiles, &archiveBackup, &error))
+        if (!commitArchiveChanges(workspace.path(), changedFiles, &archiveBackup, &error))
         {
             QMessageBox::critical(this, QStringLiteral("Rename failed"), error + QStringLiteral("\nNo partial archive change was retained."));
             return;
@@ -3098,7 +3599,7 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
                                  QStringLiteral("Archive backup: %1\nObjects renamed: %2\nReferences updated: %3")
                                      .arg(archiveBackup)
                                      .arg(result.identitiesRenamed)
-                                     .arg(result.referencesUpdated));
+                                     .arg(result.referencesUpdated + archiveRewrite.replacements));
         return;
     }
     const RenameApplyResult result = m_referenceRenamer.apply(m_result, plan, m_rootFolder, m_whitelistIds);
@@ -3359,8 +3860,12 @@ void MainWindow::applyOptimizationWizardPlan()
             finishWizardApplyAutomation(false, QStringLiteral("No optimization items were selected."));
             return;
         }
-        QMessageBox::information(this, QStringLiteral("Optimization Wizard"),
-                                 QStringLiteral("Select at least one item before applying the optimization plan."));
+        showSc2MessageDialog(this,
+                             QMessageBox::Information,
+                             QStringLiteral("Optimization Wizard"),
+                             QStringLiteral("Select at least one item before applying the optimization plan."),
+                             QMessageBox::Ok,
+                             660);
         return;
     }
     if (m_sourceKind == SourceKind::ArchiveFolder)
@@ -3370,13 +3875,22 @@ void MainWindow::applyOptimizationWizardPlan()
             finishWizardApplyAutomation(false, archiveFolderReadOnlyMessage());
             return;
         }
-        QMessageBox::information(this, QStringLiteral("Optimization Wizard"), archiveFolderReadOnlyMessage());
+        showSc2MessageDialog(this,
+                             QMessageBox::Information,
+                             QStringLiteral("Optimization Wizard"),
+                             archiveFolderReadOnlyMessage(),
+                             QMessageBox::Ok,
+                             760);
         return;
     }
 
     if (!m_wizardApplyAutomation
-        && QMessageBox::question(this, QStringLiteral("Apply Optimization Plan"),
-                                 QStringLiteral("Apply the selected optimization steps to files now, then rebuild the preview from the updated data?")) != QMessageBox::Yes)
+        && showSc2MessageDialog(this,
+                                QMessageBox::Question,
+                                QStringLiteral("Apply Optimization Plan"),
+                                QStringLiteral("Apply the selected optimization steps to files now, then rebuild the preview from the updated data?"),
+                                QMessageBox::Yes | QMessageBox::No,
+                                660) != QMessageBox::Yes)
     {
         return;
     }
@@ -3405,9 +3919,19 @@ void MainWindow::applyOptimizationWizardPlan()
     int collectionAdded = 0;
     int collectionReorganized = 0;
     QStringList warnings;
+    QStringList notes;
     QString failure;
     QString archiveBackup;
     bool archiveAnalysisReady = false;
+    int staleRenameRecommendations = 0;
+    int renameConflictRecommendations = 0;
+    int staleDuplicateRecommendations = 0;
+    int staleUnusedRecommendations = 0;
+    int dataCollectionUnavailable = 0;
+    int dataCollectionNotApplicable = 0;
+    int reviewOnlyCleanupSkipped = 0;
+    int automaticFollowUpCleanupChanges = 0;
+    int serviceSkippedRecommendations = 0;
 
     const auto reloadWorkingAnalysis = [this](const QString &rootFolder, AnalysisResult *analysis, QString *errorMessage)
     {
@@ -3442,6 +3966,22 @@ void MainWindow::applyOptimizationWizardPlan()
             updateApplyProgress(qBound(basePercent, percent, basePercent + spanPercent),
                                 QStringLiteral("Applying rename changes"), detail);
         };
+    };
+    const auto archiveReferenceFilesForWorkspace = [](const AnalysisResult &analysis, const QString &rootFolder)
+    {
+        QStringList files;
+        const QDir root(rootFolder);
+        for (const ScannedFileInfo &file : analysis.scannedFiles)
+        {
+            if (file.isXml || !file.isSc2DataLike)
+                continue;
+            QString relative = root.relativeFilePath(file.filePath);
+            relative = QDir::cleanPath(relative).replace('\\', '/');
+            if (!relative.startsWith(QStringLiteral("../")) && !QDir::isAbsolutePath(relative))
+                files << relative;
+        }
+        files.removeDuplicates();
+        return files;
     };
     const auto buildCombinedRenamePlan = [this](const AnalysisResult &analysis,
                                                 const QVector<WizardRenameSelection> &renameSelection,
@@ -3478,7 +4018,7 @@ void MainWindow::applyOptimizationWizardPlan()
             if (familyIt == familyByRoot.cend())
             {
                 if (planWarnings)
-                    *planWarnings << QStringLiteral("Skipped rename family %1 because it is no longer present after apply.").arg(it.key());
+                    *planWarnings << QStringLiteral("Rename recommendation became stale after earlier changes: %1").arg(it.key());
                 continue;
             }
             QSet<int> includedNodeIndices;
@@ -3495,7 +4035,7 @@ void MainWindow::applyOptimizationWizardPlan()
             if (!plan.valid)
             {
                 if (planWarnings)
-                    *planWarnings << QStringLiteral("Skipped rename family %1 because the refreshed plan is no longer valid.").arg(it.key());
+                    *planWarnings << QStringLiteral("Rename recommendation is no longer valid after refresh: %1").arg(it.key());
                 continue;
             }
             if (combined.family.rootId.isEmpty())
@@ -3509,7 +4049,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 if (selectedNodes.contains(item.nodeIndex))
                 {
                     if (planWarnings)
-                        *planWarnings << QStringLiteral("Skipped duplicate rename item for %1.").arg(item.oldId);
+                        *planWarnings << QStringLiteral("Duplicate rename recommendation ignored after refresh: %1").arg(item.oldId);
                     continue;
                 }
                 selectedNodes.insert(item.nodeIndex);
@@ -3525,7 +4065,7 @@ void MainWindow::applyOptimizationWizardPlan()
             if (proposedNewCounts.value(item.newId.toLower()) > 1)
             {
                 if (planWarnings)
-                    *planWarnings << QStringLiteral("Skipped rename %1 -> %2 because another selected item uses the same target ID.")
+                    *planWarnings << QStringLiteral("Rename conflict after refresh: %1 -> %2 uses a duplicate target ID.")
                                       .arg(item.oldId, item.newId);
                 continue;
             }
@@ -3547,7 +4087,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 if (existingIds.contains(item.newId) && !movingOldIds.contains(item.newId))
                 {
                     if (planWarnings)
-                        *planWarnings << QStringLiteral("Skipped rename %1 -> %2 because the target ID is still occupied.")
+                        *planWarnings << QStringLiteral("Rename conflict after refresh: %1 -> %2 target ID is still occupied.")
                                           .arg(item.oldId, item.newId);
                     changed = true;
                     continue;
@@ -3593,6 +4133,30 @@ void MainWindow::applyOptimizationWizardPlan()
     {
         return result.filesDeleted + result.textLinesRemoved + result.xmlNodesRemoved + result.xmlAttributesRemoved;
     };
+    const auto recordRenamePlanNotes = [&](const QStringList &messages)
+    {
+        for (const QString &message : messages)
+        {
+            logLine(message);
+            if (message.startsWith(QStringLiteral("Rename conflict after refresh:")))
+                ++renameConflictRecommendations;
+            else
+                ++staleRenameRecommendations;
+        }
+    };
+    const auto recordServiceMessages = [&](const QStringList &messages)
+    {
+        for (const QString &message : messages)
+        {
+            logLine(QStringLiteral("Optimization service message: %1").arg(message));
+            if (message.startsWith(QStringLiteral("Skipped "), Qt::CaseInsensitive))
+            {
+                ++serviceSkippedRecommendations;
+                continue;
+            }
+            warnings << message;
+        }
+    };
 
     if (m_sourceKind == SourceKind::ArchiveFile)
     {
@@ -3629,8 +4193,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 else
                 {
                     importCleanupChanged += result.filesDeleted;
-                    if (result.reportOnlySkipped > 0)
-                        warnings << QStringLiteral("Skipped %1 review-only import cleanup item(s).").arg(result.reportOnlySkipped);
+                    reviewOnlyCleanupSkipped += result.reportOnlySkipped;
                     changedFiles.append(result.changedFiles);
                     removedFiles.append(result.removedFiles);
                     changedFiles.removeDuplicates();
@@ -3657,8 +4220,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 else
                 {
                     deepCleanupChanged += result.filesDeleted + result.textLinesRemoved + result.xmlNodesRemoved + result.xmlAttributesRemoved;
-                    if (result.reportOnlySkipped > 0)
-                        warnings << QStringLiteral("Skipped %1 review-only deep cleanup item(s).").arg(result.reportOnlySkipped);
+                    reviewOnlyCleanupSkipped += result.reportOnlySkipped;
                     changedFiles.append(result.changedFiles);
                     removedFiles.append(result.removedFiles);
                     changedFiles.removeDuplicates();
@@ -3701,7 +4263,10 @@ void MainWindow::applyOptimizationWizardPlan()
                         changedFiles.append(unusedChangedFiles);
                         changedFiles.removeDuplicates();
                         if (skipped > 0)
-                            warnings << QStringLiteral("Skipped %1 unused data object(s) because they were no longer safe or available.").arg(skipped);
+                        {
+                            staleUnusedRecommendations += skipped;
+                            logLine(QStringLiteral("Unused Data Objects: %1 selected recommendation(s) became stale after earlier changes.").arg(skipped));
+                        }
                         if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
                             failure = error;
                     }
@@ -3720,7 +4285,9 @@ void MainWindow::applyOptimizationWizardPlan()
                 const int keepIndex = findNodeIndex(current, it.value().first);
                 if (keepIndex < 0)
                 {
-                    warnings << QStringLiteral("Skipped a duplicate merge because keep object %1 is no longer present.").arg(it.value().first.id);
+                    ++staleDuplicateRecommendations;
+                    logLine(QStringLiteral("Duplicate Merge recommendation became stale after earlier changes: keep object %1 is no longer present.")
+                                .arg(it.value().first.id));
                     continue;
                 }
                 MergeRequest request;
@@ -3759,8 +4326,8 @@ void MainWindow::applyOptimizationWizardPlan()
                     changedFiles.append(result.changedFiles);
                     changedFiles.removeDuplicates();
                     if (result.skippedMerges > 0)
-                        warnings << QStringLiteral("Skipped %1 duplicate merge item(s) that were no longer valid.").arg(result.skippedMerges);
-                    warnings.append(result.warnings);
+                        staleDuplicateRecommendations += result.skippedMerges;
+                    recordServiceMessages(result.warnings);
                     if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
                         failure = error;
                 }
@@ -3769,7 +4336,9 @@ void MainWindow::applyOptimizationWizardPlan()
             if (failure.isEmpty() && !selection.rename.isEmpty())
             {
                 updateApplyProgress(55, QStringLiteral("Applying rename changes"), QStringLiteral("Building one safe batch rename plan"));
-                const RenamePlan combinedRenamePlan = buildCombinedRenamePlan(current, selection.rename, &warnings);
+                QStringList renamePlanNotes;
+                const RenamePlan combinedRenamePlan = buildCombinedRenamePlan(current, selection.rename, &renamePlanNotes);
+                recordRenamePlanNotes(renamePlanNotes);
                 if (combinedRenamePlan.valid)
                 {
                     updateApplyProgress(56, QStringLiteral("Applying rename changes"),
@@ -3785,12 +4354,29 @@ void MainWindow::applyOptimizationWizardPlan()
                     else
                     {
                         renamedIds += result.identitiesRenamed;
-                        warnings.append(result.warnings);
+                        recordServiceMessages(result.warnings);
                         changedFiles.append(result.changedFiles);
                         changedFiles.removeDuplicates();
-                        if (!reloadWorkingAnalysis(workspace.path(), &current, &error))
+                        sc2dh::ArchiveReferenceRewriteReport archiveRewrite;
+                        if (!sc2dh::rewriteArchiveReferenceFiles(workspace.path(),
+                                                                 archiveReferenceFilesForWorkspace(current, workspace.path()),
+                                                                 result.appliedRenames,
+                                                                 &archiveRewrite,
+                                                                 &error))
+                        {
                             failure = error;
+                        }
                         else
+                        {
+                            changedFiles.append(archiveRewrite.changedFiles);
+                            changedFiles.removeDuplicates();
+                            if (archiveRewrite.replacements > 0)
+                                notes << QStringLiteral("Rename To Standard: %1 archive placement/trigger/script reference(s) were updated.")
+                                             .arg(archiveRewrite.replacements);
+                        }
+                        if (failure.isEmpty() && !reloadWorkingAnalysis(workspace.path(), &current, &error))
+                            failure = error;
+                        else if (failure.isEmpty())
                             applyArchiveReferenceSafety(&current);
                     }
                 }
@@ -3817,7 +4403,9 @@ void MainWindow::applyOptimizationWizardPlan()
                     const auto match = familyByRoot.constFind(selectedCollection.familyRootId);
                     if (match == familyByRoot.cend())
                     {
-                        warnings << QStringLiteral("Skipped Data Collection family %1 because it is no longer present after apply.").arg(selectedCollection.familyRootId);
+                        ++dataCollectionUnavailable;
+                        logLine(QStringLiteral("Data Collection note: %1 is no longer present after earlier optimization steps.")
+                                    .arg(selectedCollection.familyRootId));
                         continue;
                     }
                     DataCollectionBuildRequest request;
@@ -3833,8 +4421,9 @@ void MainWindow::applyOptimizationWizardPlan()
                     const DataCollectionPreviewReport preview = m_dataCollectionBuilder.preview(current, request, &families);
                     if (!preview.valid)
                     {
-                        warnings << QStringLiteral("Skipped Data Collection family %1: %2")
-                                        .arg(selectedCollection.familyRootId, collectionSkipReason(preview));
+                        ++dataCollectionNotApplicable;
+                        logLine(QStringLiteral("Data Collection note: %1 is not in Data Collection / not eligible for automatic Data Collection after refresh: %2")
+                                    .arg(selectedCollection.familyRootId, collectionSkipReason(preview)));
                         continue;
                     }
                     const DataCollectionApplyResult result = m_dataCollectionBuilder.apply(
@@ -3871,10 +4460,8 @@ void MainWindow::applyOptimizationWizardPlan()
                     {
                         const int changed = deepCleanupChangeCount(result);
                         deepCleanupChanged += changed;
-                        if (changed > 0)
-                            warnings << QStringLiteral("Automatically applied %1 follow-up deep cleanup change(s).").arg(changed);
-                        if (result.reportOnlySkipped > 0)
-                            warnings << QStringLiteral("Skipped %1 review-only follow-up deep cleanup item(s).").arg(result.reportOnlySkipped);
+                        automaticFollowUpCleanupChanges += changed;
+                        reviewOnlyCleanupSkipped += result.reportOnlySkipped;
                         changedFiles.append(result.changedFiles);
                         removedFiles.append(result.removedFiles);
                         changedFiles.removeDuplicates();
@@ -3923,8 +4510,7 @@ void MainWindow::applyOptimizationWizardPlan()
             else
             {
                 importCleanupChanged += result.filesDeleted;
-                if (result.reportOnlySkipped > 0)
-                    warnings << QStringLiteral("Skipped %1 review-only import cleanup item(s).").arg(result.reportOnlySkipped);
+                reviewOnlyCleanupSkipped += result.reportOnlySkipped;
                 if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
                     failure = error;
             }
@@ -3941,8 +4527,7 @@ void MainWindow::applyOptimizationWizardPlan()
             else
             {
                 deepCleanupChanged += result.filesDeleted + result.textLinesRemoved + result.xmlNodesRemoved + result.xmlAttributesRemoved;
-                if (result.reportOnlySkipped > 0)
-                    warnings << QStringLiteral("Skipped %1 review-only deep cleanup item(s).").arg(result.reportOnlySkipped);
+                reviewOnlyCleanupSkipped += result.reportOnlySkipped;
                 if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
                     failure = error;
             }
@@ -3971,7 +4556,10 @@ void MainWindow::applyOptimizationWizardPlan()
             {
                 removedUnused += removed;
                 if (skipped > 0)
-                    warnings << QStringLiteral("Skipped %1 unused data object(s) because they were no longer safe or available.").arg(skipped);
+                {
+                    staleUnusedRecommendations += skipped;
+                    logLine(QStringLiteral("Unused Data Objects: %1 selected recommendation(s) became stale after earlier changes.").arg(skipped));
+                }
                 if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
                     failure = error;
             }
@@ -3990,7 +4578,9 @@ void MainWindow::applyOptimizationWizardPlan()
             const int keepIndex = findNodeIndex(current, it.value().first);
             if (keepIndex < 0)
             {
-                warnings << QStringLiteral("Skipped a duplicate merge because keep object %1 is no longer present.").arg(it.value().first.id);
+                ++staleDuplicateRecommendations;
+                logLine(QStringLiteral("Duplicate Merge recommendation became stale after earlier changes: keep object %1 is no longer present.")
+                            .arg(it.value().first.id));
                 continue;
             }
             MergeRequest request;
@@ -4027,8 +4617,8 @@ void MainWindow::applyOptimizationWizardPlan()
                 removedDuplicates += result.nodesDeleted;
                 redirectedReferences += result.referencesRedirected;
                 if (result.skippedMerges > 0)
-                    warnings << QStringLiteral("Skipped %1 duplicate merge item(s) that were no longer valid.").arg(result.skippedMerges);
-                warnings.append(result.warnings);
+                    staleDuplicateRecommendations += result.skippedMerges;
+                recordServiceMessages(result.warnings);
                 if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
                     failure = error;
             }
@@ -4037,7 +4627,9 @@ void MainWindow::applyOptimizationWizardPlan()
         if (failure.isEmpty() && !selection.rename.isEmpty())
         {
             updateApplyProgress(60, QStringLiteral("Applying rename changes"), QStringLiteral("Building one safe batch rename plan"));
-            const RenamePlan combinedRenamePlan = buildCombinedRenamePlan(current, selection.rename, &warnings);
+            QStringList renamePlanNotes;
+            const RenamePlan combinedRenamePlan = buildCombinedRenamePlan(current, selection.rename, &renamePlanNotes);
+            recordRenamePlanNotes(renamePlanNotes);
             if (combinedRenamePlan.valid)
             {
                 updateApplyProgress(61, QStringLiteral("Applying rename changes"),
@@ -4053,7 +4645,7 @@ void MainWindow::applyOptimizationWizardPlan()
                 else
                 {
                     renamedIds += result.identitiesRenamed;
-                    warnings.append(result.warnings);
+                    recordServiceMessages(result.warnings);
                     if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
                         failure = error;
                 }
@@ -4080,7 +4672,9 @@ void MainWindow::applyOptimizationWizardPlan()
             const auto familyIt = collectionFamilyByRoot.constFind(selectedCollection.familyRootId);
             if (familyIt == collectionFamilyByRoot.cend())
             {
-                warnings << QStringLiteral("Skipped Data Collection family %1 because it is no longer present after apply.").arg(selectedCollection.familyRootId);
+                ++dataCollectionUnavailable;
+                logLine(QStringLiteral("Data Collection note: %1 is no longer present after earlier optimization steps.")
+                            .arg(selectedCollection.familyRootId));
                 continue;
             }
             DataCollectionBuildRequest request;
@@ -4096,8 +4690,9 @@ void MainWindow::applyOptimizationWizardPlan()
             const DataCollectionPreviewReport preview = m_dataCollectionBuilder.preview(current, request, &collectionFamilies);
             if (!preview.valid)
             {
-                warnings << QStringLiteral("Skipped Data Collection family %1: %2")
-                                .arg(selectedCollection.familyRootId, collectionSkipReason(preview));
+                ++dataCollectionNotApplicable;
+                logLine(QStringLiteral("Data Collection note: %1 is not in Data Collection / not eligible for automatic Data Collection after refresh: %2")
+                            .arg(selectedCollection.familyRootId, collectionSkipReason(preview)));
                 continue;
             }
             const DataCollectionApplyResult result = m_dataCollectionBuilder.apply(
@@ -4127,10 +4722,8 @@ void MainWindow::applyOptimizationWizardPlan()
                 {
                     const int changed = deepCleanupChangeCount(result);
                     deepCleanupChanged += changed;
-                    if (changed > 0)
-                        warnings << QStringLiteral("Automatically applied %1 follow-up deep cleanup change(s).").arg(changed);
-                    if (result.reportOnlySkipped > 0)
-                        warnings << QStringLiteral("Skipped %1 review-only follow-up deep cleanup item(s).").arg(result.reportOnlySkipped);
+                    automaticFollowUpCleanupChanges += changed;
+                    reviewOnlyCleanupSkipped += result.reportOnlySkipped;
                     if (!reloadWorkingAnalysis(m_rootFolder, &current, &error))
                         failure = error;
                 }
@@ -4149,8 +4742,12 @@ void MainWindow::applyOptimizationWizardPlan()
             finishWizardApplyAutomation(false, failure);
             return;
         }
-        QMessageBox::critical(this, QStringLiteral("Optimization Apply Failed"),
-                              QStringLiteral("The optimization batch stopped:\n%1").arg(failure));
+        showSc2MessageDialog(this,
+                             QMessageBox::Critical,
+                             QStringLiteral("Optimization Apply Failed"),
+                             QStringLiteral("The optimization batch stopped:\n%1").arg(failure),
+                             QMessageBox::Ok,
+                             700);
         return;
     }
 
@@ -4176,8 +4773,12 @@ void MainWindow::applyOptimizationWizardPlan()
             finishWizardApplyAutomation(false, QStringLiteral("Changes were saved, but automatic re-analysis failed."));
             return;
         }
-        QMessageBox::warning(this, QStringLiteral("Optimization Applied"),
-                             QStringLiteral("Changes were saved, but automatic re-analysis failed. Re-open Analyze to refresh the wizard view."));
+        showSc2MessageDialog(this,
+                             QMessageBox::Warning,
+                             QStringLiteral("Optimization Applied"),
+                             QStringLiteral("Changes were saved, but automatic re-analysis failed. Re-open Analyze to refresh the wizard view."),
+                             QMessageBox::Ok,
+                             760);
         return;
     }
     updateApplyProgress(100, QStringLiteral("Apply complete"), QStringLiteral("Optimization changes were saved successfully"));
@@ -4197,6 +4798,50 @@ void MainWindow::applyOptimizationWizardPlan()
         m_dryRunPage->recordCollectionResult(collectionAdded, collectionReorganized);
     m_dryRunPage->rebuildAfterApply();
 
+    if (automaticFollowUpCleanupChanges > 0)
+        notes << QStringLiteral("Follow-up Deep Cleanup applied %1 safe cleanup change(s) after earlier optimization steps.")
+                     .arg(automaticFollowUpCleanupChanges);
+    if (staleUnusedRecommendations > 0)
+        notes << QStringLiteral("Unused Data Objects: %1 selected recommendation(s) were already resolved or became unsafe after earlier steps.")
+                     .arg(staleUnusedRecommendations);
+    if (staleDuplicateRecommendations > 0)
+        notes << QStringLiteral("Duplicate Merge: %1 selected recommendation(s) became stale after earlier steps.")
+                     .arg(staleDuplicateRecommendations);
+    if (staleRenameRecommendations > 0)
+        notes << QStringLiteral("Rename To Standard: %1 recommendation(s) became stale after earlier steps.")
+                     .arg(staleRenameRecommendations);
+    if (renameConflictRecommendations > 0)
+        notes << QStringLiteral("Rename To Standard: %1 conflict recommendation(s) were left for manual review.")
+                     .arg(renameConflictRecommendations);
+    if (dataCollectionUnavailable > 0)
+        notes << QStringLiteral("Data Collection: %1 family recommendation(s) were not applied because the source objects were already removed or renamed.")
+                     .arg(dataCollectionUnavailable);
+    if (dataCollectionNotApplicable > 0)
+        notes << QStringLiteral("Data Collection: %1 family recommendation(s) are not in Data Collection or are not eligible after refresh.")
+                     .arg(dataCollectionNotApplicable);
+    if (reviewOnlyCleanupSkipped > 0)
+        notes << QStringLiteral("Review-only cleanup: %1 item(s) were left for manual review.")
+                     .arg(reviewOnlyCleanupSkipped);
+    if (serviceSkippedRecommendations > 0)
+        notes << QStringLiteral("Optimization refresh: %1 stale low-level recommendation(s) were ignored after earlier steps.")
+                     .arg(serviceSkippedRecommendations);
+    notes.removeDuplicates();
+    warnings.removeDuplicates();
+    for (const QString &note : notes)
+        logLine(QStringLiteral("Optimization note: %1").arg(note));
+    for (const QString &warning : warnings)
+        logLine(QStringLiteral("Optimization warning: %1").arg(warning));
+
+    const auto sectionText = [](const QString &title, const QStringList &items, int maxItems)
+    {
+        if (items.isEmpty())
+            return QString();
+        QStringList visible = items.mid(0, qMax(1, maxItems));
+        if (items.size() > visible.size())
+            visible << QStringLiteral("%1 more item(s) are available in Logs.").arg(items.size() - visible.size());
+        return QStringLiteral("\n\n%1:\n- %2").arg(title, visible.join(QStringLiteral("\n- ")));
+    };
+
     QString message = QStringLiteral("Selected optimization steps were applied and saved.\n\nUnused data objects deleted: %1\nImported files deleted: %2\nDuplicates deleted: %3\nReferences redirected: %4\nDeep cleanup changes: %5\nIDs renamed: %6\nCollection records added: %7\nCollection records reorganized: %8")
                           .arg(removedUnused)
                           .arg(importCleanupChanged)
@@ -4208,14 +4853,20 @@ void MainWindow::applyOptimizationWizardPlan()
                           .arg(collectionReorganized);
     if (!archiveBackup.isEmpty())
         message += QStringLiteral("\nArchive backup: %1").arg(archiveBackup);
+    message += sectionText(QStringLiteral("Notes"), notes, 6);
     if (!warnings.isEmpty())
-        message += QStringLiteral("\n\nWarnings:\n- ") + warnings.join(QStringLiteral("\n- "));
+        message += sectionText(QStringLiteral("Warnings"), warnings, 4);
     if (m_wizardApplyAutomation)
     {
         finishWizardApplyAutomation(true, message);
         return;
     }
-    QMessageBox::information(this, QStringLiteral("Optimization Applied"), message);
+    showSc2MessageDialog(this,
+                         QMessageBox::Information,
+                         QStringLiteral("Optimization Applied"),
+                         message,
+                         QMessageBox::Ok,
+                         1040);
 }
 
 void MainWindow::runWizardApplyAutomation(const QString &path, const QString &logPath, int timeoutMs)

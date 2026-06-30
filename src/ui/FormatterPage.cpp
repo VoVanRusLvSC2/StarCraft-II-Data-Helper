@@ -640,22 +640,11 @@ void FormatterPage::updateSummary() { int redirects = 0, renameCount = 0, collec
         .arg(selectedUnusedRows().size()).arg(importCleanupCount).arg(duplicateDeletes).arg(redirects).arg(deepCleanupCount).arg(renameCount).arg(collectionAdds).arg(collectionMoves)
         .arg(m_actualUnused).arg(m_actualImportCleanup).arg(m_actualDuplicates).arg(m_actualRedirected).arg(m_actualDeepCleanup).arg(m_actualRenamed).arg(m_actualCollectionAdded).arg(m_actualCollectionReorganized);
     if (m_hasAppliedChanges && m_planBuilt) {
-        QStringList nextSteps;
-        if (selectedUnusedRows().size() > 0)
-            nextSteps << QStringLiteral("Run another unused data-object pass: refreshed analysis still has %1 safe candidate(s).").arg(selectedUnusedRows().size());
-        if (duplicateDeletes > 0)
-            nextSteps << QStringLiteral("Review duplicate merge again: %1 merge candidate(s) remain after refresh.").arg(duplicateDeletes);
-        if (importCleanupCount > 0)
-            nextSteps << QStringLiteral("Review Import Cleanup again: %1 imported file(s) remain after refresh.").arg(importCleanupCount);
-        if (deepCleanupCount > 0)
-            nextSteps << QStringLiteral("Review deep cleanup again: %1 cleanup candidate(s) remain after the automatic follow-up pass.").arg(deepCleanupCount);
-        if (renameCount > 0)
-            nextSteps << QStringLiteral("Review Rename To Standard again: %1 ID change(s) are still available.").arg(renameCount);
-        if (collectionAdds > 0 || collectionMoves > 0)
-            nextSteps << QStringLiteral("Update Data Collection again: %1 record(s) can be added, %2 record(s) can be reorganized.").arg(collectionAdds).arg(collectionMoves);
-        if (nextSteps.isEmpty())
-            nextSteps << QStringLiteral("No remaining wizard recommendations were detected after the refreshed analysis.");
-        summary += QStringLiteral("\nNext optimization pass\n- %1\n").arg(nextSteps.join(QStringLiteral("\n- ")));
+        const int remainingTotal = selectedUnusedRows().size() + duplicateDeletes + importCleanupCount
+            + deepCleanupCount + renameCount + collectionAdds + collectionMoves;
+        summary += remainingTotal == 0
+            ? QStringLiteral("\nRefreshed audit\n- Automatic follow-up cleanup completed. No remaining wizard recommendations were detected.\n")
+            : QStringLiteral("\nRefreshed audit\n- Automatic follow-up cleanup completed. Optional remaining recommendations are available in Post-Apply Audit.\n");
     }
     m_summary->setPlainText(summary);
     updatePostApplyAudit();

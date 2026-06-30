@@ -1,6 +1,7 @@
 #include <QtTest/QtTest>
 
 #include "core/BackupManager.h"
+#include "core/CatalogEnumRepair.h"
 #include "core/FolderAnalyzer.h"
 #include "core/MergeService.h"
 #include "core/ReferenceRenamer.h"
@@ -116,6 +117,7 @@ class CoreTests : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void folderScanAndAnalysis();
     void xmlParseAndLookup();
     void duplicateIdDetection();
@@ -132,17 +134,28 @@ private slots:
     void objectFileFilterUsesFullSourcePath();
     void normalizedDuplicateIgnoresOnlyRootIdentity();
     void tokenAwareReplacementVariants();
+    void numericOnlyIdsAreNotRewritten();
     void mergePreviewAndApplyRedirectBeforeDelete();
+    void mergeDoesNotRewriteSurvivingCatalogIdentityIds();
+    void mergeAllowsResidualOldIdWarning();
     void mergeRollbackOnFailure();
     void unusedSafetyClassification();
     void unusedReachabilityDistinguishesStatesAndPaths();
     void unusedDeletionRemovesWholeUnusedChain();
     void unusedDeletionSkipsPartialChainWithoutFailingBatch();
     void unusedDeletionPreservesDataCollectionLinks();
+    void editorRuntimeCatalogObjectsAreProtected();
     void deepCleanupAppliesSafeCandidates();
+    void deepCleanupRemovesStructurallyInvalidActorEvents();
     void unitFamilyDetectionAndStandardPlanning();
     void renamePlannerBlocksConflicts();
+    void renamePlannerSkipsDependencyCatalogObjects();
+    void catalogEnumRepairFixesLegacyRenameDamage();
+    void reservedCatalogFilterTokensAreNotReferences();
     void referenceRenamePreviewAndApply();
+    void referenceRenameDoesNotRewriteFilterFields();
+    void referenceRenameDoesNotRewriteParentFields();
+    void referenceRenameSkipsOccupiedTargetWhenOwnerNotMoved();
     void referenceRenameRollback();
     void dataCollectionAliasMapping();
     void dataCollectionCreatePreviewAndApply();
@@ -166,6 +179,11 @@ private slots:
     void folderAnalysisCanBeCancelled();
     void unrelatedIdenticalBodiesAreAllowed();
 };
+
+void CoreTests::initTestCase()
+{
+    qputenv("SC2DH_ENABLE_TEST_REFS", "1");
+}
 
 void CoreTests::unrelatedIdenticalBodiesAreAllowed()
 {
@@ -989,13 +1007,13 @@ void CoreTests::unitFamilyDetectionAndStandardPlanning()
     QTemporaryDir dir;
     const QByteArray xml = QByteArrayLiteral(
         "<Catalog>"
-        "<CUnit id=\"Vassel\" actor=\"ActorVassel\" button=\"ButtonVassel\" extra=\"EffectVassel\" ambiguous=\"OddFamilyThing\"/>"
-        "<CActorUnit id=\"ActorVassel\" unitName=\"Vassel\" model=\"ModelVassel\" sound=\"AttackVassel\"/>"
+        "<CUnit id=\"Vassel\"><AbilArray Link=\"AbilityVassel\"/><EffectArray value=\"EffectVassel\"/></CUnit>"
+        "<CActorUnit id=\"ActorVassel\" unitName=\"Vassel\"><Model value=\"ModelVassel\"/><SoundArray value=\"AttackVassel\"/></CActorUnit>"
+        "<CAbilEffectTarget id=\"AbilityVassel\"><CmdButtonArray DefaultButtonFace=\"ButtonVassel\"/></CAbilEffectTarget>"
         "<CButton id=\"ButtonVassel\"/>"
         "<CModel id=\"ModelVassel\"/>"
         "<CSound id=\"AttackVassel\"/>"
         "<CEffect id=\"EffectVassel\"/>"
-        "<CActor id=\"OddFamilyThing\"/>"
         "</Catalog>");
     QVERIFY(writeTextFile(QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml")), xml));
     FolderAnalyzer analyzer;
@@ -1012,23 +1030,24 @@ void CoreTests::unitFamilyDetectionAndStandardPlanning()
     QCOMPARE(objects[QStringLiteral("Vassel")].role, UnitFamilyRole::Unit);
     QCOMPARE(objects[QStringLiteral("ActorVassel")].role, UnitFamilyRole::Actor);
     QCOMPARE(objects[QStringLiteral("ActorVassel")].confidence, QStringLiteral("High"));
+    QCOMPARE(objects[QStringLiteral("AbilityVassel")].role, UnitFamilyRole::Ability);
     QCOMPARE(objects[QStringLiteral("ButtonVassel")].role, UnitFamilyRole::Button);
     QCOMPARE(objects[QStringLiteral("ModelVassel")].role, UnitFamilyRole::Model);
     QCOMPARE(objects[QStringLiteral("AttackVassel")].role, UnitFamilyRole::Attack);
     QCOMPARE(objects[QStringLiteral("EffectVassel")].role, UnitFamilyRole::Effect);
-    QCOMPARE(objects[QStringLiteral("OddFamilyThing")].role, UnitFamilyRole::ManualReview);
 
     StandardNamePlanner planner;
     const RenamePlan plan = planner.plan(analysis, family, QStringLiteral("Vassel"));
     QHash<QString, QString> proposals;
     for (const RenamePlanItem &item : plan.items) proposals.insert(item.oldId, item.newId);
+    QCOMPARE(proposals[QStringLiteral("Vassel")], QStringLiteral("Vassel@Unit"));
     QCOMPARE(proposals[QStringLiteral("ActorVassel")], QStringLiteral("Vassel@Actor"));
+    QCOMPARE(proposals[QStringLiteral("AbilityVassel")], QStringLiteral("Vassel@Ability"));
     QCOMPARE(proposals[QStringLiteral("ButtonVassel")], QStringLiteral("Vassel@Button"));
     QCOMPARE(proposals[QStringLiteral("ModelVassel")], QStringLiteral("Vassel@Model"));
     QCOMPARE(proposals[QStringLiteral("AttackVassel")], QStringLiteral("Vassel@Attack"));
     QCOMPARE(proposals[QStringLiteral("EffectVassel")], QStringLiteral("Vassel@Effect"));
-    QVERIFY(!proposals.contains(QStringLiteral("Vassel"))); // already standard
-    QVERIFY(!plan.manualReview.isEmpty());
+    QVERIFY(plan.manualReview.isEmpty());
 }
 
 void CoreTests::renamePlannerBlocksConflicts()
@@ -1051,6 +1070,88 @@ void CoreTests::renamePlannerBlocksConflicts()
     QVERIFY(targetConflict);
     const RenamePlan atPlan = StandardNamePlanner().plan(analysis, family, QStringLiteral("Vassel@Alias"));
     QVERIFY(!atPlan.valid);
+}
+
+void CoreTests::renamePlannerSkipsDependencyCatalogObjects()
+{
+    AnalysisResult analysis;
+    DataNode node;
+    node.sourceFile = QStringLiteral("Mods/Liberty.SC2Mod/GameData/UnitData.xml");
+    node.elementName = QStringLiteral("CUnit");
+    node.id = QStringLiteral("Marine");
+    analysis.nodes.append(node);
+
+    UnitFamily family;
+    family.rootId = QStringLiteral("Marine");
+    family.rootNodeIndex = 0;
+    UnitFamilyObject object;
+    object.nodeIndex = 0;
+    object.role = UnitFamilyRole::Unit;
+    object.confidence = QStringLiteral("High");
+    object.reason = QStringLiteral("fixture");
+    family.objects.append(object);
+
+    const RenamePlan plan = StandardNamePlanner().plan(analysis, family, QStringLiteral("MarineCustom"));
+    QVERIFY(plan.items.isEmpty());
+    QCOMPARE(plan.manualReview.size(), 1);
+    QVERIFY(plan.manualReview.front().reason.contains(QStringLiteral("protected standard/dependency")));
+    QVERIFY(!plan.valid);
+}
+
+void CoreTests::catalogEnumRepairFixesLegacyRenameDamage()
+{
+    QByteArray xml = QByteArrayLiteral(
+        "<Catalog>"
+        "<CActorUnit id=\"Actor\"><StatusColors index=\"Marine2@Requirement4\" value=\"255,255,255\"/>"
+        "<VitalColors index=\"Marine2@Requirement4\" value=\"255,255,255\"/>"
+        "<VitalNames index=\"Marine2@Requirement4\" value=\"Shield\"/></CActorUnit>"
+        "<CBehaviorBuff id=\"Buff\"><Modification><VitalMaxArray index=\"Marine2@Requirement4\" value=\"1\"/>"
+        "<VitalRegenArray index=\"Marine2@Requirement4\" value=\"1\"/></Modification></CBehaviorBuff>"
+        "<CActorUnit id=\"Filters\"><TargetFilters value=\"Marine2@Behavior10;Ground\"/>"
+        "<On Terms=\"AnimDone Marine2@Behavior4\" Send=\"Create Marine2@Behavior4\"/></CActorUnit>"
+        "<CSound id=\"Snd\" parent=\"Marine2@Behavior4\"/>"
+        "<AlliedPushPriority value=\"-12\"/>"
+        "</Catalog>");
+    int changes = 0;
+    QString error;
+    QVERIFY2(sc2dh::repairKnownCatalogEnumDamage(&xml, &changes, &error), qPrintable(error));
+    QVERIFY(changes >= 8);
+    const QString repaired = QString::fromUtf8(xml);
+    QVERIFY(!repaired.contains(QStringLiteral("Marine2@Requirement4")));
+    QVERIFY(!repaired.contains(QStringLiteral("Marine2@Behavior10")));
+    QVERIFY(!repaired.contains(QStringLiteral("Marine2@Behavior4")));
+    QVERIFY(repaired.contains(QStringLiteral("StatusColors index=\"Shields\"")));
+    QVERIFY(repaired.contains(QStringLiteral("VitalColors index=\"Shields\"")));
+    QVERIFY(repaired.contains(QStringLiteral("VitalNames index=\"Shields\"")));
+    QVERIFY(repaired.contains(QStringLiteral("VitalMaxArray index=\"Shields\"")));
+    QVERIFY(repaired.contains(QStringLiteral("VitalRegenArray index=\"Shields\"")));
+    QVERIFY(repaired.contains(QStringLiteral("TargetFilters value=\"Dead;Ground\"")));
+    QVERIFY(repaired.contains(QStringLiteral("Terms=\"AnimDone Death\"")));
+    QVERIFY(repaired.contains(QStringLiteral("Send=\"Create Death\"")));
+    QVERIFY(repaired.contains(QStringLiteral("parent=\"Death\"")));
+    QVERIFY(repaired.contains(QStringLiteral("AlliedPushPriority value=\"0\"")));
+}
+
+void CoreTests::reservedCatalogFilterTokensAreNotReferences()
+{
+    QTemporaryDir dir;
+    QVERIFY(writeTextFile(QDir(dir.path()).absoluteFilePath(QStringLiteral("Filters.xml")), QByteArrayLiteral(
+        "<Catalog><CBehaviorBuff id=\"Hidden\"/>"
+        "<CWeapon id=\"Gun\"><TargetFilters value=\"Visible;Player,Ally,Hidden,Invulnerable\"/></CWeapon></Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    bool sawGun = false;
+    for (const DataNode &node : analysis.nodes) {
+        if (node.id == QStringLiteral("Gun")) {
+            sawGun = true;
+            QVERIFY(!node.referencedIds.contains(QStringLiteral("Hidden")));
+        }
+    }
+    QVERIFY(sawGun);
 }
 
 void CoreTests::referenceRenamePreviewAndApply()
@@ -1077,10 +1178,144 @@ void CoreTests::referenceRenamePreviewAndApply()
     QVERIFY(QFileInfo(applied.backupFolder).exists());
     QFile rewritten(path); QVERIFY(rewritten.open(QIODevice::ReadOnly));
     const QString output = QString::fromUtf8(rewritten.readAll());
-    QVERIFY(output.contains(QStringLiteral("id=\"Vessel\"")));
+    QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Unit\"")));
     QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Actor\"")));
-    QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel\"")));
-    QVERIFY(output.contains(QStringLiteral("Unit,Vessel Vessel@Actor ActorVasselExtra")));
+    QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel@Unit\"")));
+    QVERIFY(output.contains(QStringLiteral("Unit,Vessel@Unit Vessel@Actor ActorVasselExtra")));
+}
+
+void CoreTests::referenceRenameDoesNotRewriteFilterFields()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml"));
+    const QByteArray original = QByteArrayLiteral(
+        "<Catalog><CUnit id=\"Vassel\" actor=\"ActorVassel\"/>"
+        "<CActorUnit id=\"ActorVassel\" unitName=\"Vassel\">"
+        "<On Send=\"AnimPlay Beam1 Death 0 -1.000000 -1.000000 1.500000 AsDuration\"/>"
+        "</CActorUnit>"
+        "<CWeapon id=\"Gun\"><TargetFilters value=\"Visible;ActorVassel,Hidden,Invulnerable\"/></CWeapon>"
+        "<CEffectDamage id=\"Blast\"><SearchFilters value=\"Visible;ActorVassel,Dead,Hidden\"/></CEffectDamage>"
+        "<CBehaviorBuff id=\"Buff\"><Modification><VitalMaxArray index=\"Shields\" value=\"15\"/></Modification></CBehaviorBuff>"
+        "<CActorUnit id=\"StatusActor\"><StatusColors index=\"ActorVassel\" value=\"255,255,255\"/>"
+        "<VitalColors index=\"ActorVassel\" value=\"255,255,255\"/><VitalNames index=\"ActorVassel\" value=\"Name\"/></CActorUnit>"
+        "<CUnit id=\"Indexed\"><Collide index=\"ActorVassel\" value=\"1\"/></CUnit>"
+        "<CModel id=\"Model\"><Events><Anim value=\"Death,00\"/></Events></CModel>"
+        "</Catalog>");
+    QVERIFY(writeTextFile(path, original));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    const UnitFamily family = UnitFamilyDetector().detect(analysis).front();
+    const RenamePlan plan = StandardNamePlanner().plan(analysis, family, QStringLiteral("Vessel"));
+    QVERIFY(plan.valid);
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+
+    QFile rewritten(path);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Unit\"")));
+    QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Actor\"")));
+    QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel@Unit\"")));
+    QVERIFY(output.contains(QStringLiteral("TargetFilters value=\"Visible;ActorVassel,Hidden,Invulnerable\"")));
+    QVERIFY(output.contains(QStringLiteral("SearchFilters value=\"Visible;ActorVassel,Dead,Hidden\"")));
+    QVERIFY(output.contains(QStringLiteral("VitalMaxArray index=\"Shields\"")));
+    QVERIFY(output.contains(QStringLiteral("StatusColors index=\"ActorVassel\"")));
+    QVERIFY(output.contains(QStringLiteral("VitalColors index=\"ActorVassel\"")));
+    QVERIFY(output.contains(QStringLiteral("VitalNames index=\"ActorVassel\"")));
+    QVERIFY(output.contains(QStringLiteral("Collide index=\"ActorVassel\"")));
+    QVERIFY(output.contains(QStringLiteral("Send=\"AnimPlay Beam1 Death 0 -1.000000 -1.000000 1.500000 AsDuration\"")));
+    QVERIFY(output.contains(QStringLiteral("Anim value=\"Death,00\"")));
+}
+
+void CoreTests::referenceRenameDoesNotRewriteParentFields()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CButton id=\"Zealot\"/>"
+        "<CButton id=\"Train\" Face=\"Zealot\"/>"
+        "<CUnit id=\"CustomZealot\" parent=\"Zealot\" button=\"Zealot\"/>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int zealotButton = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].elementName == QStringLiteral("CButton") && analysis.nodes[i].id == QStringLiteral("Zealot"))
+            zealotButton = i;
+    }
+    QVERIFY(zealotButton >= 0);
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem item;
+    item.nodeIndex = zealotButton;
+    item.oldId = QStringLiteral("Zealot");
+    item.newId = QStringLiteral("Zealot@Ability6");
+    item.selected = true;
+    plan.items << item;
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+
+    QFile rewritten(path);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    QVERIFY(output.contains(QStringLiteral("<CButton id=\"Zealot@Ability6\"")));
+    QVERIFY(output.contains(QStringLiteral("Face=\"Zealot@Ability6\"")));
+    QVERIFY(output.contains(QStringLiteral("button=\"Zealot@Ability6\"")));
+    QVERIFY(output.contains(QStringLiteral("parent=\"Zealot\"")));
+    QVERIFY(!output.contains(QStringLiteral("parent=\"Zealot@Ability6\"")));
+}
+
+void CoreTests::referenceRenameSkipsOccupiedTargetWhenOwnerNotMoved()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"Alpha\"/>"
+        "<CUnit id=\"Beta\"/>"
+        "<CUnit id=\"Watcher\" ref=\"Alpha Beta\"/>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int alpha = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].id == QStringLiteral("Alpha"))
+            alpha = i;
+    }
+    QVERIFY(alpha >= 0);
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem item;
+    item.nodeIndex = alpha;
+    item.oldId = QStringLiteral("Alpha");
+    item.newId = QStringLiteral("Beta");
+    item.selected = true;
+    plan.items << item;
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY(!applied.success);
+
+    QFile unchanged(path);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(unchanged.readAll());
+    QCOMPARE(output.count(QStringLiteral("id=\"Beta\"")), 1);
+    QVERIFY(output.contains(QStringLiteral("id=\"Alpha\"")));
 }
 
 void CoreTests::referenceRenameRollback()
@@ -1129,6 +1364,61 @@ void CoreTests::tokenAwareReplacementVariants()
     QVERIFY(value.endsWith(QStringLiteral("BossDamageBigger")));
 }
 
+void CoreTests::numericOnlyIdsAreNotRewritten()
+{
+    QString numeric = QStringLiteral("Period=\"1\" Range=\"2\" PassChance 1.000000 InfoArray[26]");
+    QCOMPARE(MergeService::replaceIdTokens(&numeric, QStringLiteral("1"), QStringLiteral("Ghost2@Requirement11")), 0);
+    QCOMPARE(MergeService::replaceIdTokens(&numeric, QStringLiteral("26"), QStringLiteral("HugeSwarmQueen@Requirement")), 0);
+    QCOMPARE(numeric, QStringLiteral("Period=\"1\" Range=\"2\" PassChance 1.000000 InfoArray[26]"));
+    QCOMPARE(MergeService::countIdTokens(numeric, QStringLiteral("1")), 0);
+
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Numeric.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"Hero\" period=\"1\" effect=\"1\"/>"
+        "<CEffectDamage id=\"1\"><Amount value=\"5\"/></CEffectDamage>"
+        "<CEffectDamage id=\"2\"><Amount value=\"5\"/></CEffectDamage>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int heroIndex = -1;
+    int oneIndex = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].id == QStringLiteral("Hero"))
+            heroIndex = i;
+        if (analysis.nodes[i].id == QStringLiteral("1"))
+            oneIndex = i;
+    }
+    QVERIFY(heroIndex >= 0);
+    QVERIFY(oneIndex >= 0);
+    QVERIFY(!analysis.nodes[heroIndex].referencedIds.contains(QStringLiteral("1")));
+    QVERIFY(std::none_of(analysis.duplicateContentGroups.cbegin(), analysis.duplicateContentGroups.cend(),
+                         [](const DuplicateContentGroup &group) { return group.mergeCandidate; }));
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem item;
+    item.nodeIndex = oneIndex;
+    item.oldId = QStringLiteral("1");
+    item.newId = QStringLiteral("Hero@Effect");
+    item.selected = true;
+    plan.items << item;
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY(!applied.success);
+
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray unchanged = file.readAll();
+    QVERIFY(unchanged.contains("period=\"1\""));
+    QVERIFY(unchanged.contains("effect=\"1\""));
+    QVERIFY(unchanged.contains("id=\"1\""));
+}
+
 void CoreTests::mergePreviewAndApplyRedirectBeforeDelete()
 {
     QTemporaryDir dir;
@@ -1164,6 +1454,82 @@ void CoreTests::mergePreviewAndApplyRedirectBeforeDelete()
     QVERIFY(output.contains(QStringLiteral("Effect,BossDamage01")));
     QVERIFY(output.contains(QStringLiteral(">BossDamage01 Other<")));
     QVERIFY(output.contains(QStringLiteral("<Ref id=\"BossDamage01\"")));
+}
+
+void CoreTests::mergeDoesNotRewriteSurvivingCatalogIdentityIds()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString file = QDir(dir.path()).absoluteFilePath(QStringLiteral("Effects.xml"));
+    QVERIFY(writeTextFile(file, QByteArrayLiteral(
+        "<Catalog><CEffect id=\"BossDamage01\"><Amount value=\"5\"/></CEffect>"
+        "<CEffect id=\"BossDamage02\"><Amount value=\"5\"/></CEffect>"
+        "<CActor id=\"BossDamage02\" effect=\"BossDamage02\"/></Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int keep = -1;
+    int remove = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].elementName == QStringLiteral("CEffect")
+            && analysis.nodes[i].id == QStringLiteral("BossDamage01")) {
+            keep = i;
+        }
+        if (analysis.nodes[i].elementName == QStringLiteral("CEffect")
+            && analysis.nodes[i].id == QStringLiteral("BossDamage02")) {
+            remove = i;
+        }
+    }
+    QVERIFY(keep >= 0 && remove >= 0);
+
+    const MergeApplyResult applied = MergeService().apply(analysis, MergeRequest{keep, {remove}}, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+
+    QFile rewritten(file);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    QVERIFY(output.contains(QStringLiteral("<CActor id=\"BossDamage02\" effect=\"BossDamage01\"")));
+    QVERIFY(!output.contains(QStringLiteral("<CActor id=\"BossDamage01\"")));
+}
+
+void CoreTests::mergeAllowsResidualOldIdWarning()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString file = QDir(dir.path()).absoluteFilePath(QStringLiteral("Effects.xml"));
+    QVERIFY(writeTextFile(file, QByteArrayLiteral(
+        "<Catalog><CEffect id=\"BossDamage01\"><Amount value=\"5\"/></CEffect>"
+        "<CEffect id=\"BossDamage02\"><Amount value=\"5\"/></CEffect>"
+        "<CActor id=\"Actor\" effect=\"BossDamage02\"><StatusColors index=\"BossDamage02\" value=\"255,255,255\"/></CActor></Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    int keep = -1;
+    int remove = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].id == QStringLiteral("BossDamage01"))
+            keep = i;
+        if (analysis.nodes[i].id == QStringLiteral("BossDamage02"))
+            remove = i;
+    }
+    QVERIFY(keep >= 0 && remove >= 0);
+
+    const MergeApplyResult applied = MergeService().apply(analysis, MergeRequest{keep, {remove}}, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QVERIFY(!applied.warnings.isEmpty());
+    QVERIFY(applied.warnings.join(QLatin1Char('\n')).contains(QStringLiteral("saved anyway")));
+
+    QFile rewritten(file);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    QVERIFY(!output.contains(QStringLiteral("<CEffect id=\"BossDamage02\"")));
+    QVERIFY(output.contains(QStringLiteral("effect=\"BossDamage01\"")));
+    QVERIFY(output.contains(QStringLiteral("StatusColors index=\"BossDamage02\"")));
 }
 
 void CoreTests::mergeRollbackOnFailure()
@@ -1355,15 +1721,116 @@ void CoreTests::unusedDeletionPreservesDataCollectionLinks()
     QCOMPARE(removed, 1);
 }
 
+void CoreTests::editorRuntimeCatalogObjectsAreProtected()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("TerrainData.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CPlacedUnit id=\"Placement01\" Unit=\"UsedUnit\"/>"
+        "<CUnit id=\"UsedUnit\"/>"
+        "<CUnit id=\"UnusedUnit\"/>"
+        "<CTerrain id=\"TerrainBase\" Paint=\"Agria\"/>"
+        "<CTerrain id=\"TerrainChild\" parent=\"TerrainBase\" Paint=\"Agria\"/>"
+        "<CWater id=\"Agria\"/>"
+        "<CLight id=\"AgriaLight\"/>"
+        "<CCamera id=\"Dflt\"/>"
+        "<CTexture id=\"TerrainDiffuse1\"><Slot value=\"Diffuse\"/></CTexture>"
+        "<CTexture id=\"TerrainDiffuse2\"><Slot value=\"Diffuse\"/></CTexture>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    QHash<QString, int> indexById;
+    QHash<QString, UnusedCandidateInfo> candidateById;
+    for (int i = 0; i < analysis.nodes.size(); ++i)
+        indexById.insert(analysis.nodes[i].id, i);
+    for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates)
+        candidateById.insert(analysis.nodes[candidate.nodeIndex].id, candidate);
+
+    const QStringList protectedIds = {
+        QStringLiteral("TerrainBase"),
+        QStringLiteral("TerrainChild"),
+        QStringLiteral("Agria"),
+        QStringLiteral("AgriaLight"),
+        QStringLiteral("Dflt"),
+        QStringLiteral("TerrainDiffuse1"),
+        QStringLiteral("TerrainDiffuse2")
+    };
+    for (const QString &id : protectedIds) {
+        QVERIFY2(candidateById.contains(id), qPrintable(id));
+        QCOMPARE(candidateById.value(id).protectedObject, true);
+        QCOMPARE(candidateById.value(id).state, CandidateState::Blocked);
+        QVERIFY(!analysis.possibleUnusedNodeIndices.contains(indexById.value(id)));
+    }
+    QCOMPARE(candidateById.value(QStringLiteral("UnusedUnit")).state, CandidateState::Safe);
+
+    QVERIFY(std::none_of(analysis.duplicateContentGroups.cbegin(), analysis.duplicateContentGroups.cend(),
+                         [](const DuplicateContentGroup &group) {
+                             return group.elementName.compare(QStringLiteral("CTexture"), Qt::CaseInsensitive) == 0
+                                 || group.elementName.compare(QStringLiteral("CTerrain"), Qt::CaseInsensitive) == 0;
+                         }));
+
+    MergeRequest mergeRequest;
+    mergeRequest.keepNodeIndex = indexById.value(QStringLiteral("TerrainDiffuse1"));
+    mergeRequest.removeNodeIndices = {indexById.value(QStringLiteral("TerrainDiffuse2"))};
+    const MergePreview preview = MergeService().preview(analysis, mergeRequest);
+    QVERIFY(!preview.valid);
+    QVERIFY(preview.warnings.join(QLatin1Char('\n')).contains(QStringLiteral("editor/runtime catalog object")));
+
+    QVERIFY(std::none_of(analysis.deepCleanupCandidates.cbegin(), analysis.deepCleanupCandidates.cend(),
+                         [](const DeepCleanupCandidate &candidate) {
+                             return candidate.kind == DeepCleanupKind::RedundantDefaultField
+                                 && candidate.label == QStringLiteral("TerrainChild.Paint");
+                         }));
+
+    QString backup;
+    QStringList changed;
+    int removed = 0;
+    int skipped = 0;
+    QVERIFY2(analyzer.applySelectedChanges(analysis,
+                                           analysis.possibleUnusedNodeIndices,
+                                           dir.path(),
+                                           {},
+                                           &backup,
+                                           &error,
+                                           &changed,
+                                           &removed,
+                                           &skipped),
+             qPrintable(error));
+
+    QFile result(path);
+    QVERIFY(result.open(QIODevice::ReadOnly));
+    const QByteArray xml = result.readAll();
+    QVERIFY(!xml.contains("id=\"UnusedUnit\""));
+    QVERIFY(xml.contains("id=\"TerrainBase\""));
+    QVERIFY(xml.contains("id=\"TerrainChild\""));
+    QVERIFY(xml.contains("id=\"Agria\""));
+    QVERIFY(xml.contains("id=\"AgriaLight\""));
+    QVERIFY(xml.contains("id=\"Dflt\""));
+    QVERIFY(xml.contains("id=\"TerrainDiffuse1\""));
+    QVERIFY(xml.contains("id=\"TerrainDiffuse2\""));
+    QCOMPARE(removed, 1);
+}
+
 void CoreTests::deepCleanupAppliesSafeCandidates()
 {
     QTemporaryDir dir;
     QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
     QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("Base.SC2Data/UI/Layout")));
     QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("enUS.SC2Data/LocalizedData")));
     const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/Data.xml"));
+    const QString documentInfoPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("DocumentInfo"));
     const QString locPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("enUS.SC2Data/LocalizedData/GameStrings.txt"));
     const QString assetPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Unused.dds"));
+    const QString referencedCardPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("MapCard.jpg"));
+    const QString thumbnailPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Fallen_Thumnail_1.jpg"));
+    const QString screenshotPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("MapScreenshot_01.jpg"));
+    const QString descIndexPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Base.SC2Data/UI/Layout/DescIndex.SC2Layout"));
     const QString minimapPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Minimap.tga"));
     const QString lightingPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("LightingMap.tga"));
     const QString preloadPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("PreloadAssetDB.txt"));
@@ -1374,8 +1841,14 @@ void CoreTests::deepCleanupAppliesSafeCandidates()
         "<CUnit id=\"Parent\" Life=\"100\" flag=\"same\"/>"
         "<CUnit id=\"Child\" parent=\"Parent\" Life=\"100\" flag=\"diff\"/>"
         "</Catalog>")));
+    QVERIFY(writeTextFile(documentInfoPath, QByteArrayLiteral(
+        "<DocInfo><Value>MapCard.jpg</Value><Screenshot><File>MapScreenshot_01.jpg</File></Screenshot></DocInfo>")));
     QVERIFY(writeTextFile(locPath, QByteArrayLiteral("Unit/Name/MissingUnit=Old name\r\nUnit/Name/ExistingFx=Keep\r\n")));
     QVERIFY(writeTextFile(assetPath, QByteArrayLiteral("unused asset bytes")));
+    QVERIFY(writeTextFile(referencedCardPath, QByteArrayLiteral("referenced map card image")));
+    QVERIFY(writeTextFile(thumbnailPath, QByteArrayLiteral("editor map thumbnail")));
+    QVERIFY(writeTextFile(screenshotPath, QByteArrayLiteral("editor map screenshot")));
+    QVERIFY(writeTextFile(descIndexPath, QByteArrayLiteral("<Desc><Include path=\"UI/Layout/UnitFrame1.SC2Layout\"/></Desc>")));
     QVERIFY(writeTextFile(minimapPath, QByteArrayLiteral("editor minimap")));
     QVERIFY(writeTextFile(lightingPath, QByteArrayLiteral("editor lighting")));
     QVERIFY(writeTextFile(preloadPath, QByteArrayLiteral("editor preload asset db")));
@@ -1399,6 +1872,10 @@ void CoreTests::deepCleanupAppliesSafeCandidates()
         QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("Minimap.tga"));
         QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("LightingMap.tga"));
         QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("PreloadAssetDB.txt"));
+        QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("DescIndex.SC2Layout"));
+        QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("MapCard.jpg"));
+        QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("Fallen_Thumnail_1.jpg"));
+        QCOMPARE_NE(QFileInfo(candidate.filePath).fileName(), QStringLiteral("MapScreenshot_01.jpg"));
     }
 
     QVector<int> selected;
@@ -1414,6 +1891,10 @@ void CoreTests::deepCleanupAppliesSafeCandidates()
     QVERIFY(applied.xmlAttributesRemoved >= 1);
     QVERIFY(applied.xmlNodesRemoved >= 1);
     QVERIFY(!QFileInfo::exists(assetPath));
+    QVERIFY(QFileInfo::exists(referencedCardPath));
+    QVERIFY(QFileInfo::exists(thumbnailPath));
+    QVERIFY(QFileInfo::exists(screenshotPath));
+    QVERIFY(QFileInfo::exists(descIndexPath));
     QVERIFY(QFileInfo::exists(minimapPath));
     QVERIFY(QFileInfo::exists(lightingPath));
     QVERIFY(QFileInfo::exists(preloadPath));
@@ -1430,6 +1911,51 @@ void CoreTests::deepCleanupAppliesSafeCandidates()
     const QByteArray loc = locFile.readAll();
     QVERIFY(!loc.contains("MissingUnit"));
     QVERIFY(loc.contains("ExistingFx"));
+}
+
+void CoreTests::deepCleanupRemovesStructurallyInvalidActorEvents()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/ActorData.xml"));
+    QVERIFY(writeTextFile(xmlPath, QByteArrayLiteral(
+        "<Catalog>"
+        "<CActorUnit id=\"BrokenActor\">"
+        "<On index=\"0\" Terms=\"UnitBirth.BrokenActor\"/>"
+        "<On index=\"1\" Send=\"Create\"/>"
+        "<On index=\"2\"/>"
+        "<On index=\"3\" removed=\"1\"/>"
+        "<On index=\"4\" Terms=\"UnitBirth.BrokenActor\" Send=\"Create\"/>"
+        "</CActorUnit>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    QVector<int> selected;
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates) {
+        if (candidate.kind == DeepCleanupKind::BrokenActorEvent
+            && candidate.state == CandidateState::Safe
+            && candidate.recommended) {
+            selected.append(candidate.index);
+        }
+    }
+    QCOMPARE(selected.size(), 3);
+
+    const DeepCleanupApplyResult applied = DeepCleanupService().apply(analysis, selected, dir.path(), true);
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QCOMPARE(applied.xmlNodesRemoved, 3);
+
+    QFile result(xmlPath);
+    QVERIFY(result.open(QIODevice::ReadOnly));
+    const QByteArray xml = result.readAll();
+    QVERIFY(!xml.contains("index=\"0\" Terms=\"UnitBirth.BrokenActor\""));
+    QVERIFY(!xml.contains("index=\"1\" Send=\"Create\""));
+    QVERIFY(!xml.contains("index=\"2\"/>"));
+    QVERIFY(xml.contains("index=\"3\" removed=\"1\""));
+    QVERIFY(xml.contains("index=\"4\" Terms=\"UnitBirth.BrokenActor\" Send=\"Create\""));
 }
 
 void CoreTests::objectFileFilterUsesFullSourcePath()

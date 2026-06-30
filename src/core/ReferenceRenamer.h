@@ -2,6 +2,7 @@
 
 #include "core/StandardNamePlanner.h"
 
+#include <QHash>
 #include <QSet>
 #include <functional>
 
@@ -23,6 +24,7 @@ struct RenameApplyResult
     bool success = false;
     QString backupFolder;
     QStringList changedFiles;
+    QHash<QString, QString> appliedRenames;
     int identitiesRenamed = 0;
     int referencesUpdated = 0;
     QStringList warnings;

@@ -1,6 +1,8 @@
 #include "core/FolderAnalyzer.h"
 
+#include "core/CatalogLinkSchema.h"
 #include "core/DeepCleanupService.h"
+#include "core/CatalogProtection.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -25,43 +27,10 @@ namespace
     }
 
 
-    QStringList tokenizeReferenceValue(const QString &value)
-    {
-        const QString normalized = value.trimmed();
-        if (normalized.isEmpty())
-        {
-            return {};
-        }
-
-        if (normalized.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive) || normalized.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive) || normalized.contains(QStringLiteral("://")))
-        {
-            return {};
-        }
-
-        QStringList tokens = normalized.split(QRegularExpression(QStringLiteral("[\\s,;|:/\\\\]+")), Qt::SkipEmptyParts);
-        if (normalized.contains(QLatin1Char(',')))
-        {
-            const QString lastSegment = normalized.section(QLatin1Char(','), -1).trimmed();
-            if (!lastSegment.isEmpty())
-            {
-                tokens.append(lastSegment);
-            }
-        }
-        if (normalized.contains(QLatin1Char(' ')))
-        {
-            const QString lastWord = normalized.section(QLatin1Char(' '), -1).trimmed();
-            if (!lastWord.isEmpty())
-            {
-                tokens.append(lastWord);
-            }
-        }
-
-        tokens.removeAll(QString());
-        return tokens;
-    }
-
     bool isProtectedObject(const DataNode &node)
     {
+        if (sc2dh::isProtectedCatalogNode(node))
+            return true;
         if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive))
             return true;
         static const QSet<QString> protectedIds = {
@@ -105,6 +74,8 @@ namespace
 
     int tokenCount(const QString &text, const QString &id)
     {
+        if (!sc2dh::isSafeAutomaticObjectId(id))
+            return 0;
         const QRegularExpression expression(QStringLiteral("(?<![A-Za-z0-9_])%1(?![A-Za-z0-9_])")
                                                 .arg(QRegularExpression::escape(id)));
         int count = 0;
@@ -141,6 +112,13 @@ bool FolderAnalyzer::isSc2DataLikeFile(const QFileInfo &info) const
     const QString fileName = info.fileName().toLower();
     if (fileName == QStringLiteral("analysis_report.txt") || fileName == QStringLiteral("planned_changes_report.txt") || fileName == QStringLiteral("rename_to_standard_preview.txt") || fileName == QStringLiteral("data_collection_preview.txt"))
         return false;
+    static const QSet<QString> metadataFileNames = {
+        QStringLiteral("mapinfo"),
+        QStringLiteral("documentinfo"),
+        QStringLiteral("componentlist.sc2components")
+    };
+    if (metadataFileNames.contains(fileName))
+        return true;
     static const QSet<QString> extensions = {
         QStringLiteral("xml"), QStringLiteral("txt"), QStringLiteral("json"), QStringLiteral("ini"),
         QStringLiteral("galaxy"), QStringLiteral("csv"), QStringLiteral("yaml"), QStringLiteral("yml"),
@@ -180,7 +158,8 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
         {
             idGroups[node.id].append(i);
         }
-        if (!node.elementName.isEmpty() && !node.contentHash.isEmpty())
+        if (!node.elementName.isEmpty() && !node.contentHash.isEmpty() && !isProtectedObject(node)
+            && sc2dh::isSafeAutomaticObjectId(node.id))
         {
             const QString bodyKey = node.elementName + QChar(0x1f) + node.contentHash;
             contentGroups[bodyKey].append(i);
@@ -417,17 +396,6 @@ bool FolderAnalyzer::populateReferenceIds(AnalysisResult *result,
         return false;
     }
 
-    QSet<QString> knownIds;
-    for (const DataNode &node : result->nodes)
-    {
-        if (!node.id.isEmpty())
-        {
-            knownIds.insert(node.id);
-        }
-    }
-
-    const QRegularExpression quotedValueRe(QStringLiteral("\"([^\"]*)\""));
-    const QRegularExpression xmlTokenRe(QStringLiteral("\\b[A-Za-z_][A-Za-z0-9_@]*\\b"));
     for (int nodeIndex = 0; nodeIndex < result->nodes.size(); ++nodeIndex)
     {
         if (nodeIndex % 25 == 0)
@@ -438,40 +406,7 @@ bool FolderAnalyzer::populateReferenceIds(AnalysisResult *result,
                 return false;
         }
         DataNode &node = result->nodes[nodeIndex];
-        QSet<QString> references;
-        const auto addCandidate = [&](const QString &candidate)
-        {
-            for (const QString &token : tokenizeReferenceValue(candidate))
-            {
-                if (token.isEmpty() || token == node.id)
-                {
-                    continue;
-                }
-                if (knownIds.contains(token))
-                {
-                    references.insert(token);
-                }
-            }
-        };
-
-        for (auto it = node.attributes.cbegin(); it != node.attributes.cend(); ++it)
-        {
-            addCandidate(it.value());
-        }
-
-        auto matchIterator = quotedValueRe.globalMatch(node.serializedXml);
-        while (matchIterator.hasNext())
-        {
-            addCandidate(matchIterator.next().captured(1));
-        }
-        auto tokenIterator = xmlTokenRe.globalMatch(node.serializedXml);
-        while (tokenIterator.hasNext()) {
-            const QString token = tokenIterator.next().captured(0);
-            if (!token.isEmpty() && token != node.id && knownIds.contains(token))
-                references.insert(token);
-        }
-
-        node.referencedIds = references.values();
+        node.referencedIds = sc2dh::extractCatalogLinkReferences(node).values();
         std::sort(node.referencedIds.begin(), node.referencedIds.end());
     }
     return true;
@@ -1065,6 +1000,8 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
             return false;
         }
         for (const QString &reference : node.referencedIds) if (removedIds.contains(reference)) {
+            if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive))
+                continue;
             if (errorMessage) *errorMessage = QStringLiteral("Post-delete verification failed: %1 still references %2.").arg(node.id, reference);
             rollbackCommitted();
             return false;
