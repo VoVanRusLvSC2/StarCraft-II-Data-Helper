@@ -59,7 +59,89 @@ const QRegularExpression &renameTokenExpression()
     return expression;
 }
 
-int simultaneousReplace(QString *value, const QHash<QString, QString> &renames)
+struct RenameTarget
+{
+    QString newId;
+    QString elementName;
+};
+
+using RenameTargetMap = QHash<QString, QVector<RenameTarget>>;
+
+bool matchesCatalogPrefix(const QString &elementName, const QString &prefix)
+{
+    return prefix.isEmpty() || elementName.startsWith(prefix, Qt::CaseInsensitive);
+}
+
+QString typedReferenceCatalogPrefix(pugi::xml_node node, const QString &fieldName)
+{
+    const QString field = fieldName.toLower();
+    const QString nodeName = QString::fromUtf8(node.name()).toLower();
+
+    if (field == QStringLiteral("unitname") && nodeName.startsWith(QStringLiteral("cactorunit")))
+        return QStringLiteral("CUnit");
+
+    if (field == QStringLiteral("link")) {
+        if (nodeName == QStringLiteral("abilarray"))
+            return QStringLiteral("CAbil");
+        if (nodeName == QStringLiteral("weaponarray"))
+            return QStringLiteral("CWeapon");
+        if (nodeName == QStringLiteral("behaviorarray"))
+            return QStringLiteral("CBehavior");
+    }
+
+    const QString combined = field + QLatin1Char(' ') + nodeName;
+    if (combined.contains(QStringLiteral("model")))
+        return QStringLiteral("CModel");
+    if (combined.contains(QStringLiteral("button")) || combined.contains(QStringLiteral("face")))
+        return QStringLiteral("CButton");
+    if (combined.contains(QStringLiteral("weapon")))
+        return QStringLiteral("CWeapon");
+    if (combined.contains(QStringLiteral("abil")) || combined.contains(QStringLiteral("ability")))
+        return QStringLiteral("CAbil");
+    if (combined.contains(QStringLiteral("effect")))
+        return QStringLiteral("CEffect");
+    if (combined.contains(QStringLiteral("behavior")) || combined.contains(QStringLiteral("buff")))
+        return QStringLiteral("CBehavior");
+    if (combined.contains(QStringLiteral("validator")))
+        return QStringLiteral("CValidator");
+    if (combined.contains(QStringLiteral("requirement")))
+        return QStringLiteral("CRequirement");
+    if (combined.contains(QStringLiteral("mover")))
+        return QStringLiteral("CMover");
+    if (combined.contains(QStringLiteral("turret")))
+        return QStringLiteral("CTurret");
+    if (combined.contains(QStringLiteral("sound")))
+        return QStringLiteral("CSound");
+    if (combined.contains(QStringLiteral("actor")))
+        return QStringLiteral("CActor");
+    return {};
+}
+
+QString resolvedReplacement(const QVector<RenameTarget> &targets, const QString &catalogPrefix)
+{
+    QSet<QString> distinct;
+    for (const RenameTarget &target : targets) {
+        if (!matchesCatalogPrefix(target.elementName, catalogPrefix))
+            continue;
+        distinct.insert(target.newId);
+    }
+    if (distinct.size() != 1)
+        return {};
+    return *distinct.cbegin();
+}
+
+QHash<QString, QString> unambiguousRenames(const RenameTargetMap &renames)
+{
+    QHash<QString, QString> result;
+    for (auto it = renames.cbegin(); it != renames.cend(); ++it) {
+        const QString replacement = resolvedReplacement(it.value(), {});
+        if (!replacement.isEmpty())
+            result.insert(it.key(), replacement);
+    }
+    return result;
+}
+
+int simultaneousReplace(QString *value, const RenameTargetMap &renames, const QString &catalogPrefix = {})
 {
     if (!value || value->isEmpty() || renames.isEmpty())
         return 0;
@@ -75,8 +157,11 @@ int simultaneousReplace(QString *value, const QHash<QString, QString> &renames)
         const auto replacement = renames.constFind(oldId);
         if (replacement == renames.cend())
             continue;
+        const QString newId = resolvedReplacement(replacement.value(), catalogPrefix);
+        if (newId.isEmpty())
+            continue;
         output += value->mid(last, match.capturedStart() - last);
-        output += replacement.value();
+        output += newId;
         last = match.capturedEnd();
         ++replacements;
     }
@@ -116,6 +201,36 @@ struct PendingRename {
     QString actualLocation;
     bool found = false;
 };
+
+bool containsTarget(const RenameTargetMap &renames, const PendingRename &pending)
+{
+    const auto it = renames.constFind(pending.oldId);
+    if (it == renames.cend())
+        return false;
+    for (const RenameTarget &target : it.value())
+        if (target.newId == pending.newId && target.elementName == pending.elementName)
+            return true;
+    return false;
+}
+
+void removeTarget(RenameTargetMap *renames, const PendingRename &pending)
+{
+    if (!renames)
+        return;
+    auto it = renames->find(pending.oldId);
+    if (it == renames->end())
+        return;
+    QVector<RenameTarget> kept;
+    for (const RenameTarget &target : std::as_const(it.value())) {
+        if (target.newId == pending.newId && target.elementName == pending.elementName)
+            continue;
+        kept.append(target);
+    }
+    if (kept.isEmpty())
+        renames->erase(it);
+    else
+        it.value() = kept;
+}
 
 void locateIdentityTargets(pugi::xml_node node,
                            QHash<QString, int> *targetIndexByElementAndId,
@@ -161,7 +276,7 @@ void collectIdentityKeys(pugi::xml_node node, QSet<QString> *keys)
 }
 
 void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QString> &identityByLocation,
-             const QHash<QString, QString> &renames, RewriteResult *result, bool collectChanges)
+             const RenameTargetMap &renames, RewriteResult *result, bool collectChanges)
 {
     if (node.type() == pugi::node_element) {
         const QString path = nodePath(node);
@@ -182,7 +297,7 @@ void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QStr
             const QString before = value;
             if (!shouldRewriteReferenceValue(node, attributeName, value))
                 continue;
-            const int count = simultaneousReplace(&value, renames);
+            const int count = simultaneousReplace(&value, renames, typedReferenceCatalogPrefix(node, attributeName));
             if (count) {
                 attribute.set_value(value.toUtf8().constData());
                 result->references += count;
@@ -195,7 +310,7 @@ void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QStr
         const QString before = value;
         if (!shouldRewriteReferenceValue(node.parent(), QString(), value))
             return;
-        const int count = simultaneousReplace(&value, renames);
+        const int count = simultaneousReplace(&value, renames, typedReferenceCatalogPrefix(node.parent(), QString()));
         if (count) {
             node.set_value(value.toUtf8().constData());
             result->references += count;
@@ -322,7 +437,7 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         locateIdentityTargets(doc, &targetIndexByElementAndId, &targetIndexByLocation, &targetsIt.value());
     }
 
-    QHash<QString, QString> renames;
+    RenameTargetMap renames;
     QHash<QString, QHash<QString, QString>> identities;
     QStringList missing;
     QSet<QString> missingOldIds;
@@ -333,7 +448,7 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
                 missingOldIds.insert(pending.oldId);
                 continue;
             }
-            renames.insert(pending.oldId, pending.newId);
+            renames[pending.oldId].append({pending.newId, pending.elementName});
             identities[it.key()].insert(pending.actualLocation, pending.newId);
         }
     }
@@ -351,14 +466,14 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
             removedDependent = false;
             for (auto it = pendingByFile.begin(); it != pendingByFile.end(); ++it) {
                 for (const PendingRename &pending : std::as_const(it.value())) {
-                    if (!pending.found || !renames.contains(pending.oldId))
+                    if (!pending.found || !containsTarget(renames, pending))
                         continue;
                     const bool targetStayedOccupied = existingIdentityKeys.contains(fastLookupKey(pending.elementName, pending.newId))
                         && (!movingFoundOldKeys.contains(fastLookupKey(pending.elementName, pending.newId))
                             || !renames.contains(pending.newId));
                     if (!missingOldIds.contains(pending.newId) && !targetStayedOccupied)
                         continue;
-                    renames.remove(pending.oldId);
+                    removeTarget(&renames, pending);
                     identities[it.key()].remove(pending.actualLocation);
                     missing << QStringLiteral("%1 (target %2 stayed occupied or was not moved)").arg(pending.oldId, pending.newId);
                     missingOldIds.insert(pending.oldId);
@@ -379,7 +494,7 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         return false;
     }
     if (appliedRenames)
-        *appliedRenames = renames;
+        *appliedRenames = unambiguousRenames(renames);
 
     fileIndex = 0;
     for (const ScannedFileInfo &info : analysis.scannedFiles) {
@@ -437,13 +552,13 @@ RenamePreviewReport ReferenceRenamer::preview(const AnalysisResult &analysis, co
         } else {
             // Archive extraction is ephemeral; provide a serialized-node planning
             // preview while keeping Apply disabled at the UI boundary.
-            QHash<QString, QString> renames;
+            RenameTargetMap renames;
             for (const RenamePlanItem &item : plan.items) {
                 if (item.nodeIndex < 0 || item.nodeIndex >= analysis.nodes.size())
                     continue;
                 const DataNode &node = analysis.nodes[item.nodeIndex];
                 if (sc2dh::isSafeAutomaticObjectId(item.oldId) && !sc2dh::isProtectedCatalogNode(node))
-                    renames.insert(item.oldId, item.newId);
+                    renames[item.oldId].append({item.newId, node.elementName});
             }
             rewriteResult.identities = plan.items.size();
             QSet<QString> files;

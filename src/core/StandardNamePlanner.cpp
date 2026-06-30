@@ -5,6 +5,17 @@
 #include <QHash>
 #include <QRegularExpression>
 
+namespace {
+
+QString actorUnitName(const DataNode &node)
+{
+    if (!node.elementName.startsWith(QStringLiteral("CActorUnit"), Qt::CaseInsensitive))
+        return {};
+    return node.attributes.value(QStringLiteral("unitName")).trimmed();
+}
+
+} // namespace
+
 RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitFamily &family,
                                      const QString &targetRootId, const QSet<int> &includedNodeIndices) const
 {
@@ -20,11 +31,28 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
     if (sc2dh::isReservedCatalogToken(result.targetRootId) || sc2dh::isKnownBlizzardCatalogId(result.targetRootId)) {
         result.conflicts << QStringLiteral("Target root ID is a reserved SC2/Blizzard catalog token and cannot be renamed automatically.");
     }
-    QSet<QString> existingIds;
-    for (const DataNode &node : analysis.nodes) existingIds.insert(node.id);
+    const auto identityKey = [](const QString &elementName, const QString &id) {
+        return elementName.toCaseFolded() + QChar(0x1f) + id.toCaseFolded();
+    };
+
+    QSet<QString> existingIdentities;
+    for (const DataNode &node : analysis.nodes)
+        if (!node.id.isEmpty())
+            existingIdentities.insert(identityKey(node.elementName, node.id));
+
+    QSet<QString> familyUnitIds;
+    familyUnitIds.insert(family.rootId.toCaseFolded());
+    for (const UnitFamilyObject &object : family.objects) {
+        if (object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size())
+            continue;
+        if (object.role == UnitFamilyRole::Unit)
+            familyUnitIds.insert(analysis.nodes[object.nodeIndex].id.toCaseFolded());
+    }
+
     QHash<UnitFamilyRole, int> roleCounts;
     for (const UnitFamilyObject &object : family.objects) ++roleCounts[object.role];
     QHash<UnitFamilyRole, int> roleOrdinals;
+    QHash<QString, int> actorUnitOrdinals;
     QHash<QString, int> proposedCounts;
 
     for (const UnitFamilyObject &object : family.objects) {
@@ -59,6 +87,25 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         QString expected;
         if (object.nodeIndex == family.rootNodeIndex) {
             expected = result.targetRootId;
+        } else if (object.role == UnitFamilyRole::Actor
+                   && node.elementName.startsWith(QStringLiteral("CActorUnit"), Qt::CaseInsensitive)) {
+            const QString unitName = actorUnitName(node);
+            if (unitName.isEmpty() || !familyUnitIds.contains(unitName.toCaseFolded())) {
+                UnitFamilyObject manual = object;
+                manual.confidence = QStringLiteral("Low");
+                manual.reason += unitName.isEmpty()
+                    ? QStringLiteral("; actor unitName is empty, so automatic rename could break SC2 actor scope")
+                    : QStringLiteral("; actor unitName points outside this family, so automatic rename could create duplicate unit-scope actors");
+                result.manualReview << manual;
+                continue;
+            }
+
+            const QString targetUnitId = unitName.compare(family.rootId, Qt::CaseInsensitive) == 0
+                ? result.targetRootId
+                : unitName;
+            const int ordinal = ++actorUnitOrdinals[targetUnitId.toCaseFolded()];
+            expected = ordinal == 1 ? targetUnitId
+                                    : targetUnitId + QStringLiteral("@Actor") + QString::number(ordinal);
         } else {
             const int ordinal = ++roleOrdinals[object.role];
             QString suffix;
@@ -81,15 +128,20 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         item.reason = object.reason;
         item.riskLevel = object.confidence == QStringLiteral("High") ? QStringLiteral("Low") : QStringLiteral("Medium");
         result.items << item;
-        ++proposedCounts[expected];
+        ++proposedCounts[identityKey(node.elementName, expected)];
     }
 
-    QSet<QString> renamedOldIds;
-    for (const RenamePlanItem &item : result.items) renamedOldIds.insert(item.oldId);
+    QSet<QString> renamedOldIdentities;
+    for (const RenamePlanItem &item : result.items) {
+        const DataNode &node = analysis.nodes[item.nodeIndex];
+        renamedOldIdentities.insert(identityKey(node.elementName, item.oldId));
+    }
     for (RenamePlanItem &item : result.items) {
-        if (proposedCounts.value(item.newId) > 1) {
+        const DataNode &node = analysis.nodes[item.nodeIndex];
+        const QString newIdentity = identityKey(node.elementName, item.newId);
+        if (proposedCounts.value(newIdentity) > 1) {
             item.blocked = true; item.conflict = QStringLiteral("Duplicate proposed ID");
-        } else if (existingIds.contains(item.newId) && !renamedOldIds.contains(item.newId)) {
+        } else if (existingIdentities.contains(newIdentity) && !renamedOldIdentities.contains(newIdentity)) {
             item.blocked = true; item.conflict = QStringLiteral("Target ID already exists");
         }
         if (item.blocked) result.conflicts << QStringLiteral("%1 -> %2: %3").arg(item.oldId, item.newId, item.conflict);

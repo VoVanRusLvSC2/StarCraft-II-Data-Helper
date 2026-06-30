@@ -26,6 +26,7 @@
 #include <QTemporaryDir>
 #include <QStringList>
 
+#include <algorithm>
 #include <optional>
 #include <pugixml.hpp>
 
@@ -150,11 +151,13 @@ private slots:
     void unitFamilyDetectionAndStandardPlanning();
     void renamePlannerBlocksConflicts();
     void renamePlannerSkipsDependencyCatalogObjects();
+    void renamePlannerSkipsActorUnitsOutsideFamilyScope();
     void catalogEnumRepairFixesLegacyRenameDamage();
     void reservedCatalogFilterTokensAreNotReferences();
     void referenceRenamePreviewAndApply();
     void referenceRenameDoesNotRewriteFilterFields();
     void referenceRenameDoesNotRewriteParentFields();
+    void referenceRenameUsesTypedCatalogFields();
     void referenceRenameSkipsOccupiedTargetWhenOwnerNotMoved();
     void referenceRenameRollback();
     void dataCollectionAliasMapping();
@@ -1076,7 +1079,7 @@ void CoreTests::unitFamilyDetectionAndStandardPlanning()
     QHash<QString, QString> proposals;
     for (const RenamePlanItem &item : plan.items) proposals.insert(item.oldId, item.newId);
     QVERIFY(!proposals.contains(QStringLiteral("Vassel")));
-    QCOMPARE(proposals[QStringLiteral("ActorVassel")], QStringLiteral("Vassel@Actor"));
+    QCOMPARE(proposals[QStringLiteral("ActorVassel")], QStringLiteral("Vassel"));
     QCOMPARE(proposals[QStringLiteral("AbilityVassel")], QStringLiteral("Vassel@Ability"));
     QCOMPARE(proposals[QStringLiteral("ButtonVassel")], QStringLiteral("Vassel@Button"));
     QCOMPARE(proposals[QStringLiteral("ModelVassel")], QStringLiteral("Vassel@Model"));
@@ -1090,7 +1093,7 @@ void CoreTests::renamePlannerBlocksConflicts()
     QTemporaryDir dir;
     QVERIFY(writeTextFile(QDir(dir.path()).absoluteFilePath(QStringLiteral("Conflict.xml")), QByteArrayLiteral(
         "<Catalog><CUnit id=\"Vassel\" a=\"ActorVassel\" b=\"ButtonVassel\" c=\"VasselButtonAlt\"/>"
-        "<CActorUnit id=\"ActorVassel\" unitName=\"Vassel\"/><CActor id=\"Vassel@Actor\"/>"
+        "<CActorUnit id=\"ActorVassel\" unitName=\"Vassel\"/><CActorUnit id=\"Vassel\"/>"
         "<CButton id=\"ButtonVassel\"/><CButton id=\"VasselButtonAlt\"/></Catalog>")));
     FolderAnalyzer analyzer; AnalysisResult analysis; QString error;
     QVERIFY(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error));
@@ -1131,6 +1134,46 @@ void CoreTests::renamePlannerSkipsDependencyCatalogObjects()
     QCOMPARE(plan.manualReview.size(), 1);
     QVERIFY(plan.manualReview.front().reason.contains(QStringLiteral("protected standard/dependency")));
     QVERIFY(!plan.valid);
+}
+
+void CoreTests::renamePlannerSkipsActorUnitsOutsideFamilyScope()
+{
+    AnalysisResult analysis;
+    DataNode root;
+    root.elementName = QStringLiteral("CUnit");
+    root.id = QStringLiteral("Rofius");
+    analysis.nodes.append(root);
+
+    DataNode emptyScopedActor;
+    emptyScopedActor.elementName = QStringLiteral("CActorUnit");
+    emptyScopedActor.id = QStringLiteral("Probe");
+    emptyScopedActor.attributes.insert(QStringLiteral("unitName"), QString());
+    analysis.nodes.append(emptyScopedActor);
+
+    DataNode foreignScopedActor;
+    foreignScopedActor.elementName = QStringLiteral("CActorUnit");
+    foreignScopedActor.id = QStringLiteral("ForeignProbe");
+    foreignScopedActor.attributes.insert(QStringLiteral("unitName"), QStringLiteral("Probe"));
+    analysis.nodes.append(foreignScopedActor);
+
+    UnitFamily family;
+    family.rootId = QStringLiteral("Rofius");
+    family.rootNodeIndex = 0;
+    family.objects.append({0, UnitFamilyRole::Unit, QStringLiteral("High"), QStringLiteral("Root CUnit")});
+    family.objects.append({1, UnitFamilyRole::Actor, QStringLiteral("High"), QStringLiteral("fixture")});
+    family.objects.append({2, UnitFamilyRole::Actor, QStringLiteral("High"), QStringLiteral("fixture")});
+
+    const RenamePlan plan = StandardNamePlanner().plan(analysis, family, QStringLiteral("Rofius"));
+    QSet<QString> renamedIds;
+    for (const RenamePlanItem &item : plan.items)
+        renamedIds.insert(item.oldId);
+    QVERIFY(!renamedIds.contains(QStringLiteral("Probe")));
+    QVERIFY(!renamedIds.contains(QStringLiteral("ForeignProbe")));
+
+    bool sawActorScopeReason = false;
+    for (const UnitFamilyObject &object : plan.manualReview)
+        sawActorScopeReason = sawActorScopeReason || object.reason.contains(QStringLiteral("actor unitName"));
+    QVERIFY(sawActorScopeReason);
 }
 
 void CoreTests::catalogEnumRepairFixesLegacyRenameDamage()
@@ -1214,9 +1257,9 @@ void CoreTests::referenceRenamePreviewAndApply()
     QFile rewritten(path); QVERIFY(rewritten.open(QIODevice::ReadOnly));
     const QString output = QString::fromUtf8(rewritten.readAll());
     QVERIFY(output.contains(QStringLiteral("id=\"Vessel\"")));
-    QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Actor\"")));
+    QCOMPARE(output.count(QStringLiteral("id=\"Vessel\"")), 2);
     QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel\"")));
-    QVERIFY(output.contains(QStringLiteral("Unit,Vessel Vessel@Actor ActorVasselExtra")));
+    QVERIFY(output.contains(QStringLiteral("Unit,Vessel Vessel ActorVasselExtra")));
 }
 
 void CoreTests::referenceRenameDoesNotRewriteFilterFields()
@@ -1253,7 +1296,7 @@ void CoreTests::referenceRenameDoesNotRewriteFilterFields()
     QVERIFY(rewritten.open(QIODevice::ReadOnly));
     const QString output = QString::fromUtf8(rewritten.readAll());
     QVERIFY(output.contains(QStringLiteral("id=\"Vessel\"")));
-    QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Actor\"")));
+    QCOMPARE(output.count(QStringLiteral("id=\"Vessel\"")), 2);
     QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel\"")));
     QVERIFY(output.contains(QStringLiteral("TargetFilters value=\"Visible;ActorVassel,Hidden,Invulnerable\"")));
     QVERIFY(output.contains(QStringLiteral("SearchFilters value=\"Visible;ActorVassel,Dead,Hidden\"")));
@@ -1309,6 +1352,64 @@ void CoreTests::referenceRenameDoesNotRewriteParentFields()
     QVERIFY(output.contains(QStringLiteral("button=\"Zealot@Ability6\"")));
     QVERIFY(output.contains(QStringLiteral("parent=\"Zealot\"")));
     QVERIFY(!output.contains(QStringLiteral("parent=\"Zealot@Ability6\"")));
+}
+
+void CoreTests::referenceRenameUsesTypedCatalogFields()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Typed.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"Ghost2\"/>"
+        "<CActorUnit id=\"GhostActor\" unitName=\"Ghost2\"><Model value=\"Ghost2\"/></CActorUnit>"
+        "<CModel id=\"Ghost2\"/>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    const auto nodeIndex = [&analysis](const QString &type, const QString &id) {
+        for (int index = 0; index < analysis.nodes.size(); ++index) {
+            const DataNode &node = analysis.nodes[index];
+            if (node.elementName == type && node.id == id)
+                return index;
+        }
+        return -1;
+    };
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem unitItem;
+    unitItem.nodeIndex = nodeIndex(QStringLiteral("CUnit"), QStringLiteral("Ghost2"));
+    unitItem.oldId = QStringLiteral("Ghost2");
+    unitItem.newId = QStringLiteral("GhostCustom");
+    unitItem.role = UnitFamilyRole::Unit;
+    unitItem.selected = true;
+    plan.items.append(unitItem);
+
+    RenamePlanItem modelItem;
+    modelItem.nodeIndex = nodeIndex(QStringLiteral("CModel"), QStringLiteral("Ghost2"));
+    modelItem.oldId = QStringLiteral("Ghost2");
+    modelItem.newId = QStringLiteral("GhostCustom@Model");
+    modelItem.role = UnitFamilyRole::Model;
+    modelItem.selected = true;
+    plan.items.append(modelItem);
+    QVERIFY(unitItem.nodeIndex >= 0);
+    QVERIFY(modelItem.nodeIndex >= 0);
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+
+    QFile rewritten(path);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    QVERIFY(output.contains(QStringLiteral("<CUnit id=\"GhostCustom\"")));
+    QVERIFY(output.contains(QStringLiteral("<CModel id=\"GhostCustom@Model\"")));
+    QVERIFY(output.contains(QStringLiteral("unitName=\"GhostCustom\"")));
+    QVERIFY(output.contains(QStringLiteral("<Model value=\"GhostCustom@Model\"")));
+    QVERIFY(!output.contains(QStringLiteral("unitName=\"GhostCustom@Model\"")));
 }
 
 void CoreTests::referenceRenameSkipsOccupiedTargetWhenOwnerNotMoved()
