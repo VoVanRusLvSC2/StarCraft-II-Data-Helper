@@ -241,4 +241,34 @@ inline bool isSafeAutomaticObjectId(const QString &id)
     return hasLetter;
 }
 
+inline QString catalogIdentityScope(const QString &elementName)
+{
+    const QString type = elementName.trimmed().toCaseFolded();
+    if (type.isEmpty())
+        return {};
+
+    static const QStringList groupedPrefixes = {
+        QStringLiteral("cabil"),
+        QStringLiteral("cactor"),
+        QStringLiteral("cbehavior"),
+        QStringLiteral("cdataCollection"),
+        QStringLiteral("ceffect"),
+        QStringLiteral("cmodel"),
+        QStringLiteral("csound"),
+        QStringLiteral("cunit"),
+        QStringLiteral("cvalidator")
+    };
+
+    for (const QString &prefix : groupedPrefixes) {
+        if (type.startsWith(prefix.toCaseFolded()))
+            return prefix.toCaseFolded();
+    }
+    return type;
+}
+
+inline QString catalogIdentityKey(const QString &elementName, const QString &id)
+{
+    return catalogIdentityScope(elementName) + QChar(0x1f) + id.trimmed().toCaseFolded();
+}
+
 } // namespace sc2dh

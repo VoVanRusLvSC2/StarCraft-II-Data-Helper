@@ -32,13 +32,18 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         result.conflicts << QStringLiteral("Target root ID is a reserved SC2/Blizzard catalog token and cannot be renamed automatically.");
     }
     const auto identityKey = [](const QString &elementName, const QString &id) {
-        return elementName.toCaseFolded() + QChar(0x1f) + id.toCaseFolded();
+        return sc2dh::catalogIdentityKey(elementName, id);
     };
 
     QSet<QString> existingIdentities;
+    QHash<QString, QSet<QString>> scopesById;
     for (const DataNode &node : analysis.nodes)
-        if (!node.id.isEmpty())
+        if (!node.id.isEmpty()) {
             existingIdentities.insert(identityKey(node.elementName, node.id));
+            const QString scope = sc2dh::catalogIdentityScope(node.elementName);
+            if (!scope.isEmpty())
+                scopesById[node.id.toCaseFolded()].insert(scope);
+        }
 
     QSet<QString> familyUnitIds;
     familyUnitIds.insert(family.rootId.toCaseFolded());
@@ -81,6 +86,14 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         }
         if (object.role == UnitFamilyRole::ManualReview || object.role == UnitFamilyRole::Other) {
             result.manualReview << object;
+            continue;
+        }
+        if (node.elementName.startsWith(QStringLiteral("CModel"), Qt::CaseInsensitive)
+            && scopesById.value(node.id.toCaseFolded()).contains(QStringLiteral("cactor"))) {
+            UnitFamilyObject manual = object;
+            manual.confidence = QStringLiteral("Low");
+            manual.reason += QStringLiteral("; model shares its ID with an actor/doodad, which SC2 placement can resolve implicitly");
+            result.manualReview << manual;
             continue;
         }
         const QString role = unitFamilyRoleName(object.role);

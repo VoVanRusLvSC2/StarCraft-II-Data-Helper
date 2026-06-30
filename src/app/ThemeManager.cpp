@@ -180,7 +180,7 @@ public:
         }
 
         static const QPixmap track(QStringLiteral(":/textures/ui_nova_global_scrollbar_bg.png"));
-        static const QPixmap handle(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_normal4.png"));
+        static const QPixmap handle(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_normal.png"));
         static const QPixmap handleOver(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_over.png"));
         drawAxisTexture(painter, subControlRect(control, option, SC_ScrollBarGroove, widget), track, slider->orientation);
         const bool hover = (slider->state & State_MouseOver) && (slider->activeSubControls & SC_ScrollBarSlider);

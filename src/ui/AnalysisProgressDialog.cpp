@@ -49,7 +49,7 @@ public:
         : QProgressBar(parent),
           m_track(QPixmap(QStringLiteral(":/textures/ui_nova_global_scrollbar_bg.png"))
                       .transformed(QTransform().rotate(90.0), Qt::SmoothTransformation)),
-          m_fill(QPixmap(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_normal4.png"))
+          m_fill(QPixmap(QStringLiteral(":/textures/ui_nova_global_scrollbarbutton_normal.png"))
                      .transformed(QTransform().rotate(90.0), Qt::SmoothTransformation))
     {
         setAttribute(Qt::WA_OpaquePaintEvent, false);

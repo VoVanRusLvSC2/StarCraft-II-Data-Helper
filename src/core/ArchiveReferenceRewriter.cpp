@@ -1,10 +1,14 @@
 #include "core/ArchiveReferenceRewriter.h"
 
+#include "core/AnalysisModels.h"
+#include "core/CatalogProtection.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
 
 #include <algorithm>
 
@@ -148,6 +152,45 @@ bool writeFile(const QString &path, const QByteArray &bytes, QString *errorMessa
 
 namespace sc2dh
 {
+
+QHash<QString, QString> unambiguousArchiveReferenceRenames(const AnalysisResult &analysis,
+                                                           const QHash<QString, QString> &renames,
+                                                           QStringList *skippedIds)
+{
+    if (skippedIds)
+        skippedIds->clear();
+    if (renames.isEmpty())
+        return {};
+
+    QHash<QString, QSet<QString>> scopesById;
+    for (const DataNode &node : analysis.nodes) {
+        if (node.id.isEmpty())
+            continue;
+        const QString scope = catalogIdentityScope(node.elementName);
+        if (scope.isEmpty() || scope == QStringLiteral("cdatacollection"))
+            continue;
+        scopesById[node.id.toCaseFolded()].insert(scope);
+    }
+
+    QHash<QString, QString> filtered;
+    for (auto it = renames.cbegin(); it != renames.cend(); ++it) {
+        const QString oldId = it.key();
+        const QSet<QString> scopes = scopesById.value(oldId.toCaseFolded());
+        if (scopes.size() > 1) {
+            if (skippedIds)
+                skippedIds->append(oldId);
+            continue;
+        }
+        filtered.insert(oldId, it.value());
+    }
+    if (skippedIds) {
+        skippedIds->removeDuplicates();
+        std::sort(skippedIds->begin(), skippedIds->end(), [](const QString &a, const QString &b) {
+            return a.compare(b, Qt::CaseInsensitive) < 0;
+        });
+    }
+    return filtered;
+}
 
 bool rewriteArchiveReferenceFiles(const QString &rootFolder,
                                   const QStringList &relativeFiles,

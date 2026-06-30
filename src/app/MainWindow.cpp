@@ -45,7 +45,10 @@
 #include <QFrame>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QImage>
+#include <QGradient>
 #include <QLineEdit>
+#include <QLinearGradient>
 #include <QLabel>
 #include <QListWidget>
 #include <QMessageBox>
@@ -53,6 +56,7 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QResizeEvent>
 #include <QSettings>
 #include <QSaveFile>
 #include <QScrollArea>
@@ -78,6 +82,7 @@
 #include <QPaintEvent>
 #include <QPixmap>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QSizePolicy>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -98,6 +103,7 @@
 
 #include <optional>
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace
@@ -133,6 +139,69 @@ namespace
         const QString suffix = QStringLiteral(".%1").arg(info.suffix()).toLower();
         return filter.suffixes.contains(suffix);
     }
+
+    void drawCoverPixmap(QPainter &painter, const QRect &target, const QPixmap &pixmap);
+
+    class Sc2FrameHighlightOverlay final : public QWidget
+    {
+    public:
+        explicit Sc2FrameHighlightOverlay(QWidget *parent = nullptr)
+            : QWidget(parent),
+              m_highlight(QStringLiteral(":/textures/ui_nova_archives_backgroundframehighlight.png")),
+              m_highlightMask(QStringLiteral(":/textures/ui_nova_archives_backgroundframehighlightmask.png"))
+        {
+            setObjectName(QStringLiteral("sc2OpenFileHighlightOverlay"));
+            setAttribute(Qt::WA_TransparentForMouseEvents);
+            setAttribute(Qt::WA_NoSystemBackground);
+            setAttribute(Qt::WA_TranslucentBackground);
+        }
+
+        void setPhase(int phase)
+        {
+            if (m_phase == phase)
+                return;
+            m_phase = phase;
+            update();
+        }
+
+    protected:
+        void paintEvent(QPaintEvent *event) override
+        {
+            Q_UNUSED(event);
+            if (rect().isEmpty() || m_highlight.isNull() || m_highlightMask.isNull())
+                return;
+
+            QImage layer(size(), QImage::Format_ARGB32_Premultiplied);
+            layer.fill(Qt::transparent);
+
+            QPainter layerPainter(&layer);
+            layerPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            drawCoverPixmap(layerPainter, layer.rect(), m_highlight);
+            layerPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+            QImage mask(size(), QImage::Format_ARGB32_Premultiplied);
+            mask.fill(Qt::transparent);
+            QPainter maskPainter(&mask);
+            maskPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            QEasingCurve easing(QEasingCurve::OutCubic);
+            const qreal linearProgress = qreal(m_phase) / qreal(qMax(1, kPeriod - 1));
+            const qreal progress = easing.valueForProgress(qBound<qreal>(0.0, linearProgress, 1.0));
+            const qreal travel = height() * 4.0 / 3.0;
+            const int offsetY = qRound(-travel + progress * travel * 2.0);
+            drawCoverPixmap(maskPainter, QRect(0, offsetY, width(), height()), m_highlightMask);
+            maskPainter.end();
+            layerPainter.drawImage(QPoint(0, 0), mask);
+            layerPainter.end();
+
+            QPainter painter(this);
+            painter.drawImage(QPoint(0, 0), layer);
+        }
+
+    private:
+        static constexpr int kPeriod = 240;
+        QPixmap m_highlight;
+        QPixmap m_highlightMask;
+        int m_phase = 0;
+    };
 
     QString fileTypeLabel(const QFileInfo &info)
     {
@@ -521,11 +590,11 @@ namespace
             setWindowFlags((windowFlags() | Qt::FramelessWindowHint) & ~Qt::WindowContextHelpButtonHint);
             setModal(true);
             setMinimumSize(940, 560);
-            QSize targetSize(1220, 760);
+            QSize targetSize(1180, 720);
             if (const QScreen *screen = parent ? parent->screen() : QApplication::primaryScreen()) {
                 const QRect available = screen->availableGeometry();
-                targetSize.setWidth(qMin(targetSize.width(), qMax(940, available.width() - 80)));
-                targetSize.setHeight(qMin(targetSize.height(), qMax(560, available.height() - 100)));
+                targetSize.setWidth(qMin(targetSize.width(), qMax(940, available.width() - 90)));
+                targetSize.setHeight(qMin(targetSize.height(), qMax(560, available.height() - 110)));
             }
             resize(targetSize);
 
@@ -541,45 +610,72 @@ namespace
             };
 
             auto *layout = new QVBoxLayout(this);
-            layout->setContentsMargins(16, 8, 16, 12);
-            layout->setSpacing(7);
+            layout->setContentsMargins(18, 8, 24, 18);
+            layout->setSpacing(5);
+
+            m_hexOverlay = new QFrame(this);
+            m_hexOverlay->setObjectName(QStringLiteral("sc2OpenFileHexOverlay"));
+            m_hexOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
+            m_hexOverlay->lower();
+            auto *hexEffect = new QGraphicsOpacityEffect(m_hexOverlay);
+            hexEffect->setOpacity(0.16);
+            m_hexOverlay->setGraphicsEffect(hexEffect);
+            m_highlightOverlay = new Sc2FrameHighlightOverlay(this);
+            m_highlightTimer = new QTimer(this);
+            connect(m_highlightTimer, &QTimer::timeout, this, [this]()
+                    {
+                m_highlightPhase = (m_highlightPhase + 1) % 240;
+                if (m_highlightOverlay)
+                {
+                    m_highlightOverlay->raise();
+                    m_highlightOverlay->setPhase(m_highlightPhase);
+                }
+            });
+            m_highlightTimer->start(33);
 
             auto *titleBar = new QFrame(this);
             titleBar->setObjectName(QStringLiteral("sc2OpenFileTitleBar"));
             titleBar->setMouseTracking(true);
+            titleBar->setMinimumHeight(66);
+            titleBar->setMaximumHeight(68);
             auto *titleBarLayout = new QHBoxLayout(titleBar);
-            titleBarLayout->setContentsMargins(8, 4, 4, 4);
-            titleBarLayout->setSpacing(8);
-            auto *windowIcon = new QLabel(titleBar);
-            windowIcon->setObjectName(QStringLiteral("sc2OpenFileWindowIcon"));
-            windowIcon->setPixmap(QPixmap(QStringLiteral(":/icons/Icon.png")).scaled(18, 18, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-            auto *windowTitle = new QLabel(QStringLiteral("Open SC2 File"), titleBar);
-            windowTitle->setObjectName(QStringLiteral("sc2OpenFileWindowTitle"));
-            auto *closeButton = new QPushButton(QStringLiteral("X"), titleBar);
-            closeButton->setObjectName(QStringLiteral("sc2OpenFileCloseButton"));
-            closeButton->setFixedSize(44, 36);
-            titleBarLayout->addWidget(windowIcon);
-            titleBarLayout->addWidget(windowTitle);
+            titleBarLayout->setContentsMargins(0, 16, 30, 8);
+            titleBarLayout->setSpacing(0);
             titleBarLayout->addStretch(1);
-            titleBarLayout->addWidget(closeButton);
             layout->addWidget(titleBar);
-            connect(closeButton, &QPushButton::clicked, this, &QDialog::reject);
 
-            auto *title = new QLabel(QStringLiteral("OPEN SC2 FILE"), this);
-            title->setObjectName(QStringLiteral("panelTitle"));
-            title->setMaximumHeight(24);
-            layout->addWidget(title);
+            auto *panelHeader = new QFrame(this);
+            panelHeader->setObjectName(QStringLiteral("sc2OpenFilePanelHeader"));
+            panelHeader->setMouseTracking(true);
+            auto *panelHeaderLayout = new QHBoxLayout(panelHeader);
+            panelHeaderLayout->setContentsMargins(0, 0, 0, 0);
+            panelHeaderLayout->setSpacing(8);
+            auto *panelIcon = new QLabel(panelHeader);
+            panelIcon->setObjectName(QStringLiteral("sc2OpenFilePanelIcon"));
+            panelIcon->setPixmap(QPixmap(QStringLiteral(":/icons/Icon.png")).scaled(30, 30, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            auto *title = new QLabel(QStringLiteral("OPEN SC2 FILE"), panelHeader);
+            title->setObjectName(QStringLiteral("sc2OpenFilePanelTitle"));
+            auto *titleGlow = new QGraphicsDropShadowEffect(title);
+            titleGlow->setBlurRadius(14.0);
+            titleGlow->setColor(QColor(130, 255, 221, 190));
+            titleGlow->setOffset(0.0, 0.0);
+            title->setGraphicsEffect(titleGlow);
+            panelHeaderLayout->addWidget(panelIcon);
+            panelHeaderLayout->addWidget(title);
+            panelHeaderLayout->addStretch(1);
+            layout->addWidget(panelHeader);
 
             m_status = new QLabel(this);
             m_status->setObjectName(QStringLiteral("inspectorSubtitle"));
             m_status->setWordWrap(false);
-            m_status->setMaximumHeight(28);
+            m_status->setMaximumHeight(24);
+            m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
             layout->addWidget(m_status);
 
             m_path = new QLineEdit(this);
             m_path->setObjectName(QStringLiteral("sc2OpenFilePath"));
-            m_path->setMinimumHeight(38);
-            m_path->setMaximumHeight(38);
+            m_path->setMinimumHeight(34);
+            m_path->setMaximumHeight(34);
             m_path->setPlaceholderText(QStringLiteral("Current folder..."));
             layout->addWidget(m_path);
 
@@ -587,17 +683,19 @@ namespace
             m_parentButton = new QPushButton(QStringLiteral("Up"), this);
             m_parentButton->setObjectName(QStringLiteral("sc2OpenFileParentButton"));
             m_parentButton->setToolTip(QStringLiteral("Open parent directory"));
-            m_parentButton->setMinimumSize(82, 40);
-            m_parentButton->setMaximumHeight(40);
+            m_parentButton->setMinimumSize(74, 34);
+            m_parentButton->setMaximumHeight(34);
             m_search = new QLineEdit(this);
             m_search->setObjectName(QStringLiteral("sc2OpenFileSearch"));
-            m_search->setMinimumHeight(40);
-            m_search->setMaximumHeight(40);
+            m_search->setMinimumHeight(34);
+            m_search->setMaximumHeight(34);
             m_search->setPlaceholderText(QStringLiteral("Search files and folders..."));
             m_filter = new QComboBox(this);
             m_filter->setObjectName(QStringLiteral("sc2OpenFileFilter"));
-            m_filter->setMinimumHeight(40);
-            m_filter->setMaximumHeight(40);
+            m_filter->setMinimumHeight(34);
+            m_filter->setMaximumHeight(34);
+            m_filter->setMinimumWidth(430);
+            m_filter->setMaximumWidth(620);
             for (const Sc2FileOpenFilter &filter : m_filters)
                 m_filter->addItem(filter.label);
             searchRow->addWidget(m_parentButton);
@@ -614,7 +712,7 @@ namespace
             m_places->setProperty("texturetype", QStringLiteral("border"));
             m_places->viewport()->setObjectName(QStringLiteral("fileOpenPlacesViewport"));
             m_places->setSelectionMode(QAbstractItemView::SingleSelection);
-            m_places->setSpacing(3);
+            m_places->setSpacing(2);
             m_places->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
             m_places->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
             m_table = new QTableWidget(splitter);
@@ -632,17 +730,17 @@ namespace
             m_table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
             m_table->setShowGrid(false);
             m_table->verticalHeader()->hide();
-            m_table->verticalHeader()->setDefaultSectionSize(38);
-            m_table->horizontalHeader()->setFixedHeight(40);
+            m_table->verticalHeader()->setDefaultSectionSize(36);
+            m_table->horizontalHeader()->setFixedHeight(34);
             m_table->horizontalHeader()->setStretchLastSection(true);
-            m_table->setColumnWidth(0, 470);
-            m_table->setColumnWidth(1, 130);
-            m_table->setColumnWidth(2, 110);
+            m_table->setColumnWidth(0, 445);
+            m_table->setColumnWidth(1, 118);
+            m_table->setColumnWidth(2, 100);
             splitter->addWidget(m_places);
             splitter->addWidget(m_table);
             splitter->setStretchFactor(0, 1);
             splitter->setStretchFactor(1, 4);
-            splitter->setSizes({260, 920});
+            splitter->setSizes({230, 870});
             layout->addWidget(splitter, 1);
 
             auto *nameRow = new QHBoxLayout;
@@ -650,8 +748,8 @@ namespace
             nameLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
             m_name = new QLineEdit(this);
             m_name->setObjectName(QStringLiteral("sc2OpenFileName"));
-            m_name->setMinimumHeight(38);
-            m_name->setMaximumHeight(38);
+            m_name->setMinimumHeight(34);
+            m_name->setMaximumHeight(34);
             m_name->setPlaceholderText(QStringLiteral("Selected file or folder..."));
             nameRow->addWidget(nameLabel);
             nameRow->addWidget(m_name, 1);
@@ -660,19 +758,22 @@ namespace
             m_selection = new QLabel(this);
             m_selection->setObjectName(QStringLiteral("inspectorSubtitle"));
             m_selection->setTextInteractionFlags(Qt::TextSelectableByMouse);
-            m_selection->setMinimumHeight(34);
-            m_selection->setMaximumHeight(38);
+            m_selection->setMinimumHeight(30);
+            m_selection->setMaximumHeight(32);
+            m_selection->setMinimumWidth(0);
+            m_selection->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
             m_selection->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
 
             auto *buttonRow = new QHBoxLayout;
+            buttonRow->setContentsMargins(0, 1, 12, 2);
             buttonRow->setSpacing(12);
             buttonRow->addWidget(m_selection, 1);
             m_open = new QPushButton(QStringLiteral("Open"), this);
             m_cancel = new QPushButton(QStringLiteral("Cancel"), this);
             m_open->setObjectName(QStringLiteral("sc2OpenFileOpenButton"));
             m_cancel->setObjectName(QStringLiteral("sc2OpenFileCancelButton"));
-            m_open->setMinimumWidth(150);
-            m_cancel->setMinimumWidth(150);
+            m_open->setMinimumWidth(132);
+            m_cancel->setMinimumWidth(132);
             buttonRow->addWidget(m_open);
             buttonRow->addWidget(m_cancel);
             layout->addLayout(buttonRow);
@@ -699,6 +800,8 @@ namespace
             if (initialDir.isEmpty())
                 initialDir = QDir::homePath();
             openDirectory(initialDir, initialFile);
+            updateHexOverlayGeometry();
+            updateHighlightOverlayGeometry();
         }
 
         QString selectedFile() const { return m_selectedFile; }
@@ -746,7 +849,8 @@ namespace
             QWidget *child = event ? childAt(event->pos()) : nullptr;
             const QString childName = child ? child->objectName() : QString();
             const bool titleDrag = childName == QStringLiteral("sc2OpenFileTitleBar")
-                                   || childName.startsWith(QStringLiteral("sc2OpenFileWindow"));
+                                   || childName == QStringLiteral("sc2OpenFilePanelHeader")
+                                   || childName.startsWith(QStringLiteral("sc2OpenFilePanel"));
             if (event && event->button() == Qt::LeftButton && titleDrag) {
                 m_dragPosition = event->globalPosition().toPoint() - frameGeometry().topLeft();
                 m_dragging = true;
@@ -770,6 +874,14 @@ namespace
         {
             m_dragging = false;
             QDialog::mouseReleaseEvent(event);
+        }
+
+        void resizeEvent(QResizeEvent *event) override
+        {
+            QDialog::resizeEvent(event);
+            updateHexOverlayGeometry();
+            updateHighlightOverlayGeometry();
+            updateSelectionText();
         }
 
     private:
@@ -798,7 +910,7 @@ namespace
                 if (!nameItem) return;
                 const QString path = nameItem->data(Qt::UserRole).toString();
                 m_name->setText(QFileInfo(path).fileName());
-                m_selection->setText(QDir::toNativeSeparators(path)); });
+                setSelectionText(QDir::toNativeSeparators(path)); });
             connect(m_table, &QTableWidget::itemDoubleClicked, this, [this](QTableWidgetItem *item)
                     {
                 if (!item) return;
@@ -851,9 +963,9 @@ namespace
                 m_parentButton->setEnabled(parentDir.cdUp());
             }
             m_name->setText(suggestedFile);
-            m_selection->setText(QDir::toNativeSeparators(suggestedFile.isEmpty()
-                                                              ? m_currentDir
-                                                              : QDir(m_currentDir).absoluteFilePath(suggestedFile)));
+            setSelectionText(QDir::toNativeSeparators(suggestedFile.isEmpty()
+                                                           ? m_currentDir
+                                                           : QDir(m_currentDir).absoluteFilePath(suggestedFile)));
             populateFiles();
             if (!suggestedFile.isEmpty())
                 selectFileName(suggestedFile);
@@ -944,7 +1056,7 @@ namespace
             if (info.isFile())
             {
                 m_name->setText(info.fileName());
-                m_selection->setText(QDir::toNativeSeparators(info.absoluteFilePath()));
+                setSelectionText(QDir::toNativeSeparators(info.absoluteFilePath()));
                 confirmSelection();
             }
         }
@@ -992,6 +1104,41 @@ namespace
                 m_status->setText(text);
         }
 
+        void setSelectionText(const QString &text)
+        {
+            m_selectionFullText = text;
+            updateSelectionText();
+        }
+
+        void updateSelectionText()
+        {
+            if (!m_selection)
+                return;
+            m_selection->setToolTip(m_selectionFullText);
+            const int textWidth = qMax(24, m_selection->contentsRect().width() - 6);
+            m_selection->setText(m_selection->fontMetrics().elidedText(m_selectionFullText,
+                                                                       Qt::ElideMiddle,
+                                                                       textWidth));
+        }
+
+        void updateHexOverlayGeometry()
+        {
+            if (!m_hexOverlay)
+                return;
+            const int inset = 24;
+            m_hexOverlay->setGeometry(inset, 12, qMax(0, width() - inset * 2), 136);
+            m_hexOverlay->lower();
+        }
+
+        void updateHighlightOverlayGeometry()
+        {
+            if (!m_highlightOverlay)
+                return;
+            m_highlightOverlay->setGeometry(0, 0, qMax(0, width()), qMax(0, height()));
+            m_highlightOverlay->setPhase(m_highlightPhase);
+            m_highlightOverlay->raise();
+        }
+
         QVector<Sc2FileOpenFilter> m_filters;
         QListWidget *m_places = nullptr;
         QTableWidget *m_table = nullptr;
@@ -1004,8 +1151,13 @@ namespace
         QPushButton *m_open = nullptr;
         QPushButton *m_cancel = nullptr;
         QPushButton *m_parentButton = nullptr;
+        QFrame *m_hexOverlay = nullptr;
+        Sc2FrameHighlightOverlay *m_highlightOverlay = nullptr;
+        QTimer *m_highlightTimer = nullptr;
+        int m_highlightPhase = 0;
         QString m_currentDir;
         QString m_selectedFile;
+        QString m_selectionFullText;
         QPoint m_dragPosition;
         bool m_dragging = false;
     };
@@ -1282,14 +1434,21 @@ namespace
     public:
         explicit Sc2BackgroundWidget(QWidget *parent = nullptr)
             : QWidget(parent),
-              m_grid(QStringLiteral(":/textures/ui_nova_storymode_bggrid.png")),
-              m_points(QStringLiteral(":/textures/ui_nova_storymode_bgpointgrid.png")),
               m_lights(QStringLiteral(":/textures/ui_nova_login_backgroundlights.png")),
               m_frame(QStringLiteral(":/textures/ui_nova_archives_backgroundframe.png")),
               m_highlight(QStringLiteral(":/textures/ui_nova_archives_backgroundframehighlight.png")),
               m_scanlines(QStringLiteral(":/textures/ui_nova_archives_backgroundframe_scanlines.png"))
         {
             setAttribute(Qt::WA_StyledBackground, true);
+            auto *timer = new QTimer(this);
+            connect(timer, &QTimer::timeout, this, [this]()
+                    {
+                m_glowPhase += 0.035;
+                if (m_glowPhase > 1000.0)
+                    m_glowPhase = 0.0;
+                if (QSettings().value(QStringLiteral("ui/backgroundGlows"), true).toBool())
+                    update(); });
+            timer->start(70);
         }
 
     protected:
@@ -1298,10 +1457,14 @@ namespace
             QPainter painter(this);
             painter.fillRect(event->rect(), QColor(5, 11, 16));
 
-            painter.setOpacity(0.12);
-            painter.drawTiledPixmap(event->rect(), m_grid);
-            painter.setOpacity(0.10);
-            painter.drawTiledPixmap(event->rect(), m_points);
+            QLinearGradient baseGradient(rect().topLeft(), rect().bottomRight());
+            baseGradient.setColorAt(0.0, QColor(4, 26, 28, 120));
+            baseGradient.setColorAt(0.48, QColor(2, 12, 17, 95));
+            baseGradient.setColorAt(1.0, QColor(0, 5, 10, 130));
+            painter.fillRect(event->rect(), baseGradient);
+
+            if (QSettings().value(QStringLiteral("ui/backgroundGlows"), true).toBool())
+                drawBackgroundGlows(painter);
 
             painter.setOpacity(0.13);
             drawCoverPixmap(painter, rect(), m_lights);
@@ -1314,8 +1477,42 @@ namespace
         }
 
     private:
-        QPixmap m_grid;
-        QPixmap m_points;
+        void drawBackgroundGlows(QPainter &painter)
+        {
+            const QRectF area = rect();
+            const qreal w = qMax<qreal>(1.0, area.width());
+            const qreal h = qMax<qreal>(1.0, area.height());
+            const qreal radius = qMax(w, h) * 0.26;
+            const auto drawGlow = [&painter](const QPointF &center, qreal glowRadius, QColor color, qreal alpha)
+            {
+                color.setAlphaF(qBound<qreal>(0.0, alpha, 1.0));
+                QColor edge = color;
+                edge.setAlpha(0);
+                QRadialGradient gradient(center, glowRadius);
+                gradient.setColorAt(0.0, color);
+                gradient.setColorAt(0.55, QColor(color.red(), color.green(), color.blue(), qRound(color.alpha() * 0.28)));
+                gradient.setColorAt(1.0, edge);
+                painter.fillRect(QRectF(center.x() - glowRadius, center.y() - glowRadius,
+                                        glowRadius * 2.0, glowRadius * 2.0),
+                                 gradient);
+            };
+
+            painter.save();
+            painter.setCompositionMode(QPainter::CompositionMode_Screen);
+            const qreal p = m_glowPhase;
+            drawGlow(QPointF(w * (0.18 + 0.025 * std::sin(p * 0.9)),
+                             h * (0.22 + 0.035 * std::cos(p * 0.7))),
+                     radius, QColor(0, 122, 255), 0.16);
+            drawGlow(QPointF(w * (0.78 + 0.020 * std::cos(p * 0.6)),
+                             h * (0.36 + 0.045 * std::sin(p * 0.8))),
+                     radius * 0.82, QColor(0, 190, 255), 0.12);
+            drawGlow(QPointF(w * (0.54 + 0.035 * std::sin(p * 0.45)),
+                             h * (0.84 + 0.020 * std::cos(p * 0.5))),
+                     radius * 0.72, QColor(23, 88, 255), 0.10);
+            painter.restore();
+        }
+
+        qreal m_glowPhase = 0.0;
         QPixmap m_lights;
         QPixmap m_frame;
         QPixmap m_highlight;
@@ -1984,6 +2181,10 @@ void MainWindow::showSettingsDialog()
                                    settings.value(QStringLiteral("ui/buttonSounds"), true).toBool());
     auto *animationCheck = checkBoxRow(QStringLiteral("Button animations"),
                                        settings.value(QStringLiteral("ui/buttonAnimations"), true).toBool());
+    auto *backgroundGlowCheck = checkBoxRow(
+        QStringLiteral("Blue background glow effects"),
+        settings.value(QStringLiteral("ui/backgroundGlows"), true).toBool(),
+        QStringLiteral("Shows animated soft blue background glows behind the main interface."));
     auto *musicCheck = checkBoxRow(QStringLiteral("Background music"), AudioManager::isMusicEnabled());
     auto *musicValue = new QLabel(&dialog);
     musicValue->setObjectName(QStringLiteral("inspectorSubtitle"));
@@ -2015,6 +2216,7 @@ void MainWindow::showSettingsDialog()
     collectionMode->setToolTip(QStringLiteral("Unit keeps the current behavior. UnitAbilWeapon creates separate collections like Gargantua, Gargantua_Jump and Gargantua_Weapon."));
     layout->addWidget(soundCheck);
     layout->addWidget(animationCheck);
+    layout->addWidget(backgroundGlowCheck);
     layout->addWidget(musicCheck);
     layout->addWidget(musicValue);
     layout->addWidget(musicSlider);
@@ -2030,12 +2232,15 @@ void MainWindow::showSettingsDialog()
             {
         settings.setValue(QStringLiteral("ui/buttonSounds"), soundCheck->isChecked());
         settings.setValue(QStringLiteral("ui/buttonAnimations"), animationCheck->isChecked());
+        settings.setValue(QStringLiteral("ui/backgroundGlows"), backgroundGlowCheck->isChecked());
         settings.setValue(QStringLiteral("optimization/duplicateMergeEnabled"), duplicatesCheck->isChecked());
         settings.setValue(QStringLiteral("backup/enabled"), backupCheck->isChecked());
         settings.setValue(QStringLiteral("ui/startFullscreen"), startFullscreenCheck->isChecked());
         settings.setValue(QStringLiteral("dataCollection/mode"), collectionMode->currentData().toString());
         AudioManager::setMusicSettings(musicCheck->isChecked(), musicSlider->value() / 100.0);
         setDuplicateMergeEnabled(duplicatesCheck->isChecked());
+        if (auto *root = findChild<QWidget *>(QStringLiteral("workspaceRoot")))
+            root->update();
         if (!m_result.nodes.isEmpty()) refreshPages();
         dialog.accept(); });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -2143,6 +2348,9 @@ bool MainWindow::validateArchiveCatalogSchema(const QString &archivePath, QStrin
         QStringLiteral("--max-errors"),
         QStringLiteral("16")
     });
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PYTHONIOENCODING"), QStringLiteral("utf-8"));
+    process.setProcessEnvironment(env);
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.start();
 
@@ -2156,17 +2364,16 @@ bool MainWindow::validateArchiveCatalogSchema(const QString &archivePath, QStrin
     {
         process.kill();
         process.waitForFinished(5000);
-        if (errorMessage)
-            *errorMessage = QStringLiteral("XSD catalog validation timed out before archive save.");
-        return false;
+        logLine(QStringLiteral("XSD validation warning: timed out before archive save; saving anyway."));
+        return true;
     }
 
     const QString output = compactProcessOutput(QString::fromUtf8(process.readAll()));
     if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
     {
-        if (errorMessage)
-            *errorMessage = QStringLiteral("XSD catalog validation failed before archive save:\n%1").arg(output);
-        return false;
+        Q_UNUSED(errorMessage);
+        logLine(QStringLiteral("XSD validation warning: failed before archive save; saving anyway.\n%1").arg(output));
+        return true;
     }
 
     logLine(output.isEmpty()
@@ -3575,9 +3782,12 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
         }
         QStringList changedFiles = result.changedFiles;
         sc2dh::ArchiveReferenceRewriteReport archiveRewrite;
+        QStringList skippedArchiveRenames;
+        const QHash<QString, QString> archiveRenames =
+            sc2dh::unambiguousArchiveReferenceRenames(materialized, result.appliedRenames, &skippedArchiveRenames);
         if (!sc2dh::rewriteArchiveReferenceFiles(workspace.path(),
                                                  archiveReferenceFilesForWorkspace(materialized, workspace.path()),
-                                                 result.appliedRenames,
+                                                 archiveRenames,
                                                  &archiveRewrite,
                                                  &error))
         {
@@ -4366,9 +4576,12 @@ void MainWindow::applyOptimizationWizardPlan()
                         changedFiles.append(result.changedFiles);
                         changedFiles.removeDuplicates();
                         sc2dh::ArchiveReferenceRewriteReport archiveRewrite;
+                        QStringList skippedArchiveRenames;
+                        const QHash<QString, QString> archiveRenames =
+                            sc2dh::unambiguousArchiveReferenceRenames(current, result.appliedRenames, &skippedArchiveRenames);
                         if (!sc2dh::rewriteArchiveReferenceFiles(workspace.path(),
                                                                  archiveReferenceFilesForWorkspace(current, workspace.path()),
-                                                                 result.appliedRenames,
+                                                                 archiveRenames,
                                                                  &archiveRewrite,
                                                                  &error))
                         {

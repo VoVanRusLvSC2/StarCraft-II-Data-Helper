@@ -44,6 +44,11 @@ QString fastLookupKey(const QString &left, const QString &right)
     return left + QChar(0x1f) + right;
 }
 
+QString catalogLookupKey(const QString &elementName, const QString &id)
+{
+    return sc2dh::catalogIdentityKey(elementName, id);
+}
+
 bool isTopLevelCatalogIdentity(const pugi::xml_node &node)
 {
     pugi::xml_node parent = node.parent();
@@ -269,7 +274,7 @@ void collectIdentityKeys(pugi::xml_node node, QSet<QString> *keys)
     if (node.type() == pugi::node_element) {
         const pugi::xml_attribute idAttribute = node.attribute("id");
         if (idAttribute)
-            keys->insert(fastLookupKey(QString::fromUtf8(node.name()), QString::fromUtf8(idAttribute.value())));
+            keys->insert(catalogLookupKey(QString::fromUtf8(node.name()), QString::fromUtf8(idAttribute.value())));
     }
     for (pugi::xml_node child = node.first_child(); child; child = child.next_sibling())
         collectIdentityKeys(child, keys);
@@ -417,15 +422,17 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         if (progress)
             progress(QStringLiteral("locate"), fileIndex, totalFiles, info.filePath);
         ++fileIndex;
-        auto targetsIt = pendingByFile.find(info.filePath);
-        if (targetsIt == pendingByFile.end())
+        if (!info.isXml)
             continue;
+        auto targetsIt = pendingByFile.find(info.filePath);
         QByteArray bytes;
         if (!readFile(info.filePath, &bytes, error)) return false;
         pugi::xml_document doc;
         const pugi::xml_parse_result parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
         if (!parsed) { *error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description()); return false; }
         collectIdentityKeys(doc, &existingIdentityKeys);
+        if (targetsIt == pendingByFile.end())
+            continue;
         QHash<QString, int> targetIndexByElementAndId;
         QHash<QString, int> targetIndexByLocation;
         for (int targetIndex = 0; targetIndex < targetsIt.value().size(); ++targetIndex) {
@@ -456,7 +463,7 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
     for (auto it = pendingByFile.cbegin(); it != pendingByFile.cend(); ++it) {
         for (const PendingRename &pending : std::as_const(it.value())) {
             if (pending.found)
-                movingFoundOldKeys.insert(fastLookupKey(pending.elementName, pending.oldId));
+                movingFoundOldKeys.insert(catalogLookupKey(pending.elementName, pending.oldId));
         }
     }
 
@@ -468,8 +475,8 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
                 for (const PendingRename &pending : std::as_const(it.value())) {
                     if (!pending.found || !containsTarget(renames, pending))
                         continue;
-                    const bool targetStayedOccupied = existingIdentityKeys.contains(fastLookupKey(pending.elementName, pending.newId))
-                        && (!movingFoundOldKeys.contains(fastLookupKey(pending.elementName, pending.newId))
+                    const bool targetStayedOccupied = existingIdentityKeys.contains(catalogLookupKey(pending.elementName, pending.newId))
+                        && (!movingFoundOldKeys.contains(catalogLookupKey(pending.elementName, pending.newId))
                             || !renames.contains(pending.newId));
                     if (!missingOldIds.contains(pending.newId) && !targetStayedOccupied)
                         continue;

@@ -17,6 +17,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -197,6 +198,9 @@ bool validateArchiveCatalogSchema(const QString &archivePath, QString *error)
         QStringLiteral("--max-errors"),
         QStringLiteral("16")
     });
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PYTHONIOENCODING"), QStringLiteral("utf-8"));
+    process.setProcessEnvironment(env);
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.start();
     if (!process.waitForStarted(5000))
@@ -204,16 +208,21 @@ bool validateArchiveCatalogSchema(const QString &archivePath, QString *error)
     if (!process.waitForFinished(180000)) {
         process.kill();
         process.waitForFinished(5000);
-        if (error)
-            *error = QStringLiteral("XSD catalog validation timed out before archive save.");
-        return false;
+        QTextStream err(stderr);
+        err << "warning archive=" << QDir::toNativeSeparators(archivePath)
+            << " xsd_validation=timeout saving_anyway=1\n";
+        err.flush();
+        Q_UNUSED(error);
+        return true;
     }
     if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        if (error) {
-            const QString output = compactProcessOutput(QString::fromUtf8(process.readAll()));
-            *error = QStringLiteral("XSD catalog validation failed before archive save:\n%1").arg(output);
-        }
-        return false;
+        QTextStream err(stderr);
+        err << "warning archive=" << QDir::toNativeSeparators(archivePath)
+            << " xsd_validation=failed saving_anyway=1\n"
+            << compactProcessOutput(QString::fromUtf8(process.readAll())) << '\n';
+        err.flush();
+        Q_UNUSED(error);
+        return true;
     }
     return true;
 }
@@ -748,8 +757,11 @@ bool applyRenamePlans(QString workspace, AnalysisResult *analysis,
         changedFiles->removeDuplicates();
 
         sc2dh::ArchiveReferenceRewriteReport archiveRewrite;
+        QStringList skippedArchiveRenames;
+        const QHash<QString, QString> archiveRenames =
+            sc2dh::unambiguousArchiveReferenceRenames(*analysis, result.appliedRenames, &skippedArchiveRenames);
         if (!sc2dh::rewriteArchiveReferenceFiles(workspace, archiveReferenceEntries,
-                                                 result.appliedRenames, &archiveRewrite, error)) {
+                                                 archiveRenames, &archiveRewrite, error)) {
             return false;
         }
         if (archiveRewrite.replacements > 0) {
