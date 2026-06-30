@@ -58,9 +58,7 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         const QString role = unitFamilyRoleName(object.role);
         QString expected;
         if (object.nodeIndex == family.rootNodeIndex) {
-            expected = object.role == UnitFamilyRole::Unit
-                ? result.targetRootId + QLatin1Char('@') + role
-                : result.targetRootId;
+            expected = result.targetRootId;
         } else {
             const int ordinal = ++roleOrdinals[object.role];
             QString suffix;

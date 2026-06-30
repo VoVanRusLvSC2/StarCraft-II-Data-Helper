@@ -376,13 +376,41 @@ void ensureBasicDataCollectionSupport(pugi::xml_node catalog)
     ensureTemplate(catalog, QStringLiteral("CDataCollection"), QStringLiteral("Weapon_Missile"), QStringLiteral("WeaponBase"));
 }
 
-QString defaultCategoriesForFamily(const UnitFamily &family)
+QString defaultCategoriesForFamily(const AnalysisResult &analysis, const UnitFamily &family)
 {
-    if (family.entityType == DataCollectionEntityType::Ability)
-        return QStringLiteral("DataGroup:Ability,ObjectType:Other");
-    if (family.entityType == DataCollectionEntityType::Weapon)
-        return QStringLiteral("DataGroup:Weapon,ObjectType:Other");
-    return QStringLiteral("DataGroup:Unit,ObjectType:Unit");
+    const QString dataGroup = family.entityType == DataCollectionEntityType::Ability ? QStringLiteral("Ability")
+        : family.entityType == DataCollectionEntityType::Weapon ? QStringLiteral("Weapon")
+                                                                : QStringLiteral("Unit");
+    QString race;
+    QString dataFamily;
+    QString objectType = dataGroup == QStringLiteral("Unit") ? QStringLiteral("Unit") : QStringLiteral("Other");
+    if (family.rootNodeIndex >= 0 && family.rootNodeIndex < analysis.nodes.size()) {
+        const DataNode &root = analysis.nodes.at(family.rootNodeIndex);
+        pugi::xml_document fragment;
+        if (fragment.load_string(root.serializedXml.toUtf8().constData())) {
+            const pugi::xml_node node = fragment.first_child();
+            race = QString::fromUtf8(node.attribute("race").value()).trimmed();
+            const QString categories = QString::fromUtf8(node.child("EditorCategories").attribute("value").value());
+            for (const QString &rawToken : categories.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                const QString token = rawToken.trimmed();
+                if (token.startsWith(QStringLiteral("Race:"), Qt::CaseInsensitive) && race.isEmpty())
+                    race = token.section(QLatin1Char(':'), 1);
+                else if (token.startsWith(QStringLiteral("DataFamily:"), Qt::CaseInsensitive))
+                    dataFamily = token.section(QLatin1Char(':'), 1);
+                else if (token.startsWith(QStringLiteral("ObjectFamily:"), Qt::CaseInsensitive) && dataFamily.isEmpty())
+                    dataFamily = token.section(QLatin1Char(':'), 1);
+                else if (token.startsWith(QStringLiteral("ObjectType:"), Qt::CaseInsensitive) && dataGroup == QStringLiteral("Unit"))
+                    objectType = token.section(QLatin1Char(':'), 1);
+            }
+        }
+    }
+    QStringList categories{QStringLiteral("DataGroup:%1").arg(dataGroup)};
+    if (!race.isEmpty())
+        categories << QStringLiteral("Race:%1").arg(race);
+    if (!dataFamily.isEmpty())
+        categories << QStringLiteral("DataFamily:%1").arg(dataFamily);
+    categories << QStringLiteral("ObjectType:%1").arg(objectType);
+    return categories.join(QLatin1Char(','));
 }
 
 bool listfileContainsEntry(const QString &path, const QString &entry)
@@ -912,7 +940,7 @@ bool applyDataCollections(const QString &mapPath, QString workspace, const Analy
             pugi::xml_node category = collection.child("EditorCategories");
             if (!category)
                 category = collection.prepend_child("EditorCategories");
-            setXmlAttribute(category, "value", defaultCategoriesForFamily(family));
+            setXmlAttribute(category, "value", defaultCategoriesForFamily(analysis, family));
 
             QSet<QString> existingRecords;
             for (pugi::xml_node record : collection.children("DataRecord")) {

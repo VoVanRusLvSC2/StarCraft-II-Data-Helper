@@ -4149,6 +4149,14 @@ void MainWindow::applyOptimizationWizardPlan()
         for (const QString &message : messages)
         {
             logLine(QStringLiteral("Optimization service message: %1").arg(message));
+            if (message.contains(QStringLiteral("residual old ID token"), Qt::CaseInsensitive)
+                || message.startsWith(QStringLiteral("Post-merge verification still sees"), Qt::CaseInsensitive)
+                || message.startsWith(QStringLiteral("Post-rename verification reported non-fatal"), Qt::CaseInsensitive)
+                || message.contains(QStringLiteral("saved anyway for manual review"), Qt::CaseInsensitive))
+            {
+                notes << message;
+                continue;
+            }
             if (message.startsWith(QStringLiteral("Skipped "), Qt::CaseInsensitive))
             {
                 ++serviceSkippedRecommendations;

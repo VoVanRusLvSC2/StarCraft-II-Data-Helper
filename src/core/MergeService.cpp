@@ -373,7 +373,7 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
             const QByteArray output = QByteArray::fromStdString(stream.str());
             const QRegularExpressionMatch remaining = redirectsRegex.match(QString::fromUtf8(output));
             if (remaining.hasMatch()) {
-                result.warnings << QStringLiteral("Duplicate merge left residual old ID token %1 in %2; saved anyway for manual review.")
+                result.warnings << QStringLiteral("Duplicate merge kept residual old ID token %1 in %2 for manual review.")
                                        .arg(remaining.captured(1), info.filePath);
             }
             staged.insert(info.filePath, output);
@@ -421,7 +421,7 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     for (const QString &removed : plan.removedIds) {
         for (const DataNode &node : rebuilt.nodes) {
             if (node.id == removed || node.referencedIds.contains(removed)) {
-                result.warnings << QStringLiteral("Post-merge verification still sees %1 in refreshed analysis; saved anyway for manual review.")
+                result.warnings << QStringLiteral("Post-merge audit still sees residual old ID token %1 in refreshed analysis for manual review.")
                                        .arg(removed);
                 break;
             }
@@ -579,7 +579,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
             const QByteArray output = QByteArray::fromStdString(stream.str());
             const QRegularExpressionMatch remaining = redirectsRegex.match(QString::fromUtf8(output));
             if (remaining.hasMatch()) {
-                result.warnings << QStringLiteral("Duplicate merge left residual old ID token %1 in %2; saved anyway for manual review.")
+                result.warnings << QStringLiteral("Duplicate merge kept residual old ID token %1 in %2 for manual review.")
                                        .arg(remaining.captured(1), info.filePath);
             }
             staged.insert(info.filePath, output);
@@ -642,7 +642,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
     for (const QString &removed : removedIds) {
         for (const DataNode &node : rebuilt.nodes) {
             if (node.id == removed || node.referencedIds.contains(removed)) {
-                result.warnings << QStringLiteral("Post-merge verification still sees %1 in refreshed analysis; saved anyway for manual review.")
+                result.warnings << QStringLiteral("Post-merge audit still sees residual old ID token %1 in refreshed analysis for manual review.")
                                        .arg(removed);
                 break;
             }

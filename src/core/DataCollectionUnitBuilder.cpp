@@ -181,11 +181,40 @@ QString serializeNode(const pugi::xml_node &node)
 
 QString defaultCategoriesFor(const DataNode &root)
 {
-    if (root.elementName.startsWith(QStringLiteral("CAbil"), Qt::CaseInsensitive))
-        return QStringLiteral("DataGroup:Ability,ObjectType:Other");
-    if (root.elementName.startsWith(QStringLiteral("CWeapon"), Qt::CaseInsensitive))
-        return QStringLiteral("DataGroup:Weapon,ObjectType:Other");
-    return QStringLiteral("DataGroup:Unit,ObjectType:Unit");
+    const QString dataGroup = root.elementName.startsWith(QStringLiteral("CAbil"), Qt::CaseInsensitive)
+        ? QStringLiteral("Ability")
+        : root.elementName.startsWith(QStringLiteral("CWeapon"), Qt::CaseInsensitive)
+            ? QStringLiteral("Weapon")
+            : QStringLiteral("Unit");
+    QString race;
+    QString dataFamily;
+    QString objectType = dataGroup == QStringLiteral("Unit") ? QStringLiteral("Unit") : QStringLiteral("Other");
+
+    pugi::xml_document fragment;
+    if (fragment.load_string(root.serializedXml.toUtf8().constData())) {
+        const pugi::xml_node node = fragment.first_child();
+        race = QString::fromUtf8(node.attribute("race").value()).trimmed();
+        const QString categories = QString::fromUtf8(node.child("EditorCategories").attribute("value").value());
+        for (const QString &rawToken : categories.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+            const QString token = rawToken.trimmed();
+            if (token.startsWith(QStringLiteral("Race:"), Qt::CaseInsensitive) && race.isEmpty())
+                race = token.section(QLatin1Char(':'), 1);
+            else if (token.startsWith(QStringLiteral("DataFamily:"), Qt::CaseInsensitive))
+                dataFamily = token.section(QLatin1Char(':'), 1);
+            else if (token.startsWith(QStringLiteral("ObjectFamily:"), Qt::CaseInsensitive) && dataFamily.isEmpty())
+                dataFamily = token.section(QLatin1Char(':'), 1);
+            else if (token.startsWith(QStringLiteral("ObjectType:"), Qt::CaseInsensitive) && dataGroup == QStringLiteral("Unit"))
+                objectType = token.section(QLatin1Char(':'), 1);
+        }
+    }
+
+    QStringList categories{QStringLiteral("DataGroup:%1").arg(dataGroup)};
+    if (!race.isEmpty())
+        categories << QStringLiteral("Race:%1").arg(race);
+    if (!dataFamily.isEmpty())
+        categories << QStringLiteral("DataFamily:%1").arg(dataFamily);
+    categories << QStringLiteral("ObjectType:%1").arg(objectType);
+    return categories.join(QLatin1Char(','));
 }
 
 bool idIsScopedToRoot(const QString &id, const QString &root)

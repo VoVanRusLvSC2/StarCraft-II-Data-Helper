@@ -160,6 +160,7 @@ private slots:
     void dataCollectionAliasMapping();
     void dataCollectionCreatePreviewAndApply();
     void dataCollectionOffersSingleCustomUnit();
+    void dataCollectionUsesRootRaceAndFamilyCategories();
     void dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign();
     void dataCollectionUnitAbilWeaponModeSplitsRoots();
     void dataCollectionTypedPreservesLegacyNonScopedAbilityRecords();
@@ -952,6 +953,40 @@ void CoreTests::dataCollectionOffersSingleCustomUnit()
     QVERIFY(preview.generatedXml.contains(QStringLiteral("<CDataCollectionUnit id=\"LonelyCustomUnit\"")));
 }
 
+void CoreTests::dataCollectionUsesRootRaceAndFamilyCategories()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Gargantua.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CButton id=\"Gargantua\"/>"
+        "<CActorUnit id=\"Gargantua\" unitName=\"Gargantua\"/>"
+        "<CModel id=\"Gargantua\"/>"
+        "<CUnit id=\"Gargantua\" race=\"Zerg\"><EditorCategories value=\"ObjectType:Unit,ObjectFamily:Campaign\"/></CUnit>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::Unit);
+    const auto family = std::find_if(families.cbegin(), families.cend(), [](const UnitFamily &value) {
+        return value.rootId == QStringLiteral("Gargantua");
+    });
+    QVERIFY(family != families.cend());
+
+    DataCollectionBuildRequest request;
+    request.family = *family;
+    const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request);
+    QVERIFY2(preview.valid, qPrintable(preview.warnings.join(QStringLiteral("; "))));
+    QVERIFY(preview.generatedXml.contains(
+        QStringLiteral("EditorCategories value=\"DataGroup:Unit,Race:Zerg,DataFamily:Campaign,ObjectType:Unit\"")));
+    QVERIFY(preview.generatedXml.contains(QStringLiteral("DataRecord Entry=\"Unit,Gargantua\"")));
+    QVERIFY(!preview.generatedXml.contains(QStringLiteral("Unit,Gargantua@Unit")));
+}
+
 void CoreTests::dataCollectionUpdatePreservesAndSorts()
 {
     QTemporaryDir dir;
@@ -1040,7 +1075,7 @@ void CoreTests::unitFamilyDetectionAndStandardPlanning()
     const RenamePlan plan = planner.plan(analysis, family, QStringLiteral("Vassel"));
     QHash<QString, QString> proposals;
     for (const RenamePlanItem &item : plan.items) proposals.insert(item.oldId, item.newId);
-    QCOMPARE(proposals[QStringLiteral("Vassel")], QStringLiteral("Vassel@Unit"));
+    QVERIFY(!proposals.contains(QStringLiteral("Vassel")));
     QCOMPARE(proposals[QStringLiteral("ActorVassel")], QStringLiteral("Vassel@Actor"));
     QCOMPARE(proposals[QStringLiteral("AbilityVassel")], QStringLiteral("Vassel@Ability"));
     QCOMPARE(proposals[QStringLiteral("ButtonVassel")], QStringLiteral("Vassel@Button"));
@@ -1178,10 +1213,10 @@ void CoreTests::referenceRenamePreviewAndApply()
     QVERIFY(QFileInfo(applied.backupFolder).exists());
     QFile rewritten(path); QVERIFY(rewritten.open(QIODevice::ReadOnly));
     const QString output = QString::fromUtf8(rewritten.readAll());
-    QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Unit\"")));
+    QVERIFY(output.contains(QStringLiteral("id=\"Vessel\"")));
     QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Actor\"")));
-    QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel@Unit\"")));
-    QVERIFY(output.contains(QStringLiteral("Unit,Vessel@Unit Vessel@Actor ActorVasselExtra")));
+    QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel\"")));
+    QVERIFY(output.contains(QStringLiteral("Unit,Vessel Vessel@Actor ActorVasselExtra")));
 }
 
 void CoreTests::referenceRenameDoesNotRewriteFilterFields()
@@ -1217,9 +1252,9 @@ void CoreTests::referenceRenameDoesNotRewriteFilterFields()
     QFile rewritten(path);
     QVERIFY(rewritten.open(QIODevice::ReadOnly));
     const QString output = QString::fromUtf8(rewritten.readAll());
-    QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Unit\"")));
+    QVERIFY(output.contains(QStringLiteral("id=\"Vessel\"")));
     QVERIFY(output.contains(QStringLiteral("id=\"Vessel@Actor\"")));
-    QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel@Unit\"")));
+    QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel\"")));
     QVERIFY(output.contains(QStringLiteral("TargetFilters value=\"Visible;ActorVassel,Hidden,Invulnerable\"")));
     QVERIFY(output.contains(QStringLiteral("SearchFilters value=\"Visible;ActorVassel,Dead,Hidden\"")));
     QVERIFY(output.contains(QStringLiteral("VitalMaxArray index=\"Shields\"")));
@@ -1522,7 +1557,7 @@ void CoreTests::mergeAllowsResidualOldIdWarning()
     const MergeApplyResult applied = MergeService().apply(analysis, MergeRequest{keep, {remove}}, dir.path(), {});
     QVERIFY2(applied.success, qPrintable(applied.error));
     QVERIFY(!applied.warnings.isEmpty());
-    QVERIFY(applied.warnings.join(QLatin1Char('\n')).contains(QStringLiteral("saved anyway")));
+    QVERIFY(applied.warnings.join(QLatin1Char('\n')).contains(QStringLiteral("residual old ID token")));
 
     QFile rewritten(file);
     QVERIFY(rewritten.open(QIODevice::ReadOnly));
