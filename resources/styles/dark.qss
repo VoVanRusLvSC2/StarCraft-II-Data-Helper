@@ -929,10 +929,13 @@ QDialog#sc2OpenFileDialog QSplitter::handle:hover {
 
 QListWidget#fileOpenPlaces,
 QTableWidget#fileOpenTable {
-    background-color: rgba(3, 20, 17, 245);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 rgba(6, 40, 32, 224),
+                                stop:0.52 rgba(2, 27, 25, 232),
+                                stop:1 rgba(1, 18, 18, 240));
     border: 8px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 repeat repeat;
-    alternate-background-color: rgba(5, 20, 18, 215);
+    alternate-background-color: rgba(7, 38, 32, 190);
     color: #9fffdc;
     selection-color: #ffffff;
 }
@@ -941,17 +944,23 @@ QListWidget#fileOpenPlaces[textureType="border"],
 QListWidget#fileOpenPlaces[texturetype="border"],
 QTableWidget#fileOpenTable[textureType="border"],
 QTableWidget#fileOpenTable[texturetype="border"] {
-    background-color: rgba(3, 20, 17, 245);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 rgba(6, 40, 32, 224),
+                                stop:0.52 rgba(2, 27, 25, 232),
+                                stop:1 rgba(1, 18, 18, 240));
     border: 5px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
-    alternate-background-color: rgba(5, 20, 18, 215);
+    alternate-background-color: rgba(7, 38, 32, 190);
     color: #9fffdc;
     selection-color: #ffffff;
 }
 
 QWidget#fileOpenPlacesViewport,
 QWidget#fileOpenTableViewport {
-    background-color: rgba(3, 20, 17, 245);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 rgba(7, 46, 36, 198),
+                                stop:0.56 rgba(2, 30, 27, 214),
+                                stop:1 rgba(1, 20, 19, 226));
 }
 
 QListWidget#fileOpenPlaces::item,

@@ -2,6 +2,7 @@
 #include "app/AudioManager.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QCursor>
 #include <QIcon>
 #include <QPixmap>
@@ -9,6 +10,10 @@
 
 int main(int argc, char *argv[])
 {
+    qputenv("QT_OPENGL", "desktop");
+    QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("SC2 Data Helper"));
     QApplication::setOrganizationName(QStringLiteral("SC2DataHelper"));
