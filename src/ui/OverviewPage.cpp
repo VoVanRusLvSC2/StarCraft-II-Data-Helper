@@ -197,8 +197,8 @@ OverviewPage::OverviewPage(QWidget *parent)
     m_reportView->setReadOnly(true);
     m_reportView->setObjectName(QStringLiteral("reportView"));
     m_reportView->setPlaceholderText(QStringLiteral("Analysis output and warnings appear here."));
-    m_reportView->setMinimumHeight(72);
-    m_reportView->setMaximumHeight(118);
+    m_reportView->setMinimumHeight(86);
+    m_reportView->setMaximumHeight(138);
     m_reportView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     rootLayout->addWidget(m_reportView, 0);
 
