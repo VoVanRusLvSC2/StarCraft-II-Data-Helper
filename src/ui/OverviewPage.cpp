@@ -14,6 +14,7 @@
 #include <QPlainTextEdit>
 #include <QPainter>
 #include <QSet>
+#include <QSizePolicy>
 #include <QSplitter>
 #include <QStandardItem>
 #include <QStandardItemModel>
@@ -69,7 +70,7 @@ OverviewPage::OverviewPage(QWidget *parent)
     : QWidget(parent)
 {
     auto *rootLayout = new QVBoxLayout(this);
-    rootLayout->setContentsMargins(0, 0, 0, 0);
+    rootLayout->setContentsMargins(0, 0, 0, 8);
     rootLayout->setSpacing(8);
 
     auto *toolbar = new QFrame(this);
@@ -196,6 +197,9 @@ OverviewPage::OverviewPage(QWidget *parent)
     m_reportView->setReadOnly(true);
     m_reportView->setObjectName(QStringLiteral("reportView"));
     m_reportView->setPlaceholderText(QStringLiteral("Analysis output and warnings appear here."));
+    m_reportView->setMinimumHeight(72);
+    m_reportView->setMaximumHeight(118);
+    m_reportView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     rootLayout->addWidget(m_reportView, 0);
 
     connect(m_fileTree->selectionModel(), &QItemSelectionModel::currentChanged,

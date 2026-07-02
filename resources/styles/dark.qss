@@ -422,21 +422,6 @@ QPlainTextEdit:focus {
     border-image: url(:/textures/ui_nova_global_tooltip.png) 6 6 6 6 stretch stretch;
 }
 
-QPlainTextEdit#reportView {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 rgba(1, 17, 14, 248),
-                                stop:1 rgba(0, 8, 9, 252));
-    border: 2px solid rgba(0, 224, 158, 220);
-    border-image: none;
-    color: #effff7;
-    padding: 7px 10px;
-}
-
-QPlainTextEdit#reportView:focus {
-    border: 2px solid rgba(126, 255, 217, 245);
-    border-image: none;
-}
-
 QScrollBar:vertical {
     background: transparent;
     border: 4px solid transparent;
