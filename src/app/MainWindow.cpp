@@ -71,6 +71,7 @@ using sc2dh::app::MainWindowAnalysisController;
 using sc2dh::app::MainWindowSettings;
 using sc2dh::app::MainWindowStartup;
 using sc2dh::app::MainWindowUiBuilder;
+using sc2dh::app::animateModalOpen;
 using sc2dh::app::ScopedModalBackdrop;
 using sc2dh::app::OptimizationWizardController;
 using sc2dh::app::saveTextFileStyled;
@@ -2047,7 +2048,6 @@ void MainWindow::showDryRunTab(bool autoBuild)
 {
     if (m_result.nodes.isEmpty())
         return;
-    ScopedModalBackdrop backdrop(this);
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("optimizationWizardDialog"));
     m_optimizationDialog = &dialog;
@@ -2061,6 +2061,8 @@ void MainWindow::showDryRunTab(bool autoBuild)
     layout->addWidget(m_dryRunPage);
     m_dryRunPage->startWizard(autoBuild);
     dialog.resize(1500, 900);
+    ScopedModalBackdrop backdrop(this);
+    animateModalOpen(&dialog);
     dialog.showNormal();
     dialog.exec();
     layout->removeWidget(m_dryRunPage);

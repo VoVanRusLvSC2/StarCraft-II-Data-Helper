@@ -27,4 +27,6 @@ private:
     QPointer<QWidget> m_blurTarget;
     bool m_appliedBlur = false;
 };
+
+void animateModalOpen(QWidget *dialog);
 }

@@ -1,10 +1,13 @@
 #include "app/ModalBackdrop.h"
 
-#include <QApplication>
+#include <QAbstractAnimation>
+#include <QEasingCurve>
 #include <QEvent>
-#include <QEventLoop>
 #include <QGraphicsBlurEffect>
+#include <QGraphicsOpacityEffect>
 #include <QMainWindow>
+#include <QPropertyAnimation>
+#include <QTimer>
 #include <QWidget>
 
 namespace sc2dh::app
@@ -21,6 +24,9 @@ ScopedModalBackdrop::ScopedModalBackdrop(QWidget *parent)
     m_overlay->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_overlay->setFocusPolicy(Qt::NoFocus);
     m_overlay->setAutoFillBackground(false);
+    auto *overlayOpacity = new QGraphicsOpacityEffect(m_overlay);
+    overlayOpacity->setOpacity(0.0);
+    m_overlay->setGraphicsEffect(overlayOpacity);
     syncGeometry();
     m_overlay->raise();
     m_overlay->show();
@@ -29,14 +35,33 @@ ScopedModalBackdrop::ScopedModalBackdrop(QWidget *parent)
     if (m_blurTarget && !m_blurTarget->graphicsEffect())
     {
         auto *blur = new QGraphicsBlurEffect(m_blurTarget);
-        blur->setBlurRadius(3.5);
+        blur->setBlurRadius(0.0);
         blur->setBlurHints(QGraphicsBlurEffect::PerformanceHint);
         m_blurTarget->setGraphicsEffect(blur);
         m_appliedBlur = true;
+
+        QTimer::singleShot(45, blur, [blur]
+        {
+            auto *animation = new QPropertyAnimation(blur, "blurRadius", blur);
+            animation->setDuration(220);
+            animation->setStartValue(0.0);
+            animation->setEndValue(3.5);
+            animation->setEasingCurve(QEasingCurve::OutCubic);
+            animation->start(QAbstractAnimation::DeleteWhenStopped);
+        });
     }
 
+    QTimer::singleShot(35, m_overlay, [overlayOpacity]
+    {
+        auto *animation = new QPropertyAnimation(overlayOpacity, "opacity", overlayOpacity);
+        animation->setDuration(220);
+        animation->setStartValue(0.0);
+        animation->setEndValue(1.0);
+        animation->setEasingCurve(QEasingCurve::OutCubic);
+        animation->start(QAbstractAnimation::DeleteWhenStopped);
+    });
+
     window->installEventFilter(this);
-    qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
 }
 
 ScopedModalBackdrop::~ScopedModalBackdrop()
@@ -74,5 +99,22 @@ QWidget *ScopedModalBackdrop::findBlurTarget(QWidget *window) const
     if (auto *mainWindow = qobject_cast<QMainWindow *>(window))
         return mainWindow->centralWidget();
     return nullptr;
+}
+
+void animateModalOpen(QWidget *dialog)
+{
+    if (!dialog)
+        return;
+
+    dialog->setWindowOpacity(0.0);
+    QTimer::singleShot(0, dialog, [dialog]
+    {
+        auto *animation = new QPropertyAnimation(dialog, "windowOpacity", dialog);
+        animation->setDuration(150);
+        animation->setStartValue(0.0);
+        animation->setEndValue(1.0);
+        animation->setEasingCurve(QEasingCurve::OutCubic);
+        animation->start(QAbstractAnimation::DeleteWhenStopped);
+    });
 }
 }

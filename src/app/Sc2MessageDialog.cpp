@@ -62,7 +62,6 @@ namespace sc2dh::app
                                                      QMessageBox::StandardButtons buttons,
                                                      int minimumWidth)
     {
-        ScopedModalBackdrop backdrop(parent);
         QDialog dialog(parent);
         dialog.setObjectName(QStringLiteral("sc2MessageDialog"));
         dialog.setWindowTitle(title);
@@ -162,6 +161,8 @@ namespace sc2dh::app
         titleBar->installEventFilter(new Sc2DialogDragFilter(&dialog, &dragPosition, &dragging));
 
         dialog.resize(minimumWidth, qMin(720, qMax(230, textLabel->sizeHint().height() + 130)));
+        ScopedModalBackdrop backdrop(parent);
+        animateModalOpen(&dialog);
         dialog.exec();
         return clicked == QMessageBox::NoButton ? QMessageBox::Ok : clicked;
     }

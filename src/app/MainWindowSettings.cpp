@@ -22,7 +22,6 @@ MainWindowSettings::MainWindowSettings(MainWindow &window)
 
 void MainWindowSettings::show()
 {
-    ScopedModalBackdrop backdrop(&m_window);
     QDialog dialog(&m_window);
     dialog.setObjectName(QStringLiteral("toolDialog"));
     dialog.setWindowTitle(QStringLiteral("SC2 Data Helper Settings"));
@@ -116,6 +115,8 @@ void MainWindowSettings::show()
         dialog.accept(); });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
+    ScopedModalBackdrop backdrop(&m_window);
+    animateModalOpen(&dialog);
     dialog.exec();
 }
 }

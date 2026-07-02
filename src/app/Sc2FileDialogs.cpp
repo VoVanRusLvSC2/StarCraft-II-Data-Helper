@@ -1120,14 +1120,14 @@ namespace sc2dh::app
 
     QString openSc2FileStyled(QWidget *parent, const QString &startPath)
     {
-        ScopedModalBackdrop backdrop(parent);
         Sc2FileOpenDialog dialog(parent, startPath);
+        ScopedModalBackdrop backdrop(parent);
+        animateModalOpen(&dialog);
         return dialog.exec() == QDialog::Accepted ? dialog.selectedFile() : QString();
     }
 
     QString openFolderStyled(QWidget *parent, const QString &startPath)
     {
-        ScopedModalBackdrop backdrop(parent);
         QFileDialog dialog(parent, QStringLiteral("Open SC2 Folder"), startPath);
         dialog.setObjectName(QStringLiteral("sc2FileDialog"));
         dialog.setOption(QFileDialog::DontUseNativeDialog, true);
@@ -1136,6 +1136,8 @@ namespace sc2dh::app
         dialog.setAcceptMode(QFileDialog::AcceptOpen);
         dialog.setLabelText(QFileDialog::Accept, QStringLiteral("Open"));
         dialog.setMinimumSize(980, 640);
+        ScopedModalBackdrop backdrop(parent);
+        animateModalOpen(&dialog);
         return dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()
             ? dialog.selectedFiles().front()
             : QString();
@@ -1143,7 +1145,6 @@ namespace sc2dh::app
 
     QString saveTextFileStyled(QWidget *parent, const QString &title, const QString &startPath)
     {
-        ScopedModalBackdrop backdrop(parent);
         QFileDialog dialog(parent, title, QFileInfo(startPath).absolutePath(), QStringLiteral("Text files (*.txt)"));
         dialog.setObjectName(QStringLiteral("sc2FileDialog"));
         dialog.setOption(QFileDialog::DontUseNativeDialog, true);
@@ -1152,6 +1153,8 @@ namespace sc2dh::app
         dialog.setDefaultSuffix(QStringLiteral("txt"));
         dialog.selectFile(QFileInfo(startPath).fileName());
         dialog.setMinimumSize(980, 640);
+        ScopedModalBackdrop backdrop(parent);
+        animateModalOpen(&dialog);
         return dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()
             ? dialog.selectedFiles().front()
             : QString();
