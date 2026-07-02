@@ -1,0 +1,519 @@
+﻿/* Dialogs, file pickers and message windows */
+
+QDialog#toolDialog {
+    background-color: rgba(0, 7, 8, 252);
+    border: 8px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+    padding: 8px;
+}
+
+QDialog,
+QFileDialog,
+QMessageBox {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 rgba(2, 13, 14, 252),
+                                stop:0.6 rgba(0, 7, 9, 252),
+                                stop:1 rgba(0, 3, 6, 254));
+    color: #effff7;
+}
+
+QFileDialog#sc2FileDialog,
+QFileDialog#sc2FileDialog QWidget {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 rgba(2, 15, 15, 250),
+                                stop:0.58 rgba(0, 7, 9, 252),
+                                stop:1 rgba(0, 3, 6, 254));
+    color: #effff7;
+}
+
+QFileDialog#sc2FileDialog QFrame,
+QFileDialog#sc2FileDialog QSplitter,
+QFileDialog#sc2FileDialog QStackedWidget,
+QFileDialog#sc2FileDialog QGroupBox,
+QMessageBox {
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    background: transparent;
+}
+
+QFileDialog#sc2FileDialog QLabel,
+QFileDialog#sc2FileDialog QCheckBox,
+QFileDialog#sc2FileDialog QRadioButton,
+QMessageBox QLabel {
+    color: #effff7;
+    background: transparent;
+}
+
+QFileDialog#sc2FileDialog QToolButton {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonup.png) 14 14 14 14 stretch stretch;
+    min-width: 30px;
+    min-height: 28px;
+    padding: 1px;
+    color: #effff7;
+}
+
+QFileDialog#sc2FileDialog QToolButton:hover {
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonover.png) 14 14 14 14 stretch stretch;
+    color: #ffffff;
+}
+
+QFileDialog#sc2FileDialog QToolButton:pressed {
+    border-image: url(:/textures/ui_glues_greenbuttons_largeiconbuttonpressed.png) 14 14 14 14 stretch stretch;
+}
+
+QFileDialog#sc2FileDialog QTreeView,
+QFileDialog#sc2FileDialog QListView,
+QFileDialog#sc2FileDialog QTableView {
+    background-color: rgba(0, 8, 8, 246);
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    color: #effff7;
+    alternate-background-color: rgba(0, 16, 13, 218);
+}
+
+QFileDialog#sc2FileDialog QTreeView::item,
+QFileDialog#sc2FileDialog QListView::item,
+QFileDialog#sc2FileDialog QTableView::item {
+    border: 3px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    padding: 5px 9px;
+    color: #effff7;
+}
+
+QFileDialog#sc2FileDialog QTreeView::item:hover,
+QFileDialog#sc2FileDialog QListView::item:hover,
+QFileDialog#sc2FileDialog QTableView::item:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+    background-color: rgba(0, 34, 27, 160);
+}
+
+QFileDialog#sc2FileDialog QTreeView::item:selected,
+QFileDialog#sc2FileDialog QListView::item:selected,
+QFileDialog#sc2FileDialog QTableView::item:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #fff3e1;
+    background-color: rgba(31, 14, 2, 190);
+}
+
+QTreeView#fileTree::item {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    min-height: 30px;
+    padding: 4px 10px;
+}
+
+QTreeView#fileTree::item:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+    color: #fff0cf;
+}
+
+QTreeView#fileTree::item:selected,
+QTableView#archiveFileTable::item:selected {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #fff0df;
+    font-weight: 700;
+}
+
+QTreeView#fileTree::item:selected:hover,
+QTableView#archiveFileTable::item:selected:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #ffffff;
+}
+
+QHeaderView::section {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    min-height: 30px;
+    padding: 6px 10px;
+    color: #eefdf7;
+    font-weight: 700;
+}
+
+QHeaderView::section:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+}
+
+QAbstractItemView QLineEdit {
+    border-image: url(:/textures/ui_nova_global_tooltip_orange.png) 8 8 8 8 stretch stretch;
+}
+
+QLabel#panelTitle {
+    color: #f5fffc;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QTreeView#duplicatesTree {
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_tooltip_orange.png) 7 7 7 7 repeat repeat;
+}
+
+QGraphicsView#graphView {
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_tooltip.png) 7 7 7 7 repeat repeat;
+}
+
+QLabel#graphHintBadge {
+    background: transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+    color: #d8fff2;
+    padding: 6px 10px;
+    font-weight: 600;
+}
+
+QTableView#cleanupTable {
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_tooltip.png) 7 7 7 7 repeat repeat;
+}
+
+QLabel#inspectorSubtitle {
+    color: #9ab8b2;
+}
+
+QDialog#sc2OpenFileDialog {
+    background-color: rgba(0, 9, 8, 253);
+    border: 12px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_backgroundframe.png) 24 24 24 24 stretch stretch;
+    padding: 6px;
+}
+
+QFrame#sc2OpenFileHexOverlay {
+    background-color: rgba(0, 20, 26, 5);
+    background-image: url(:/textures/ui_battlenet_glues_pageassets_dialog_hexpattern.png);
+    background-repeat: repeat;
+    border: none;
+}
+
+QFrame#sc2OpenFileTitleBar {
+    background: transparent;
+    border: none;
+    min-height: 66px;
+}
+
+QFrame#sc2OpenFilePanelHeader {
+    background: transparent;
+    border: none;
+    min-height: 32px;
+}
+
+QLabel#sc2OpenFilePanelTitle {
+    color: #ffffff;
+    font-size: 14pt;
+    font-weight: 700;
+    background: transparent;
+}
+
+QLabel#sc2OpenFilePanelIcon {
+    background: transparent;
+    min-width: 32px;
+    min-height: 32px;
+}
+
+QDialog#sc2OpenFileDialog QLabel,
+QDialog#sc2OpenFileDialog QLineEdit,
+QDialog#sc2OpenFileDialog QComboBox,
+QDialog#sc2OpenFileDialog QTableWidget,
+QDialog#sc2OpenFileDialog QListWidget {
+    color: #9fffdc;
+    font-size: 12pt;
+    font-weight: 600;
+}
+
+QDialog#sc2OpenFileDialog QLabel#panelTitle {
+    color: #eafff6;
+    font-size: 13pt;
+    font-weight: 700;
+}
+
+QDialog#sc2OpenFileDialog QLabel#inspectorSubtitle {
+    color: #93e8cc;
+    font-size: 12pt;
+    font-weight: 600;
+}
+
+QDialog#sc2OpenFileDialog QLineEdit {
+    background-color: rgba(0, 10, 9, 232);
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+    color: #9fffdc;
+    min-height: 30px;
+    padding: 1px 10px;
+    font-weight: 600;
+    selection-background-color: rgba(75, 218, 176, 130);
+    selection-color: #ffffff;
+}
+
+QDialog#sc2OpenFileDialog QLineEdit:focus {
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+    color: #e7fff6;
+    background-color: rgba(0, 16, 13, 242);
+    padding: 1px 10px;
+    font-weight: 600;
+}
+
+QPushButton#sc2OpenFileParentButton {
+    background-color: rgba(0, 11, 8, 230);
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_normal.png) 18 24 18 24 stretch stretch;
+    color: #dffff5;
+    min-width: 68px;
+    min-height: 30px;
+    padding: 1px 11px;
+    font-size: 12pt;
+    font-weight: 800;
+}
+
+QPushButton#sc2OpenFileParentButton:hover {
+    background-color: rgba(0, 25, 18, 238);
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_over.png) 18 24 18 24 stretch stretch;
+    color: #ffffff;
+    padding: 1px 11px;
+}
+
+QPushButton#sc2OpenFileParentButton:pressed {
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_down.png) 18 24 18 24 stretch stretch;
+    color: #ffffff;
+}
+
+QPushButton#sc2OpenFileParentButton:disabled {
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_disabled.png) 18 24 18 24 stretch stretch;
+    color: rgba(211, 255, 233, 95);
+}
+
+QComboBox#sc2OpenFileFilter {
+    background-color: rgba(0, 10, 9, 236);
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_glue_dropdownbutton_normal_terran.png) 16 46 16 16 stretch stretch;
+    color: #9fffdc;
+    min-height: 30px;
+    padding: 1px 38px 1px 10px;
+    font-weight: 600;
+}
+
+QComboBox#sc2OpenFileFilter:focus {
+    border-image: url(:/textures/ui_glue_dropdownbutton_normal_terran.png) 16 46 16 16 stretch stretch;
+    color: #e7fff6;
+    background-color: rgba(0, 16, 13, 244);
+    padding: 1px 38px 1px 10px;
+    font-weight: 600;
+}
+
+QComboBox#sc2OpenFileFilter:hover {
+    background-color: rgba(0, 24, 18, 245);
+    border-image: url(:/textures/ui_glue_dropdownbutton_over_terran.png) 16 46 16 16 stretch stretch;
+    color: #ffffff;
+    padding: 1px 38px 1px 10px;
+    font-weight: 600;
+}
+
+QComboBox#sc2OpenFileFilter:on {
+    background-color: rgba(0, 24, 18, 245);
+    border-image: url(:/textures/ui_glue_dropdownbutton_over_terran.png) 16 46 16 16 stretch stretch;
+    color: #ffffff;
+    padding: 1px 38px 1px 10px;
+    font-weight: 600;
+}
+
+QComboBox#sc2OpenFileFilter::drop-down {
+    width: 34px;
+    border: none;
+    background: transparent;
+}
+
+QComboBox#sc2OpenFileFilter::down-arrow {
+    image: url(:/textures/ui_glue_dropdownarrow_normal_terran.png);
+    width: 18px;
+    height: 13px;
+    margin-right: 8px;
+}
+
+QComboBox#sc2OpenFileFilter::down-arrow:on {
+    image: url(:/textures/ui_glue_dropdownarrow_over_terran.png);
+}
+
+QComboBox#sc2OpenFileFilter::down-arrow:hover {
+    image: url(:/textures/ui_glue_dropdownarrow_over_terran.png);
+}
+
+QComboBox#sc2OpenFileFilter QAbstractItemView::item:hover,
+QComboBox#sc2OpenFileFilter QAbstractItemView::item:selected {
+    color: #ffffff;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_glue_dropdownmenubutton_selected_terran.png) 5 5 5 5 stretch stretch;
+    padding: 3px 8px;
+}
+
+QDialog#sc2OpenFileDialog QSplitter::handle {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal.png) 14 7 14 7 repeat repeat;
+}
+
+QDialog#sc2OpenFileDialog QSplitter::handle:hover {
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 14 7 14 7 repeat repeat;
+}
+
+QListWidget#fileOpenPlaces,
+QTableWidget#fileOpenTable {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 rgba(1, 20, 16, 238),
+                                stop:0.52 rgba(0, 12, 11, 246),
+                                stop:1 rgba(0, 7, 8, 252));
+    border: 8px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 repeat repeat;
+    alternate-background-color: rgba(0, 18, 14, 216);
+    color: #9fffdc;
+    selection-color: #ffffff;
+}
+
+QListWidget#fileOpenPlaces[textureType="border"],
+QListWidget#fileOpenPlaces[texturetype="border"],
+QTableWidget#fileOpenTable[textureType="border"],
+QTableWidget#fileOpenTable[texturetype="border"] {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 rgba(1, 20, 16, 238),
+                                stop:0.52 rgba(0, 12, 11, 246),
+                                stop:1 rgba(0, 7, 8, 252));
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+    alternate-background-color: rgba(0, 18, 14, 216);
+    color: #9fffdc;
+    selection-color: #ffffff;
+}
+
+QWidget#fileOpenPlacesViewport,
+QWidget#fileOpenTableViewport {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 rgba(1, 22, 17, 218),
+                                stop:0.56 rgba(0, 13, 12, 234),
+                                stop:1 rgba(0, 8, 8, 246));
+}
+
+QListWidget#fileOpenPlaces::item,
+QTableWidget#fileOpenTable::item {
+    border: 3px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 10 10 10 10 stretch stretch;
+    color: #9fffdc;
+    min-height: 31px;
+    padding: 3px 9px;
+    font-size: 12pt;
+    font-weight: 600;
+}
+
+QListWidget#fileOpenPlaces::item:hover,
+QTableWidget#fileOpenTable::item:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 10 10 10 10 stretch stretch;
+    color: #ffffff;
+    background-color: rgba(0, 35, 27, 150);
+    padding: 3px 9px;
+    font-weight: 600;
+}
+
+QListWidget#fileOpenPlaces::item:selected,
+QTableWidget#fileOpenTable::item:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 10 10 10 10 stretch stretch;
+    color: #fff3e1;
+    background-color: rgba(33, 14, 2, 188);
+    padding: 3px 9px;
+    font-weight: 800;
+}
+
+QDialog#sc2OpenFileDialog QHeaderView::section {
+    background: transparent;
+    border: 3px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 10 10 10 10 stretch stretch;
+    color: #b7ffe8;
+    min-height: 28px;
+    padding: 3px 8px;
+    font-size: 11pt;
+    font-weight: 600;
+}
+
+QDialog#sc2OpenFileDialog QHeaderView::section:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 10 10 10 10 stretch stretch;
+    color: #b7ffe8;
+    padding: 3px 8px;
+    font-weight: 600;
+}
+
+QDialog#sc2MessageDialog {
+    background-color: rgba(0, 5, 7, 254);
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+}
+
+QFrame#sc2MessageTitleBar {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largeup_ONE_UPSCALE_APS.png) 26 40 26 40 stretch stretch;
+    min-height: 34px;
+}
+
+QLabel#sc2MessageTitle {
+    color: #eafff6;
+    font-size: 10pt;
+    font-weight: 700;
+    background: transparent;
+}
+
+QLabel#sc2MessageText {
+    color: #effff7;
+    font-size: 11pt;
+    font-weight: 600;
+    background: transparent;
+    padding: 2px 4px;
+}
+
+QLabel#sc2MessageIcon {
+    background: transparent;
+}
+
+QScrollArea#sc2MessageScroll,
+QScrollArea#sc2MessageScroll QWidget {
+    background: transparent;
+    border: none;
+}
+
+QPushButton#sc2MessageCloseButton {
+    min-width: 30px;
+    min-height: 24px;
+    padding: 0;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_glues_greenbuttons_squarebackbuttonnormal.png) 10 10 10 10 stretch stretch;
+    color: #dffcf4;
+}
+
+QPushButton#sc2MessageCloseButton:hover {
+    border-image: url(:/textures/ui_glues_greenbuttons_squarebackbuttonover.png) 10 10 10 10 stretch stretch;
+    color: #ffffff;
+}
+
+QDialog#sc2OpenFileDialog QPushButton {
+    color: #d3ffe9;
+}
+
+QDialog#sc2OpenFileDialog QPushButton:hover {
+    color: #ffffff;
+}
+
+QLabel#modeBadge,
+QLabel#statusBadge,
+QLabel#bucketCount {
+    background-color: rgba(6, 21, 25, 220);
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_mediumbutton_green_normal.png) 10 24 10 24 stretch stretch;
+    color: #dffcf4;
+    padding: 4px 12px;
+    font-weight: 600;
+}
+
+QLabel#inspectorValue {
+    color: #edf8f5;
+}

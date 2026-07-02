@@ -144,5 +144,11 @@
   <qresource prefix="/">
     <file>catalog_link_schema.tsv</file>
     <file>styles/dark.qss</file>
+    <file>styles/dark/00_foundation.qss</file>
+    <file>styles/dark/10_controls.qss</file>
+    <file>styles/dark/20_workspace.qss</file>
+    <file>styles/dark/30_dialogs.qss</file>
+    <file>styles/dark/40_optimization.qss</file>
+    <file>styles/dark/50_progress.qss</file>
   </qresource>
 </RCC>

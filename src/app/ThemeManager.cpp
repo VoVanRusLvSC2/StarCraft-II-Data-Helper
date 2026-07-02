@@ -201,6 +201,52 @@ bool loadStyleFromPath(const QString &path, QString *styleSheet)
     return true;
 }
 
+QString readStyleFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    return QString::fromUtf8(file.readAll());
+}
+
+QString stylePath(const QString &root, const QString &relative)
+{
+    if (root.startsWith(QStringLiteral(":/"))) {
+        return root + QLatin1Char('/') + relative;
+    }
+    return QDir(root).filePath(relative);
+}
+
+QStringList darkThemeFiles()
+{
+    return {
+        QStringLiteral("dark/00_foundation.qss"),
+        QStringLiteral("dark/10_controls.qss"),
+        QStringLiteral("dark/20_workspace.qss"),
+        QStringLiteral("dark/30_dialogs.qss"),
+        QStringLiteral("dark/40_optimization.qss"),
+        QStringLiteral("dark/50_progress.qss"),
+    };
+}
+
+bool loadStyleBundle(const QString &root, QString *styleSheet)
+{
+    QStringList parts;
+    for (const QString &relative : darkThemeFiles()) {
+        const QString path = stylePath(root, relative);
+        const QString part = readStyleFile(path);
+        if (part.isEmpty()) {
+            return false;
+        }
+        parts.push_back(QStringLiteral("/* %1 */\n%2").arg(relative, part));
+    }
+    if (styleSheet) {
+        *styleSheet = parts.join(QStringLiteral("\n\n"));
+    }
+    return true;
+}
+
 }
 
 bool ThemeManager::applyDarkTheme(QApplication *application, QString *loadedFrom, QString *errorMessage)
@@ -217,27 +263,40 @@ bool ThemeManager::applyDarkTheme(QApplication *application, QString *loadedFrom
         application->setProperty("sc2ProxyStyleInstalled", true);
     }
 
-    const QString appDir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources/styles/dark.qss");
-    const QString workDir = QDir::currentPath() + QStringLiteral("/resources/styles/dark.qss");
-    const QString projectRoot = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../../resources/styles/dark.qss"));
-    const QString resourcePath = QStringLiteral(":/styles/dark.qss");
+    const QString appStylesDir = QCoreApplication::applicationDirPath() + QStringLiteral("/resources/styles");
+    const QString workStylesDir = QDir::currentPath() + QStringLiteral("/resources/styles");
+    const QString projectStylesDir = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../../resources/styles"));
 
-    const QStringList candidates = {
-        resourcePath,
-        appDir,
-        workDir,
-        projectRoot
+    const QStringList splitRoots = {
+        QStringLiteral(":/styles"),
+        appStylesDir,
+        workStylesDir,
+        projectStylesDir
     };
 
-    for (const QString &candidate : candidates) {
+    for (const QString &root : splitRoots) {
         QString styleSheet;
-        if (candidate.startsWith(QStringLiteral(":/"))) {
-            QFile file(candidate);
-            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                continue;
-            }
-            styleSheet = QString::fromUtf8(file.readAll());
-        } else if (!loadStyleFromPath(candidate, &styleSheet)) {
+        if (!loadStyleBundle(root, &styleSheet)) {
+            continue;
+        }
+
+        application->setStyleSheet(styleSheet);
+        if (loadedFrom) {
+            *loadedFrom = root + QStringLiteral("/dark/*.qss");
+        }
+        return true;
+    }
+
+    const QStringList legacyCandidates = {
+        QStringLiteral(":/styles/dark.qss"),
+        QDir(appStylesDir).filePath(QStringLiteral("dark.qss")),
+        QDir(workStylesDir).filePath(QStringLiteral("dark.qss")),
+        QDir(projectStylesDir).filePath(QStringLiteral("dark.qss"))
+    };
+
+    for (const QString &candidate : legacyCandidates) {
+        QString styleSheet;
+        if (!loadStyleFromPath(candidate, &styleSheet) || styleSheet.trimmed().isEmpty()) {
             continue;
         }
 

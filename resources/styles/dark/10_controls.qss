@@ -1,0 +1,89 @@
+﻿/* Inputs, menus and checkboxes */
+
+QLineEdit,
+QComboBox {
+    background-color: rgba(4, 11, 15, 238);
+    border: none;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    min-height: 28px;
+    padding: 4px 10px;
+    selection-background-color: #2a8068;
+}
+
+QLineEdit:focus,
+QComboBox:focus,
+QComboBox:hover {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+}
+
+QLineEdit#pathEdit {
+    background: transparent;
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largedown_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
+    min-height: 34px;
+    padding: 4px 16px;
+    color: #eef7ee;
+    selection-background-color: rgba(96, 214, 173, 120);
+}
+
+QLineEdit#pathEdit:focus,
+QLineEdit#pathEdit:hover {
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largedown_ONE_UPSCALE_APS.png) 28 40 28 40 stretch stretch;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 28px;
+}
+
+QComboBox::down-arrow {
+    image: url(:/textures/ui_glue_dropdownarrow_normal_terran.png);
+    width: 16px;
+    height: 16px;
+}
+
+QComboBox QAbstractItemView,
+QMenu {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 rgba(3, 24, 25, 248),
+                                stop:1 rgba(0, 8, 12, 250));
+    border: 7px solid transparent;
+    border-image: url(:/textures/ui_glue_dropdownmenuframe_terran.png) 8 8 8 8 stretch stretch;
+    selection-background-color: transparent;
+    selection-color: white;
+    padding: 6px;
+}
+
+QMenu::item {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+    padding: 7px 24px;
+}
+
+QMenu::item:selected {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+}
+
+QCheckBox {
+    spacing: 10px;
+    color: #dbeee2;
+    padding: 6px 12px;
+    min-height: 28px;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal.png) 12 12 12 12 stretch stretch;
+}
+
+QCheckBox[textureType="checkBoxRow"] {
+    padding: 8px 14px;
+    min-height: 34px;
+}
+
+QCheckBox:hover {
+    color: #f0fff6;
+    border-image: url(:/textures/ui_nova_archives_listitem_over.png) 12 12 12 12 stretch stretch;
+}
+
+QCheckBox:checked {
+    border-image: url(:/textures/ui_nova_archives_listitem_selected.png) 12 12 12 12 stretch stretch;
+}

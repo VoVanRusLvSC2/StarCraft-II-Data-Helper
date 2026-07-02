@@ -1,0 +1,88 @@
+﻿/* Progress dialogs and generic sliders */
+
+QDialog#analysisProgressDialog {
+    background: transparent;
+}
+
+QFrame#novaProgressFrame {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_tooltip_orange.png) 6 6 6 6 stretch stretch;
+}
+
+QFrame#novaProgressInner {
+    background: transparent;
+    border: 7px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+}
+
+QLabel#novaProgressTitle {
+    color: #ffffff;
+    font-size: 15pt;
+    font-weight: 800;
+}
+
+QLabel#novaProgressLine {
+    color: #80d2a2;
+    font-size: 11pt;
+    font-weight: 700;
+}
+
+QLabel#novaProgressDetail {
+    color: #a4cbb9;
+    font-size: 10pt;
+}
+
+QLabel#novaProgressPercent {
+    color: #9fffd8;
+    font-size: 12pt;
+    font-weight: 800;
+}
+
+QProgressBar#analysisProgressBar {
+    background: transparent;
+    border: none;
+    min-height: 48px;
+    padding: 0;
+}
+
+QProgressBar#analysisProgressBar::chunk {
+    background: transparent;
+    border: none;
+}
+
+QSlider::groove:horizontal {
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+    height: 28px;
+    background: transparent;
+}
+
+QSlider::sub-page:horizontal {
+    background: transparent;
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal.png) 24 12 24 12 stretch stretch;
+    height: 28px;
+}
+
+QSlider::add-page:horizontal {
+    background: transparent;
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 stretch stretch;
+}
+
+QSlider::handle:horizontal {
+    width: 34px;
+    margin: -7px -4px;
+    background: transparent;
+    border: none;
+    image: url(:/textures/ui_glue_sliderhandle_normalpressed_terran.png);
+}
+
+QSlider::handle:horizontal:hover {
+    image: url(:/textures/ui_glue_sliderhandle_normaloverpressedover_terran.png);
+}
+
+QSlider::handle:horizontal:pressed {
+    image: url(:/textures/ui_glue_sliderhandle_normalpressed_terran.png);
+}
