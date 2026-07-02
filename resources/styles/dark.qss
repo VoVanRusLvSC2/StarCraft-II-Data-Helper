@@ -1227,14 +1227,22 @@ QSplitter::handle:hover {
     border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 14 7 14 7 repeat repeat;
 }
 
-QStatusBar {
+QStatusBar#mainStatusBar {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                stop:0 rgba(2, 12, 15, 245),
-                                stop:0.5 rgba(4, 24, 25, 236),
-                                stop:1 rgba(1, 8, 12, 246));
-    border: 5px solid transparent;
-    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 repeat repeat;
+                                stop:0 rgba(0, 7, 9, 252),
+                                stop:0.5 rgba(1, 15, 14, 246),
+                                stop:1 rgba(0, 5, 8, 252));
+    border: none;
+    border-top: 1px solid rgba(0, 160, 115, 150);
+    border-bottom: 3px solid rgba(0, 230, 165, 210);
     color: #b9d8d1;
+    padding: 4px 10px 5px 10px;
+    min-height: 30px;
+}
+
+QStatusBar#mainStatusBar::item {
+    border: none;
+    background: transparent;
 }
 
 QDialog#analysisProgressDialog {

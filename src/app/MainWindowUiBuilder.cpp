@@ -318,7 +318,11 @@ void MainWindowUiBuilder::build()
     QObject::connect(window->m_analysisPage, &OverviewPage::objectDoubleClicked, window, [window](int row)
             { window->showGraphForRow(row); });
 
-    window->statusBar()->showMessage(QStringLiteral("Ready"));
+    auto *mainStatusBar = window->statusBar();
+    mainStatusBar->setObjectName(QStringLiteral("mainStatusBar"));
+    mainStatusBar->setSizeGripEnabled(false);
+    mainStatusBar->setMinimumHeight(30);
+    mainStatusBar->showMessage(QStringLiteral("Ready"));
 
     const QList<QAbstractButton *> buttons = window->findChildren<QAbstractButton *>();
     for (QAbstractButton *button : buttons)
