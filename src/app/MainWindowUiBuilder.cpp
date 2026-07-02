@@ -32,6 +32,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QScreen>
 #include <QSizePolicy>
 #include <QStatusBar>
 #include <QTabBar>
@@ -54,7 +55,19 @@ void MainWindowUiBuilder::build()
     MainWindow *window = &m_window;
     window->setWindowTitle(QStringLiteral("SC2 Data Helper"));
     window->setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
-    window->resize(1550, 980);
+    QSize initialSize(1550, 980);
+    if (const QScreen *screen = QApplication::primaryScreen())
+    {
+        const QRect available = screen->availableGeometry();
+        initialSize.setWidth(qMin(initialSize.width(), qMax(1100, available.width() - 80)));
+        initialSize.setHeight(qMin(initialSize.height(), qMax(720, available.height() - 90)));
+        window->resize(initialSize);
+        window->move(available.center() - QRect(QPoint(), initialSize).center());
+    }
+    else
+    {
+        window->resize(initialSize);
+    }
 
     auto *toolbar = window->addToolBar(QStringLiteral("Main"));
     toolbar->setObjectName(QStringLiteral("mainToolbar"));
@@ -217,12 +230,6 @@ void MainWindowUiBuilder::build()
 
     splitterLayout->addWidget(window->m_tabs);
     rootLayout->addWidget(splitterFrame, 1);
-    auto *workspaceBottomEdge = new QFrame(root);
-    workspaceBottomEdge->setObjectName(QStringLiteral("workspaceBottomEdge"));
-    workspaceBottomEdge->setAttribute(Qt::WA_TransparentForMouseEvents);
-    workspaceBottomEdge->setFocusPolicy(Qt::NoFocus);
-    workspaceBottomEdge->setFixedHeight(10);
-    rootLayout->addWidget(workspaceBottomEdge);
     window->setCentralWidget(root);
     QObject::connect(window->m_openFileAction, &QAction::triggered, window, &MainWindow::openSc2File);
     QObject::connect(window->m_openFolderAction, &QAction::triggered, window, &MainWindow::openSourceFolder);
@@ -327,7 +334,7 @@ void MainWindowUiBuilder::build()
     auto *mainStatusBar = window->statusBar();
     mainStatusBar->setObjectName(QStringLiteral("mainStatusBar"));
     mainStatusBar->setSizeGripEnabled(false);
-    mainStatusBar->setFixedHeight(48);
+    mainStatusBar->setMinimumHeight(30);
     mainStatusBar->showMessage(QStringLiteral("Ready"));
 
     const QList<QAbstractButton *> buttons = window->findChildren<QAbstractButton *>();
