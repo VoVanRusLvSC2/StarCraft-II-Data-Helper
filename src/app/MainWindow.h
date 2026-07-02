@@ -38,6 +38,7 @@ class MainWindowAnalysisController;
 class MainWindowSettings;
 class MainWindowStartup;
 class MainWindowUiBuilder;
+class OptimizationWizardController;
 class SourceSelectionController;
 }
 
@@ -89,6 +90,7 @@ private:
     friend class sc2dh::app::MainWindowSettings;
     friend class sc2dh::app::MainWindowStartup;
     friend class sc2dh::app::MainWindowUiBuilder;
+    friend class sc2dh::app::OptimizationWizardController;
     friend class sc2dh::app::SourceSelectionController;
 
     void setupUi();

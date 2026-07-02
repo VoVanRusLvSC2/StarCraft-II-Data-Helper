@@ -53,6 +53,8 @@ target_sources(SC2DataHelper PRIVATE
     src/app/MainWindowUiBuilder.cpp
     src/app/MainWindowUiSupport.h
     src/app/MainWindowUiSupport.cpp
+    src/app/OptimizationWizardController.h
+    src/app/OptimizationWizardController.cpp
     src/app/Sc2FileDialogs.h
     src/app/Sc2FileDialogs.cpp
     src/app/Sc2MessageDialog.h
