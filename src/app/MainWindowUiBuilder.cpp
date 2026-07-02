@@ -71,8 +71,13 @@ private:
     {
         if (!m_host || !m_edge)
             return;
-        constexpr int edgeHeight = 9;
-        m_edge->setGeometry(0, qMax(0, m_host->height() - edgeHeight), m_host->width(), edgeHeight);
+        constexpr int edgeHeight = 8;
+        constexpr int bottomInset = 10;
+        constexpr int sideInset = 6;
+        m_edge->setGeometry(sideInset,
+                            qMax(0, m_host->height() - edgeHeight - bottomInset),
+                            qMax(0, m_host->width() - sideInset * 2),
+                            edgeHeight);
         m_edge->raise();
     }
 
@@ -358,14 +363,14 @@ void MainWindowUiBuilder::build()
     auto *mainStatusBar = window->statusBar();
     mainStatusBar->setObjectName(QStringLiteral("mainStatusBar"));
     mainStatusBar->setSizeGripEnabled(false);
-    mainStatusBar->setMinimumHeight(30);
+    mainStatusBar->setFixedHeight(48);
     mainStatusBar->showMessage(QStringLiteral("Ready"));
 
     auto *bottomEdge = new QFrame(mainStatusBar);
     bottomEdge->setObjectName(QStringLiteral("statusBottomEdge"));
     bottomEdge->setAttribute(Qt::WA_TransparentForMouseEvents);
     bottomEdge->setFocusPolicy(Qt::NoFocus);
-    bottomEdge->setFixedHeight(9);
+    bottomEdge->setFixedHeight(8);
     bottomEdge->show();
     auto *bottomEdgePositioner = new BottomEdgePositioner(mainStatusBar, bottomEdge);
     mainStatusBar->installEventFilter(bottomEdgePositioner);
