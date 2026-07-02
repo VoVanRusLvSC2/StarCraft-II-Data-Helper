@@ -45,9 +45,14 @@
     <file>textures/ui_glue_dropdownmenubutton_selected_terran.png</file>
     <file>textures/ui_glue_dropdownmenuframe_terran.png</file>
     <file>textures/ui_glue_sliderfill_terran.png</file>
+    <file>textures/ui_glue_sliderfill_terran_top.png</file>
     <file>textures/ui_glue_sliderframe_terran.png</file>
+    <file>textures/ui_glue_sliderframe_terran_top.png</file>
+    <file>textures/ui_glue_sliderhandle_normal_terran_top.png</file>
     <file>textures/ui_glue_sliderhandle_normaloverpressedover_terran.png</file>
     <file>textures/ui_glue_sliderhandle_normalpressed_terran.png</file>
+    <file>textures/ui_glue_sliderhandle_over_terran_top.png</file>
+    <file>textures/ui_glue_sliderhandle_pressed_terran_bottom.png</file>
     <file>textures/ui_glues_greenbuttons_largeiconbuttondisabled.png</file>
     <file>textures/ui_glues_greenbuttons_largeiconbuttonover.png</file>
     <file>textures/ui_glues_greenbuttons_largeiconbuttonpressed.png</file>

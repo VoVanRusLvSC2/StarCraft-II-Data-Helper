@@ -462,38 +462,50 @@ QScrollBar::handle:horizontal:pressed {
     border: none;
 }
 
+QSlider#backgroundMusicVolume {
+    min-height: 36px;
+    max-height: 36px;
+}
+
 QSlider#backgroundMusicVolume::groove:horizontal {
-    height: 24px;
-    border: 5px solid transparent;
-    border-image: url(:/textures/ui_glue_sliderframe_terran.png) 6 12 6 12 stretch stretch;
+    height: 22px;
+    margin: 7px 0;
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_glue_sliderframe_terran_top.png) 8 12 8 12 stretch stretch;
     background: transparent;
 }
 
 QSlider#backgroundMusicVolume::sub-page:horizontal {
-    height: 24px;
-    border: 5px solid transparent;
-    border-image: url(:/textures/ui_glue_sliderfill_terran.png) 6 12 6 12 stretch stretch;
+    height: 22px;
+    margin: 7px 0;
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_glue_sliderfill_terran_top.png) 8 12 8 12 stretch stretch;
     background: transparent;
 }
 
 QSlider#backgroundMusicVolume::add-page:horizontal {
-    height: 24px;
-    border: 5px solid transparent;
-    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+    height: 22px;
+    margin: 7px 0;
+    border: none;
+    border-image: none;
     background: transparent;
 }
 
 QSlider#backgroundMusicVolume::handle:horizontal {
-    width: 28px;
-    height: 28px;
-    margin: -5px -3px;
+    width: 22px;
+    height: 30px;
+    margin: -4px -4px;
     background: transparent;
     border: none;
-    image: url(:/textures/ui_glue_sliderhandle_normalpressed_terran.png);
+    image: url(:/textures/ui_glue_sliderhandle_normal_terran_top.png);
 }
 
 QSlider#backgroundMusicVolume::handle:horizontal:hover {
-    image: url(:/textures/ui_glue_sliderhandle_normaloverpressedover_terran.png);
+    image: url(:/textures/ui_glue_sliderhandle_over_terran_top.png);
+}
+
+QSlider#backgroundMusicVolume::handle:horizontal:pressed {
+    image: url(:/textures/ui_glue_sliderhandle_pressed_terran_bottom.png);
 }
 
 QScrollBar::add-page,
