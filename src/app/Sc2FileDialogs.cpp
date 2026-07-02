@@ -1,4 +1,5 @@
 #include "app/Sc2FileDialogs.h"
+#include "app/ModalBackdrop.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -529,7 +530,7 @@ namespace
             m_hexOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
             m_hexOverlay->lower();
             auto *hexEffect = new QGraphicsOpacityEffect(m_hexOverlay);
-            hexEffect->setOpacity(0.16);
+            hexEffect->setOpacity(0.05);
             m_hexOverlay->setGraphicsEffect(hexEffect);
             m_highlightTimer = new QTimer(this);
             connect(m_highlightTimer, &QTimer::timeout, this, [this]()
@@ -1119,12 +1120,14 @@ namespace sc2dh::app
 
     QString openSc2FileStyled(QWidget *parent, const QString &startPath)
     {
+        ScopedModalBackdrop backdrop(parent);
         Sc2FileOpenDialog dialog(parent, startPath);
         return dialog.exec() == QDialog::Accepted ? dialog.selectedFile() : QString();
     }
 
     QString openFolderStyled(QWidget *parent, const QString &startPath)
     {
+        ScopedModalBackdrop backdrop(parent);
         QFileDialog dialog(parent, QStringLiteral("Open SC2 Folder"), startPath);
         dialog.setObjectName(QStringLiteral("sc2FileDialog"));
         dialog.setOption(QFileDialog::DontUseNativeDialog, true);
@@ -1140,6 +1143,7 @@ namespace sc2dh::app
 
     QString saveTextFileStyled(QWidget *parent, const QString &title, const QString &startPath)
     {
+        ScopedModalBackdrop backdrop(parent);
         QFileDialog dialog(parent, title, QFileInfo(startPath).absolutePath(), QStringLiteral("Text files (*.txt)"));
         dialog.setObjectName(QStringLiteral("sc2FileDialog"));
         dialog.setOption(QFileDialog::DontUseNativeDialog, true);

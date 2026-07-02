@@ -1,5 +1,7 @@
 #include "app/Sc2MessageDialog.h"
 
+#include "app/ModalBackdrop.h"
+
 #include <QDialog>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -60,6 +62,7 @@ namespace sc2dh::app
                                                      QMessageBox::StandardButtons buttons,
                                                      int minimumWidth)
     {
+        ScopedModalBackdrop backdrop(parent);
         QDialog dialog(parent);
         dialog.setObjectName(QStringLiteral("sc2MessageDialog"));
         dialog.setWindowTitle(title);

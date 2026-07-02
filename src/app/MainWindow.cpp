@@ -3,6 +3,7 @@
 #include "app/MainWindowSettings.h"
 #include "app/MainWindowStartup.h"
 #include "app/MainWindowUiBuilder.h"
+#include "app/ModalBackdrop.h"
 #include "app/OptimizationWizardController.h"
 #include "app/Sc2FileDialogs.h"
 #include "app/Sc2MessageDialog.h"
@@ -70,6 +71,7 @@ using sc2dh::app::MainWindowAnalysisController;
 using sc2dh::app::MainWindowSettings;
 using sc2dh::app::MainWindowStartup;
 using sc2dh::app::MainWindowUiBuilder;
+using sc2dh::app::ScopedModalBackdrop;
 using sc2dh::app::OptimizationWizardController;
 using sc2dh::app::saveTextFileStyled;
 using sc2dh::app::showSc2MessageDialog;
@@ -2045,6 +2047,7 @@ void MainWindow::showDryRunTab(bool autoBuild)
 {
     if (m_result.nodes.isEmpty())
         return;
+    ScopedModalBackdrop backdrop(this);
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("optimizationWizardDialog"));
     m_optimizationDialog = &dialog;

@@ -2,6 +2,7 @@
 
 #include "app/AudioManager.h"
 #include "app/MainWindow.h"
+#include "app/ModalBackdrop.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -21,6 +22,7 @@ MainWindowSettings::MainWindowSettings(MainWindow &window)
 
 void MainWindowSettings::show()
 {
+    ScopedModalBackdrop backdrop(&m_window);
     QDialog dialog(&m_window);
     dialog.setObjectName(QStringLiteral("toolDialog"));
     dialog.setWindowTitle(QStringLiteral("SC2 Data Helper Settings"));
@@ -117,4 +119,3 @@ void MainWindowSettings::show()
     dialog.exec();
 }
 }
-
