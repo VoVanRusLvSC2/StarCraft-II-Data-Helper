@@ -7,8 +7,12 @@
 #include <QGraphicsOpacityEffect>
 #include <QMainWindow>
 #include <QPropertyAnimation>
+#include <QStatusBar>
 #include <QTimer>
+#include <QToolBar>
 #include <QWidget>
+
+#include <utility>
 
 namespace sc2dh::app
 {
@@ -31,14 +35,16 @@ ScopedModalBackdrop::ScopedModalBackdrop(QWidget *parent)
     m_overlay->raise();
     m_overlay->show();
 
-    m_blurTarget = findBlurTarget(window);
-    if (m_blurTarget && !m_blurTarget->graphicsEffect())
+    for (QWidget *target : findBlurTargets(window))
     {
-        auto *blur = new QGraphicsBlurEffect(m_blurTarget);
+        if (!target || target->graphicsEffect())
+            continue;
+
+        auto *blur = new QGraphicsBlurEffect(target);
         blur->setBlurRadius(0.0);
         blur->setBlurHints(QGraphicsBlurEffect::PerformanceHint);
-        m_blurTarget->setGraphicsEffect(blur);
-        m_appliedBlur = true;
+        target->setGraphicsEffect(blur);
+        m_blurTargets.push_back(target);
 
         QTimer::singleShot(45, blur, [blur]
         {
@@ -68,8 +74,11 @@ ScopedModalBackdrop::~ScopedModalBackdrop()
 {
     if (m_window)
         m_window->removeEventFilter(this);
-    if (m_blurTarget && m_appliedBlur)
-        m_blurTarget->setGraphicsEffect(nullptr);
+    for (const QPointer<QWidget> &target : std::as_const(m_blurTargets))
+    {
+        if (target)
+            target->setGraphicsEffect(nullptr);
+    }
     if (m_overlay)
         delete m_overlay;
 }
@@ -90,15 +99,43 @@ void ScopedModalBackdrop::syncGeometry()
     m_overlay->raise();
 }
 
-QWidget *ScopedModalBackdrop::findBlurTarget(QWidget *window) const
+QVector<QWidget *> ScopedModalBackdrop::findBlurTargets(QWidget *window) const
 {
+    QVector<QWidget *> targets;
     if (!window)
-        return nullptr;
-    if (auto *workspaceRoot = window->findChild<QWidget *>(QStringLiteral("workspaceRoot")))
-        return workspaceRoot;
+        return targets;
+
     if (auto *mainWindow = qobject_cast<QMainWindow *>(window))
-        return mainWindow->centralWidget();
-    return nullptr;
+    {
+        addBlurTarget(targets, mainWindow->findChild<QToolBar *>(QStringLiteral("mainToolbar")));
+        addBlurTarget(targets, window->findChild<QWidget *>(QStringLiteral("workspaceRoot")));
+        if (targets.size() < 2)
+            addBlurTarget(targets, mainWindow->centralWidget());
+        addBlurTarget(targets, mainWindow->findChild<QStatusBar *>());
+        return targets;
+    }
+
+    if (auto *workspaceRoot = window->findChild<QWidget *>(QStringLiteral("workspaceRoot")))
+        addBlurTarget(targets, workspaceRoot);
+    return targets;
+}
+
+void ScopedModalBackdrop::addBlurTarget(QVector<QWidget *> &targets, QWidget *candidate) const
+{
+    if (!candidate || candidate == m_overlay || !candidate->isVisible())
+        return;
+    for (QWidget *target : std::as_const(targets))
+    {
+        if (target == candidate || (target && target->isAncestorOf(candidate)))
+            return;
+    }
+    for (int index = targets.size() - 1; index >= 0; --index)
+    {
+        QWidget *target = targets.at(index);
+        if (candidate->isAncestorOf(target))
+            targets.removeAt(index);
+    }
+    targets.push_back(candidate);
 }
 
 void animateModalOpen(QWidget *dialog)

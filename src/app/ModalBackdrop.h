@@ -2,8 +2,8 @@
 
 #include <QObject>
 #include <QPointer>
+#include <QVector>
 
-class QGraphicsEffect;
 class QEvent;
 class QWidget;
 
@@ -20,12 +20,12 @@ protected:
 
 private:
     void syncGeometry();
-    QWidget *findBlurTarget(QWidget *window) const;
+    QVector<QWidget *> findBlurTargets(QWidget *window) const;
+    void addBlurTarget(QVector<QWidget *> &targets, QWidget *candidate) const;
 
     QPointer<QWidget> m_window;
     QPointer<QWidget> m_overlay;
-    QPointer<QWidget> m_blurTarget;
-    bool m_appliedBlur = false;
+    QVector<QPointer<QWidget>> m_blurTargets;
 };
 
 void animateModalOpen(QWidget *dialog);
