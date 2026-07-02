@@ -33,6 +33,14 @@ class LogPanel;
 class XmlSourcePage;
 struct WizardNodeRef;
 
+namespace sc2dh::app {
+class MainWindowAnalysisController;
+class MainWindowSettings;
+class MainWindowStartup;
+class MainWindowUiBuilder;
+class SourceSelectionController;
+}
+
 namespace spdlog {
 class logger;
 }
@@ -77,6 +85,12 @@ protected:
     void changeEvent(QEvent *event) override;
 
 private:
+    friend class sc2dh::app::MainWindowAnalysisController;
+    friend class sc2dh::app::MainWindowSettings;
+    friend class sc2dh::app::MainWindowStartup;
+    friend class sc2dh::app::MainWindowUiBuilder;
+    friend class sc2dh::app::SourceSelectionController;
+
     void setupUi();
     void setupLogging();
     void setupTheme();

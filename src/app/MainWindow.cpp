@@ -1,8 +1,11 @@
 #include "app/MainWindow.h"
-#include "app/AudioManager.h"
-#include "app/MainWindowUiSupport.h"
+#include "app/MainWindowAnalysisController.h"
+#include "app/MainWindowSettings.h"
+#include "app/MainWindowStartup.h"
+#include "app/MainWindowUiBuilder.h"
 #include "app/Sc2FileDialogs.h"
 #include "app/Sc2MessageDialog.h"
+#include "app/SourceSelectionController.h"
 #include "app/ThemeManager.h"
 
 #include "ui/DataCollectionPage.h"
@@ -28,26 +31,17 @@
 #include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
-#include <QAbstractButton>
-#include <QCheckBox>
 #include <QColor>
-#include <QComboBox>
 #include <QDateTime>
 #include <QDebug>
 #include <QDialog>
-#include <QDialogButtonBox>
-#include <QDesktopServices>
-#include <QGraphicsDropShadowEffect>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
-#include <QFrame>
-#include <QHBoxLayout>
 #include <QLineEdit>
 #include <QLinearGradient>
-#include <QLabel>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPushButton>
@@ -55,20 +49,13 @@
 #include <QSettings>
 #include <QSaveFile>
 #include <QStandardPaths>
-#include <QIcon>
-#include <QKeySequence>
 #include <QStatusBar>
-#include <QSlider>
 #include <QTabWidget>
 #include <QTabBar>
-#include <QUrl>
 #include <QProcess>
 #include <QProcessEnvironment>
-#include <QSizePolicy>
 #include <QTemporaryDir>
 #include <QTextStream>
-#include <QToolButton>
-#include <QToolBar>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -81,17 +68,13 @@
 #include <cmath>
 #include <vector>
 
-using sc2dh::app::boostyUrl;
-using sc2dh::app::createSc2BackgroundWidget;
-using sc2dh::app::discordInviteUrl;
-using sc2dh::app::installButtonEffects;
-using sc2dh::app::installPersistentTabToolTips;
-using sc2dh::app::installPromoButtonAnimations;
-using sc2dh::app::openFolderStyled;
-using sc2dh::app::openSc2FileStyled;
+using sc2dh::app::MainWindowAnalysisController;
+using sc2dh::app::MainWindowSettings;
+using sc2dh::app::MainWindowStartup;
+using sc2dh::app::MainWindowUiBuilder;
 using sc2dh::app::saveTextFileStyled;
 using sc2dh::app::showSc2MessageDialog;
-using sc2dh::app::warmUpSc2FileOpenDialogHighlight;
+using sc2dh::app::SourceSelectionController;
 
 namespace
 {
@@ -449,351 +432,12 @@ namespace
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setupUi();
-    setupLogging();
-    setupTheme();
-    warmUpSc2FileOpenDialogHighlight(this);
-    AudioManager::instance()->initialize();
-    QSettings settings;
-    const QString collectionModeKey = QStringLiteral("dataCollection/mode");
-    const QString collectionModeMigrationKey = QStringLiteral("dataCollection/unitAbilWeaponDefaultMigrated");
-    if (!settings.value(collectionModeMigrationKey, false).toBool())
-    {
-        if (!settings.contains(collectionModeKey)
-            || settings.value(collectionModeKey).toString().compare(QStringLiteral("Unit"), Qt::CaseInsensitive) == 0)
-            settings.setValue(collectionModeKey, QStringLiteral("UnitAbilWeapon"));
-        settings.setValue(collectionModeMigrationKey, true);
-    }
-    else if (!settings.contains(collectionModeKey))
-    {
-        settings.setValue(collectionModeKey, QStringLiteral("UnitAbilWeapon"));
-    }
-    const QString duplicateMergeKey = QStringLiteral("optimization/duplicateMergeEnabled");
-    const QString duplicateMergeMigrationKey = QStringLiteral("optimization/duplicateMergeDefaultEnabledMigrated");
-    if (!settings.value(duplicateMergeMigrationKey, false).toBool())
-    {
-        if (!settings.contains(duplicateMergeKey) || !settings.value(duplicateMergeKey).toBool())
-            settings.setValue(duplicateMergeKey, true);
-        settings.setValue(duplicateMergeMigrationKey, true);
-    }
-    setDuplicateMergeEnabled(settings.value(duplicateMergeKey, true).toBool());
-    loadDefaultFolder();
-
-    const QString rulesPath = runtimePath(QStringLiteral("config/rules.json"));
-    const QString whitelistPath = runtimePath(QStringLiteral("config/whitelist.json"));
-    QString errorMessage;
-    if (m_configManager.load(rulesPath, whitelistPath, &errorMessage))
-    {
-        m_whitelistIds = m_configManager.whitelistIds();
-        logLine(QStringLiteral("Loaded whitelist entries: %1").arg(m_whitelistIds.size()));
-    }
-    else
-    {
-        logLine(QStringLiteral("Config load skipped: %1").arg(errorMessage));
-    }
-    updateFullscreenActionText();
+    MainWindowStartup(*this).initialize();
 }
 
 void MainWindow::setupUi()
 {
-    setWindowTitle(QStringLiteral("SC2 Data Helper"));
-    setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
-    resize(1550, 980);
-
-    auto *toolbar = addToolBar(QStringLiteral("Main"));
-    toolbar->setObjectName(QStringLiteral("mainToolbar"));
-    toolbar->setMovable(false);
-    toolbar->setIconSize(QSize(0, 0));
-    toolbar->setMinimumHeight(58);
-
-    m_openFileAction = new QAction(QStringLiteral("Open SC2 File"), this);
-    m_openFolderAction = new QAction(QStringLiteral("Open Folder"), this);
-    m_analyzeAction = new QAction(QStringLiteral("Analyze"), this);
-    m_dryRunAction = new QAction(QStringLiteral("Optimization"), this);
-    m_applyAction = new QAction(QStringLiteral("Review Optimization Plan"), this);
-    m_settingsAction = new QAction(QStringLiteral("Settings"), this);
-    m_fullscreenAction = new QAction(QStringLiteral("Fullscreen"), this);
-    m_exitAction = new QAction(QStringLiteral("Exit"), this);
-    m_analyzeAction->setShortcut(QKeySequence(Qt::Key_F5));
-    m_analyzeAction->setShortcutContext(Qt::ApplicationShortcut);
-    m_analyzeAction->setToolTip(QStringLiteral("Analyze / refresh the current project (F5)"));
-    m_dryRunAction->setEnabled(false);
-    m_applyAction->setEnabled(false);
-
-    m_pathEdit = new QLineEdit(this);
-    m_pathEdit->setObjectName(QStringLiteral("pathEdit"));
-    m_pathEdit->setPlaceholderText(QStringLiteral("Selected source path"));
-    m_pathEdit->setReadOnly(true);
-    m_pathEdit->setCursorPosition(0);
-    m_pathEdit->hide();
-
-    auto *toolbarContent = new QWidget(toolbar);
-    toolbarContent->setObjectName(QStringLiteral("mainToolbarContent"));
-    toolbarContent->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto *toolbarLayout = new QHBoxLayout(toolbarContent);
-    toolbarLayout->setContentsMargins(0, 0, 0, 0);
-    toolbarLayout->setSpacing(0);
-    const auto addActionButton = [toolbarContent, toolbarLayout](QAction *action, int stretch)
-    {
-        auto *button = new QToolButton(toolbarContent);
-        button->setDefaultAction(action);
-        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-        button->setFocusPolicy(Qt::NoFocus);
-        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        toolbarLayout->addWidget(button, stretch);
-        return button;
-    };
-    addActionButton(m_openFileAction, 1);
-    addActionButton(m_openFolderAction, 1);
-    addActionButton(m_analyzeAction, 1);
-    addActionButton(m_dryRunAction, 1);
-    addActionButton(m_applyAction, 2);
-    addActionButton(m_settingsAction, 1);
-    addActionButton(m_fullscreenAction, 1);
-    addActionButton(m_exitAction, 1);
-
-    auto *discordButton = new QToolButton(toolbarContent);
-    discordButton->setObjectName(QStringLiteral("discordPromoButton"));
-    discordButton->setIcon(QIcon(QStringLiteral(":/textures/Discord.png")));
-    discordButton->setIconSize(QSize(30, 30));
-    discordButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    discordButton->setToolTip(QStringLiteral("Join Discord"));
-    discordButton->setCursor(Qt::PointingHandCursor);
-    discordButton->setFocusPolicy(Qt::NoFocus);
-    discordButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    toolbarLayout->addWidget(discordButton, 1);
-
-    auto *boostyButton = new QToolButton(toolbarContent);
-    boostyButton->setObjectName(QStringLiteral("boostyPromoButton"));
-    boostyButton->setText(QStringLiteral("Boosty"));
-    boostyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    boostyButton->setToolTip(QStringLiteral("Support on Boosty"));
-    boostyButton->setCursor(Qt::PointingHandCursor);
-    boostyButton->setFocusPolicy(Qt::NoFocus);
-    boostyButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    toolbarLayout->addWidget(boostyButton, 1);
-    toolbar->addWidget(toolbarContent);
-
-    auto *root = createSc2BackgroundWidget(this);
-    root->setObjectName(QStringLiteral("workspaceRoot"));
-    auto *rootLayout = new QVBoxLayout(root);
-    rootLayout->setContentsMargins(0, 0, 0, 0);
-    rootLayout->setSpacing(0);
-
-    auto *splitterFrame = new QFrame(root);
-    splitterFrame->setObjectName(QStringLiteral("workspaceFrame"));
-    auto *splitterLayout = new QVBoxLayout(splitterFrame);
-    splitterLayout->setContentsMargins(0, 0, 0, 0);
-
-    m_tabs = new QTabWidget(splitterFrame);
-    m_tabs->setObjectName(QStringLiteral("workspaceTabs"));
-    m_analysisPage = new OverviewPage(m_tabs);
-    m_dependenciesPage = new DependenciesPage(m_tabs);
-    m_graphPage = new GraphPage(m_tabs);
-    m_propertiesPage = new PropertiesPage(m_tabs);
-    m_dataCollectionPage = new DataCollectionPage(m_tabs);
-    m_renameIdsPage = new RenameIdsPage(m_tabs);
-    m_duplicatesPage = new DuplicatesPage(m_tabs);
-    m_cleanupPage = new UnusedPage(m_tabs);
-    m_dryRunPage = new FormatterPage(this);
-    m_dryRunPage->hide();
-    m_logPanel = new LogPanel(m_tabs);
-    m_xmlSourcePage = new XmlSourcePage(m_tabs);
-
-    m_tabs->addTab(m_analysisPage, QStringLiteral("Objects"));
-    m_tabs->addTab(m_dependenciesPage, QStringLiteral("Dependencies"));
-    m_tabs->addTab(m_graphPage, QStringLiteral("Graph"));
-    m_tabs->addTab(m_propertiesPage, QStringLiteral("Properties"));
-    m_tabs->addTab(m_dataCollectionPage, QStringLiteral("Data Collection"));
-    m_tabs->addTab(m_renameIdsPage, QStringLiteral("Rename To Standard"));
-    m_tabs->addTab(m_duplicatesPage, QStringLiteral("Duplicate Merge"));
-    m_tabs->addTab(m_cleanupPage, QStringLiteral("Unused Data Objects"));
-    m_tabs->addTab(m_logPanel, QStringLiteral("Logs"));
-    m_tabs->addTab(m_xmlSourcePage, QStringLiteral("XML Source"));
-    m_tabs->tabBar()->setExpanding(false);
-    m_tabs->tabBar()->setUsesScrollButtons(true);
-    m_tabs->tabBar()->setElideMode(Qt::ElideNone);
-    m_tabs->setFocusPolicy(Qt::NoFocus);
-    m_tabs->tabBar()->setFocusPolicy(Qt::NoFocus);
-    for (int index = 0; index < m_tabs->count(); ++index)
-    {
-        const QString title = m_tabs->tabText(index);
-        m_tabs->setTabToolTip(index, title);
-        auto *label = new QLabel(title, m_tabs->tabBar());
-        label->setObjectName(QStringLiteral("workspaceTabLabel"));
-        label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        label->setFocusPolicy(Qt::NoFocus);
-        label->setTextInteractionFlags(Qt::NoTextInteraction);
-        QFont labelFont = label->font();
-        labelFont.setBold(true);
-        label->setFont(labelFont);
-        // Leave room for both edge glyphs and the glow. QTabBar clips custom
-        // tab buttons to their size hint, which previously cut off letters.
-        label->setFixedWidth(label->fontMetrics().horizontalAdvance(title) + 52);
-        label->setMinimumHeight(30);
-        label->setContentsMargins(12, 0, 12, 0);
-        label->setAlignment(Qt::AlignCenter);
-        label->setStyleSheet(QStringLiteral("background: transparent; color: #e8fffb; padding: 0;"));
-        m_tabs->tabBar()->setTabButton(index, QTabBar::LeftSide, label);
-        m_tabs->setTabText(index, QString());
-    }
-    m_tabs->tabBar()->setMouseTracking(true);
-    installPersistentTabToolTips(m_tabs->tabBar());
-    const auto updateTabGlow = [this](int selected)
-    {
-        for (int index = 0; index < m_tabs->count(); ++index)
-        {
-            auto *label = qobject_cast<QLabel *>(m_tabs->tabBar()->tabButton(index, QTabBar::LeftSide));
-            if (!label)
-                continue;
-            auto *glow = new QGraphicsDropShadowEffect(label);
-            glow->setOffset(0, 0);
-            glow->setBlurRadius(index == selected ? 14.0 : 11.0);
-            glow->setColor(index == selected ? QColor(255, 120, 38, 235) : QColor(65, 235, 210, 185));
-            label->setStyleSheet(index == selected
-                                     ? QStringLiteral("background: transparent; color: #fff4e9; padding: 0;")
-                                     : QStringLiteral("background: transparent; color: #e8fffb; padding: 0;"));
-            label->setGraphicsEffect(glow);
-        }
-    };
-    updateTabGlow(m_tabs->currentIndex());
-    connect(m_tabs, &QTabWidget::currentChanged, this, updateTabGlow);
-
-    splitterLayout->addWidget(m_tabs);
-    rootLayout->addWidget(splitterFrame, 1);
-    setCentralWidget(root);
-    connect(m_openFileAction, &QAction::triggered, this, &MainWindow::openSc2File);
-    connect(m_openFolderAction, &QAction::triggered, this, &MainWindow::openSourceFolder);
-    connect(m_analyzeAction, &QAction::triggered, this, &MainWindow::analyzeFolder);
-    connect(m_dryRunAction, &QAction::triggered, this, &MainWindow::runDryRun);
-    connect(m_applyAction, &QAction::triggered, this, &MainWindow::showDryRunTab);
-    connect(m_settingsAction, &QAction::triggered, this, &MainWindow::showSettingsDialog);
-    connect(m_fullscreenAction, &QAction::triggered, this, &MainWindow::toggleFullscreen);
-    connect(m_exitAction, &QAction::triggered, this, []
-            {
-        AudioManager::instance()->shutdown();
-        QApplication::closeAllWindows();
-        QCoreApplication::quit(); });
-    const auto openSupportUrl = [this](const char *url, const QString &label)
-    {
-        if (!QDesktopServices::openUrl(QUrl(QString::fromLatin1(url))))
-        {
-            QMessageBox::warning(this, label, QStringLiteral("Unable to open link: %1").arg(QString::fromLatin1(url)));
-        }
-    };
-    connect(discordButton, &QToolButton::clicked, this, [openSupportUrl]
-            { openSupportUrl(discordInviteUrl(), QStringLiteral("Discord")); });
-    connect(boostyButton, &QToolButton::clicked, this, [openSupportUrl]
-            { openSupportUrl(boostyUrl(), QStringLiteral("Boosty")); });
-    connect(m_duplicatesPage, &DuplicatesPage::previewMergeRequested, this, &MainWindow::previewMerge);
-    connect(m_duplicatesPage, &DuplicatesPage::applyMergeRequested, this, &MainWindow::applyMerge);
-    connect(m_cleanupPage, &UnusedPage::previewDeletionRequested, this, &MainWindow::previewUnusedDeletion);
-    connect(m_cleanupPage, &UnusedPage::applyDeletionRequested, this, &MainWindow::applyUnusedDeletion);
-    connect(m_renameIdsPage, &RenameIdsPage::previewRequested, this, &MainWindow::previewStandardRename);
-    connect(m_renameIdsPage, &RenameIdsPage::applyRequested, this, &MainWindow::applyStandardRename);
-    connect(m_renameIdsPage, &RenameIdsPage::exportRequested, this, &MainWindow::exportStandardRenameReport);
-    connect(m_dataCollectionPage, &DataCollectionPage::previewRequested, this, &MainWindow::previewDataCollection);
-    connect(m_dataCollectionPage, &DataCollectionPage::applyRequested, this, &MainWindow::applyDataCollection);
-    connect(m_dataCollectionPage, &DataCollectionPage::exportRequested, this, &MainWindow::exportDataCollectionReport);
-    connect(m_dryRunPage, &FormatterPage::previewBuilt, this, [this]
-            { m_applyAction->setEnabled(true); });
-    connect(m_dryRunPage, &FormatterPage::openUnusedRequested, this, [this](const QVector<int> &rows)
-            {
-        if (m_optimizationDialog) m_optimizationDialog->accept();
-        m_cleanupPage->selectRows(rows); m_tabs->setCurrentWidget(m_cleanupPage); });
-    connect(m_dryRunPage, &FormatterPage::openDuplicateRequested, this, [this](const MergeRequest &request)
-            {
-        if (m_optimizationDialog) m_optimizationDialog->accept();
-        m_duplicatesPage->selectRequest(request); m_tabs->setCurrentWidget(m_duplicatesPage); });
-    connect(m_dryRunPage, &FormatterPage::openRenameRequested, this, [this]
-            {
-        if (m_optimizationDialog) m_optimizationDialog->accept(); m_tabs->setCurrentWidget(m_renameIdsPage); });
-    connect(m_dryRunPage, &FormatterPage::openCollectionRequested, this, [this]
-            {
-        if (m_optimizationDialog) m_optimizationDialog->accept(); m_tabs->setCurrentWidget(m_dataCollectionPage); });
-    connect(m_dryRunPage, &FormatterPage::applyWizardRequested, this, &MainWindow::applyOptimizationWizardPlan);
-    connect(m_dryRunPage, &FormatterPage::wizardFinished, this, [this]
-            {
-        if (m_optimizationDialog) m_optimizationDialog->accept(); });
-    connect(m_duplicatesPage, &DuplicatesPage::sourceRequested, this, [this](int nodeIndex)
-            {
-        m_xmlSourcePage->showNode(nodeIndex);
-        m_tabs->setCurrentWidget(m_xmlSourcePage); });
-
-    auto *undoAction = new QAction(QStringLiteral("Undo"), this);
-    undoAction->setShortcut(QKeySequence::Undo);
-    undoAction->setShortcutContext(Qt::ApplicationShortcut);
-    addAction(undoAction);
-    connect(undoAction, &QAction::triggered, this, &MainWindow::undoFocusedEditor);
-
-    auto *redoAction = new QAction(QStringLiteral("Redo"), this);
-    redoAction->setShortcuts({QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y)});
-    redoAction->setShortcutContext(Qt::ApplicationShortcut);
-    addAction(redoAction);
-    connect(redoAction, &QAction::triggered, this, &MainWindow::redoFocusedEditor);
-
-    auto *fullscreenAction = new QAction(QStringLiteral("Toggle Fullscreen"), this);
-    fullscreenAction->setShortcut(QKeySequence(Qt::Key_F11));
-    fullscreenAction->setShortcutContext(Qt::ApplicationShortcut);
-    addAction(fullscreenAction);
-    connect(fullscreenAction, &QAction::triggered, this, &MainWindow::toggleFullscreen);
-    connect(m_analysisPage, &OverviewPage::folderPathChanged, this, [this](const QString &folder)
-            { m_rootFolder = folder; });
-    connect(m_analysisPage, &OverviewPage::currentRowChanged, this, [this](int row)
-            {
-        m_dependenciesPage->setCurrentRow(row);
-        m_graphPage->setCurrentRow(row);
-        m_propertiesPage->setCurrentRow(row);
-        if (m_tabs && m_tabs->currentWidget() == m_graphPage) {
-            QMetaObject::invokeMethod(m_graphPage, "fitGraph", Qt::QueuedConnection);
-        }
-        if (row >= 0 && row < m_result.nodes.size()) {
-            const DataNode &node = m_result.nodes[row];
-            statusBar()->showMessage(QStringLiteral("Loaded path: %1 | Selected: %2 / %3")
-                                         .arg(m_currentSourcePath.isEmpty() ? m_rootFolder : m_currentSourcePath,
-                                             node.elementName.isEmpty() ? node.id : node.elementName,
-                                              node.id.isEmpty() ? QStringLiteral("-") : node.id));
-        } });
-    connect(m_tabs, &QTabWidget::currentChanged, this, [this](int index)
-            {
-        if (m_tabs->widget(index) == m_graphPage) {
-            QMetaObject::invokeMethod(m_graphPage, "fitGraph", Qt::QueuedConnection);
-        } });
-    connect(m_analysisPage, &OverviewPage::objectDoubleClicked, this, [this](int row)
-            { showGraphForRow(row); });
-
-    statusBar()->showMessage(QStringLiteral("Ready"));
-
-    const QList<QAbstractButton *> buttons = findChildren<QAbstractButton *>();
-    for (QAbstractButton *button : buttons)
-    {
-        if (auto *toolButton = qobject_cast<QToolButton *>(button))
-        {
-            const QString name = toolButton->objectName();
-            if (name != QStringLiteral("discordPromoButton") && name != QStringLiteral("boostyPromoButton"))
-            {
-                const int textWidth = toolButton->fontMetrics().horizontalAdvance(toolButton->text());
-                toolButton->setMinimumWidth(qMax(toolButton->minimumWidth(), textWidth + 58));
-            }
-        }
-    }
-    installButtonEffects(this, buttons);
-    installPromoButtonAnimations(this, discordButton, boostyButton);
-
-    for (QLabel *label : findChildren<QLabel *>())
-    {
-        const QString name = label->objectName();
-        if (name == QStringLiteral("panelTitle") || name == QStringLiteral("modeBadge"))
-        {
-            auto *glow = new QGraphicsDropShadowEffect(label);
-            glow->setBlurRadius(name == QStringLiteral("panelTitle") ? 16.0 : 10.0);
-            glow->setColor(name == QStringLiteral("panelTitle")
-                               ? QColor(74, 255, 203, 150)
-                               : QColor(62, 175, 255, 120));
-            glow->setOffset(0.0, 0.0);
-            label->setGraphicsEffect(glow);
-        }
-    }
+    MainWindowUiBuilder(*this).build();
 }
 
 void MainWindow::undoFocusedEditor()
@@ -847,99 +491,7 @@ void MainWindow::updateFullscreenActionText()
 
 void MainWindow::showSettingsDialog()
 {
-    QDialog dialog(this);
-    dialog.setObjectName(QStringLiteral("toolDialog"));
-    dialog.setWindowTitle(QStringLiteral("SC2 Data Helper Settings"));
-    dialog.setMinimumSize(820, 660);
-    dialog.resize(860, 700);
-    auto *layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(20, 18, 20, 18);
-    layout->setSpacing(10);
-
-    auto *title = new QLabel(QStringLiteral("INTERFACE SETTINGS"), &dialog);
-    title->setObjectName(QStringLiteral("panelTitle"));
-    layout->addWidget(title);
-
-    QSettings settings;
-    const auto checkBoxRow = [&dialog](const QString &text, bool checked, const QString &toolTip = QString())
-    {
-        auto *row = new QCheckBox(text, &dialog);
-        row->setProperty("textureType", QStringLiteral("checkBoxRow"));
-        row->setChecked(checked);
-        row->setFocusPolicy(Qt::NoFocus);
-        if (!toolTip.isEmpty())
-            row->setToolTip(toolTip);
-        return row;
-    };
-    auto *soundCheck = checkBoxRow(QStringLiteral("Button sounds"),
-                                   settings.value(QStringLiteral("ui/buttonSounds"), true).toBool());
-    auto *animationCheck = checkBoxRow(QStringLiteral("Button animations"),
-                                       settings.value(QStringLiteral("ui/buttonAnimations"), true).toBool());
-    auto *backgroundGlowCheck = checkBoxRow(
-        QStringLiteral("Blue background glow effects"),
-        settings.value(QStringLiteral("ui/backgroundGlows"), true).toBool(),
-        QStringLiteral("Shows animated soft blue background glows behind the main interface."));
-    auto *musicCheck = checkBoxRow(QStringLiteral("Background music"), AudioManager::isMusicEnabled());
-    auto *musicValue = new QLabel(&dialog);
-    musicValue->setObjectName(QStringLiteral("inspectorSubtitle"));
-    auto *musicSlider = new QSlider(Qt::Horizontal, &dialog);
-    musicSlider->setObjectName(QStringLiteral("backgroundMusicVolume"));
-    musicSlider->setRange(0, 100);
-    musicSlider->setValue(int(AudioManager::musicVolume() * 100.0));
-    musicSlider->setFocusPolicy(Qt::NoFocus);
-    QObject::connect(musicSlider, &QSlider::valueChanged, &dialog, [musicValue](int value)
-                     { musicValue->setText(QStringLiteral("Music volume: %1%").arg(value)); });
-    musicValue->setText(QStringLiteral("Music volume: %1%").arg(musicSlider->value()));
-    auto *duplicatesCheck = checkBoxRow(
-        QStringLiteral("Enable Duplicate Merge in Optimization"),
-        settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), true).toBool(),
-        QStringLiteral("Enabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
-    auto *backupCheck = checkBoxRow(
-        QStringLiteral("Create backup files before applying changes"),
-        settings.value(QStringLiteral("backup/enabled"), true).toBool(),
-        QStringLiteral("When disabled, SC2 archives and folders are edited without creating persistent .bak or backup_ copies."));
-    auto *startFullscreenCheck = checkBoxRow(QStringLiteral("Start in full screen"),
-                                             settings.value(QStringLiteral("ui/startFullscreen"), true).toBool());
-    auto *collectionModeLabel = new QLabel(QStringLiteral("DATA COLLECTION MODE"), &dialog);
-    collectionModeLabel->setObjectName(QStringLiteral("panelTitle"));
-    auto *collectionMode = new QComboBox(&dialog);
-    collectionMode->addItem(QStringLiteral("Unit - one collection per unit family"), QStringLiteral("Unit"));
-    collectionMode->addItem(QStringLiteral("UnitAbilWeapon - separate Unit, Ability and Weapon collections"), QStringLiteral("UnitAbilWeapon"));
-    const QString savedCollectionMode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString();
-    collectionMode->setCurrentIndex(qMax(0, collectionMode->findData(savedCollectionMode)));
-    collectionMode->setToolTip(QStringLiteral("Unit keeps the current behavior. UnitAbilWeapon creates separate collections like Gargantua, Gargantua_Jump and Gargantua_Weapon."));
-    layout->addWidget(soundCheck);
-    layout->addWidget(animationCheck);
-    layout->addWidget(backgroundGlowCheck);
-    layout->addWidget(musicCheck);
-    layout->addWidget(musicValue);
-    layout->addWidget(musicSlider);
-    layout->addWidget(duplicatesCheck);
-    layout->addWidget(backupCheck);
-    layout->addWidget(startFullscreenCheck);
-    layout->addWidget(collectionModeLabel);
-    layout->addWidget(collectionMode);
-    layout->addStretch(1);
-
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]()
-            {
-        settings.setValue(QStringLiteral("ui/buttonSounds"), soundCheck->isChecked());
-        settings.setValue(QStringLiteral("ui/buttonAnimations"), animationCheck->isChecked());
-        settings.setValue(QStringLiteral("ui/backgroundGlows"), backgroundGlowCheck->isChecked());
-        settings.setValue(QStringLiteral("optimization/duplicateMergeEnabled"), duplicatesCheck->isChecked());
-        settings.setValue(QStringLiteral("backup/enabled"), backupCheck->isChecked());
-        settings.setValue(QStringLiteral("ui/startFullscreen"), startFullscreenCheck->isChecked());
-        settings.setValue(QStringLiteral("dataCollection/mode"), collectionMode->currentData().toString());
-        AudioManager::setMusicSettings(musicCheck->isChecked(), musicSlider->value() / 100.0);
-        setDuplicateMergeEnabled(duplicatesCheck->isChecked());
-        if (auto *root = findChild<QWidget *>(QStringLiteral("workspaceRoot")))
-            root->update();
-        if (!m_result.nodes.isEmpty()) refreshPages();
-        dialog.accept(); });
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
-    dialog.exec();
+    MainWindowSettings(*this).show();
 }
 
 void MainWindow::setupLogging()
@@ -1104,218 +656,22 @@ void MainWindow::setCurrentSourcePath(const QString &path)
 
 void MainWindow::openSc2File()
 {
-    QSettings settings;
-    const QString savedPath = settings.value(QStringLiteral("paths/lastSourcePath")).toString();
-    QString startPath = !m_currentSourcePath.isEmpty() ? m_currentSourcePath : savedPath;
-    if (!startPath.isEmpty() && !QFileInfo::exists(startPath))
-        startPath = QFileInfo(startPath).absolutePath();
-
-    const QString selected = openSc2FileStyled(this, startPath);
-    if (selected.isEmpty())
-    {
-        return;
-    }
-    const QFileInfo info(selected);
-    const bool previousOptimizationEnabled = m_dryRunAction && m_dryRunAction->isEnabled();
-    const bool previousReviewEnabled = m_applyAction && m_applyAction->isEnabled();
-    if (info.suffix().compare(QStringLiteral("xml"), Qt::CaseInsensitive) == 0)
-        m_sourceKind = SourceKind::XmlFile;
-    else if (isSupportedSc2Archive(info))
-        m_sourceKind = SourceKind::ArchiveFile;
-    else
-        m_sourceKind = SourceKind::Unknown;
-    m_rootFolder = info.absolutePath();
-    setCurrentSourcePath(selected);
-    settings.setValue(QStringLiteral("paths/lastSourcePath"), selected);
-    m_analysisPage->setFolderPath(selected);
-    m_analysisPage->setModeLabel(QStringLiteral("Mode: ready to analyze"));
-    m_analysisPage->setOutputText(QStringLiteral("File selected. Press Analyze to start scanning."));
-    if (m_result.nodes.isEmpty())
-        refreshPages();
-    m_dryRunAction->setEnabled(previousOptimizationEnabled);
-    m_applyAction->setEnabled(previousReviewEnabled);
-    logLine(QStringLiteral("File selected without analysis: %1").arg(selected));
+    SourceSelectionController(*this).openSc2File();
 }
 
 void MainWindow::openSourceFolder()
 {
-    QSettings settings;
-    const QString savedPath = settings.value(QStringLiteral("paths/lastSourcePath")).toString();
-    QString startPath = !m_currentSourcePath.isEmpty() ? m_currentSourcePath : savedPath;
-    if (!startPath.isEmpty() && !QFileInfo(startPath).isDir())
-        startPath = QFileInfo(startPath).absolutePath();
-
-    const QString selected = openFolderStyled(this, startPath);
-    if (selected.isEmpty())
-        return;
-
-    const bool previousOptimizationEnabled = m_dryRunAction && m_dryRunAction->isEnabled();
-    const bool previousReviewEnabled = m_applyAction && m_applyAction->isEnabled();
-    m_rootFolder = selected;
-    m_sourceKind = collectArchiveFiles(selected).isEmpty() ? SourceKind::Folder : SourceKind::ArchiveFolder;
-    setCurrentSourcePath(selected);
-    settings.setValue(QStringLiteral("paths/lastSourcePath"), selected);
-    m_analysisPage->setFolderPath(selected);
-    m_analysisPage->setModeLabel(QStringLiteral("Mode: ready to analyze"));
-    m_analysisPage->setOutputText(QStringLiteral("Folder selected. Press Analyze to start scanning."));
-    if (m_result.nodes.isEmpty())
-        refreshPages();
-    m_dryRunAction->setEnabled(previousOptimizationEnabled);
-    m_applyAction->setEnabled(previousReviewEnabled);
-    logLine(QStringLiteral("Folder selected without analysis: %1").arg(selected));
+    SourceSelectionController(*this).openSourceFolder();
 }
 
 void MainWindow::analyzeFolder()
 {
-    const QString path = m_pathEdit ? m_pathEdit->text().trimmed() : QString();
-    if (path.isEmpty() && m_currentSourcePath.isEmpty())
-    {
-        QMessageBox::warning(this, QStringLiteral("Analyze"), QStringLiteral("Select a file or folder first."));
-        return;
-    }
-
-    const QString effectivePath = path.isEmpty() ? m_currentSourcePath : path;
-    if (!loadPathAndAnalyze(effectivePath))
-    {
-        return;
-    }
+    MainWindowAnalysisController(*this).analyzeCurrentSource();
 }
 
 bool MainWindow::loadPathAndAnalyze(const QString &path)
 {
-    QFileInfo info(path);
-    const bool previousOptimizationEnabled = m_dryRunAction && m_dryRunAction->isEnabled();
-    const bool previousReviewEnabled = m_applyAction && m_applyAction->isEnabled();
-    m_dryRunAction->setEnabled(false);
-    m_applyAction->setEnabled(false);
-    if (!info.exists())
-    {
-        QMessageBox::warning(this, QStringLiteral("Load"), QStringLiteral("Path does not exist: %1").arg(path));
-        logLine(QStringLiteral("Path does not exist: %1").arg(path));
-        return false;
-    }
-
-    const AnalysisResult previousResult = m_result;
-    QString errorMessage;
-    bool ok = false;
-    AnalysisProgressDialog progress(this);
-    m_activeProgressDialog = &progress;
-    progress.setProgress(8,
-                         QStringLiteral("Preparing analysis"),
-                         QFileInfo(path).fileName());
-    progress.show();
-    QApplication::processEvents();
-    progress.setProgress(22,
-                         info.isDir() ? QStringLiteral("Scanning folder") : QStringLiteral("Opening data source"),
-                         path);
-    QApplication::processEvents();
-    if (info.isDir())
-    {
-        const bool hasArchives = !collectArchiveFiles(path).isEmpty();
-        m_sourceKind = hasArchives ? SourceKind::ArchiveFolder : SourceKind::Folder;
-        ok = hasArchives ? analyzeArchiveFolderPath(path, &errorMessage)
-                         : analyzeFolderPath(path, &errorMessage);
-    }
-    else if (info.suffix().compare(QStringLiteral("xml"), Qt::CaseInsensitive) == 0)
-    {
-        m_sourceKind = SourceKind::XmlFile;
-        ok = analyzeXmlFile(path, &errorMessage);
-    }
-    else if (isSupportedSc2Archive(info))
-    {
-        m_sourceKind = SourceKind::ArchiveFile;
-        ok = analyzeArchiveFile(path, &errorMessage);
-    }
-    else
-    {
-        m_sourceKind = SourceKind::Unknown;
-        errorMessage = QStringLiteral("Unsupported path type: %1").arg(path);
-        ok = false;
-    }
-    if (progress.isCancelled())
-    {
-        ok = false;
-        errorMessage = QStringLiteral("Analysis canceled.");
-    }
-    progress.setProgress(ok ? 88 : 100,
-                         ok ? QStringLiteral("Building object registry") : QStringLiteral("Analysis failed"),
-                         ok ? QStringLiteral("Preparing tables, references and reports") : errorMessage);
-    QApplication::processEvents();
-
-    if (!ok)
-    {
-        m_result = previousResult;
-        m_dryRunAction->setEnabled(previousOptimizationEnabled);
-        m_applyAction->setEnabled(previousReviewEnabled);
-        m_activeProgressDialog = nullptr;
-        progress.close();
-        if (errorMessage == QStringLiteral("Analysis canceled."))
-        {
-            statusBar()->showMessage(QStringLiteral("Analysis canceled. No partial result was applied."), 8000);
-            logLine(QStringLiteral("Analysis canceled by user."));
-        }
-        else
-        {
-            QMessageBox::critical(this, QStringLiteral("Analysis failed"), errorMessage);
-            logLine(QStringLiteral("Analysis failed: %1").arg(errorMessage));
-        }
-        return false;
-    }
-
-    m_currentSourcePath = path;
-    m_rootFolder = info.isDir() ? path : info.absolutePath();
-    QSettings settings;
-    settings.setValue(QStringLiteral("paths/lastSourcePath"), path);
-    progress.setProgress(90,
-                         QStringLiteral("Refreshing analysis"),
-                         QStringLiteral("Updating object tables"));
-    QApplication::processEvents();
-    m_analysisPage->setFolderPath(path);
-    m_analysisPage->setModeLabel(modeLabelFor(static_cast<int>(m_sourceKind)));
-    m_analysisPage->setAnalysisResult(m_result);
-    progress.setProgress(94,
-                         QStringLiteral("Refreshing analysis"),
-                         QStringLiteral("Updating pages and recommendations"));
-    QApplication::processEvents();
-    refreshPages();
-    progress.setProgress(98,
-                         QStringLiteral("Writing report"),
-                         QStringLiteral("Saving latest analysis summary"));
-    QApplication::processEvents();
-    writeAnalysisReportFile();
-    progress.setProgress(100,
-                         QStringLiteral("Analysis complete"),
-                         QStringLiteral("%1 XML files | %2 objects")
-                             .arg(m_result.totalXmlFiles())
-                             .arg(m_result.totalDataNodes()));
-    QApplication::processEvents();
-    progress.close();
-    m_activeProgressDialog = nullptr;
-    showAnalysisTab();
-    m_dryRunAction->setEnabled(true);
-    m_applyAction->setEnabled(false);
-    setCurrentSourcePath(path);
-    logLine(QStringLiteral("Scanned files: %1").arg(m_result.totalFilesScanned()));
-    logLine(QStringLiteral("XML files: %1").arg(m_result.totalXmlFiles()));
-    logLine(QStringLiteral("Data nodes: %1").arg(m_result.totalDataNodes()));
-    logLine(QStringLiteral("Duplicate IDs: %1").arg(m_result.duplicateIdGroups.size()));
-    logLine(QStringLiteral("Duplicate content groups: %1").arg(m_result.duplicateContentGroups.size()));
-    logLine(QStringLiteral("Parse errors: %1").arg(m_result.parseErrors.size()));
-    for (const ParseErrorInfo &error : m_result.parseErrors)
-    {
-        logLine(QStringLiteral("Parse error: %1 -> %2").arg(error.filePath, error.message));
-    }
-    for (const DuplicateIdGroup &group : m_result.duplicateIdGroups)
-    {
-        logLine(QStringLiteral("Duplicate ID group: %1 (%2 nodes)").arg(group.id).arg(group.nodeIndices.size()));
-    }
-    for (const DuplicateContentGroup &group : m_result.duplicateContentGroups)
-    {
-        logLine(QStringLiteral("Duplicate content group: %1 (%2 nodes)").arg(group.contentHash.left(12)).arg(group.nodeIndices.size()));
-    }
-    if (!m_optimizationDialog && !m_wizardApplyAutomation)
-        showDryRunTab(true);
-    return true;
+    return MainWindowAnalysisController(*this).loadPathAndAnalyze(path);
 }
 
 bool MainWindow::analyzeFolderPath(const QString &folderPath, QString *errorMessage)

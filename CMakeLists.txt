@@ -43,12 +43,22 @@ target_sources(SC2DataHelper PRIVATE
     src/main.cpp
     src/app/MainWindow.h
     src/app/MainWindow.cpp
+    src/app/MainWindowAnalysisController.h
+    src/app/MainWindowAnalysisController.cpp
+    src/app/MainWindowSettings.h
+    src/app/MainWindowSettings.cpp
+    src/app/MainWindowStartup.h
+    src/app/MainWindowStartup.cpp
+    src/app/MainWindowUiBuilder.h
+    src/app/MainWindowUiBuilder.cpp
     src/app/MainWindowUiSupport.h
     src/app/MainWindowUiSupport.cpp
     src/app/Sc2FileDialogs.h
     src/app/Sc2FileDialogs.cpp
     src/app/Sc2MessageDialog.h
     src/app/Sc2MessageDialog.cpp
+    src/app/SourceSelectionController.h
+    src/app/SourceSelectionController.cpp
     src/app/AudioManager.h
     src/app/AudioManager.cpp
     src/app/ThemeManager.h
