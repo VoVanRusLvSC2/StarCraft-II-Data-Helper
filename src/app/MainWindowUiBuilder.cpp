@@ -22,6 +22,7 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QEvent>
 #include <QFont>
 #include <QFrame>
 #include <QGraphicsDropShadowEffect>
@@ -44,6 +45,42 @@
 
 namespace sc2dh::app
 {
+namespace
+{
+class BottomEdgePositioner final : public QObject
+{
+public:
+    BottomEdgePositioner(QWidget *window, QWidget *edge)
+        : QObject(window), m_window(window), m_edge(edge)
+    {
+        sync();
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (watched == m_window && event
+            && (event->type() == QEvent::Resize || event->type() == QEvent::Show
+                || event->type() == QEvent::WindowStateChange))
+            sync();
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    void sync()
+    {
+        if (!m_window || !m_edge)
+            return;
+        constexpr int edgeHeight = 7;
+        m_edge->setGeometry(0, qMax(0, m_window->height() - edgeHeight), m_window->width(), edgeHeight);
+        m_edge->raise();
+    }
+
+    QWidget *m_window = nullptr;
+    QWidget *m_edge = nullptr;
+};
+}
+
 MainWindowUiBuilder::MainWindowUiBuilder(MainWindow &window)
     : m_window(window)
 {
@@ -323,6 +360,15 @@ void MainWindowUiBuilder::build()
     mainStatusBar->setSizeGripEnabled(false);
     mainStatusBar->setMinimumHeight(30);
     mainStatusBar->showMessage(QStringLiteral("Ready"));
+
+    auto *bottomEdge = new QFrame(window);
+    bottomEdge->setObjectName(QStringLiteral("mainBottomEdge"));
+    bottomEdge->setAttribute(Qt::WA_TransparentForMouseEvents);
+    bottomEdge->setFocusPolicy(Qt::NoFocus);
+    bottomEdge->setFixedHeight(7);
+    bottomEdge->show();
+    auto *bottomEdgePositioner = new BottomEdgePositioner(window, bottomEdge);
+    window->installEventFilter(bottomEdgePositioner);
 
     const QList<QAbstractButton *> buttons = window->findChildren<QAbstractButton *>();
     for (QAbstractButton *button : buttons)

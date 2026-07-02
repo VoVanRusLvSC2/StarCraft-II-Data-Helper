@@ -1234,7 +1234,6 @@ QStatusBar#mainStatusBar {
                                 stop:1 rgba(0, 5, 8, 252));
     border: none;
     border-top: 1px solid rgba(0, 160, 115, 150);
-    border-bottom: 3px solid rgba(0, 230, 165, 210);
     color: #b9d8d1;
     padding: 4px 10px 5px 10px;
     min-height: 30px;
@@ -1243,6 +1242,17 @@ QStatusBar#mainStatusBar {
 QStatusBar#mainStatusBar::item {
     border: none;
     background: transparent;
+}
+
+QFrame#mainBottomEdge {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 rgba(0, 150, 105, 180),
+                                stop:0.48 rgba(0, 255, 184, 245),
+                                stop:0.52 rgba(148, 255, 218, 255),
+                                stop:1 rgba(0, 150, 105, 180));
+    border-top: 1px solid rgba(120, 255, 216, 230);
+    min-height: 7px;
+    max-height: 7px;
 }
 
 QDialog#analysisProgressDialog {
