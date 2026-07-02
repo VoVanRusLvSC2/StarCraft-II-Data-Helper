@@ -50,8 +50,8 @@ namespace
 class BottomEdgePositioner final : public QObject
 {
 public:
-    BottomEdgePositioner(QWidget *window, QWidget *edge)
-        : QObject(window), m_window(window), m_edge(edge)
+    BottomEdgePositioner(QWidget *host, QWidget *edge)
+        : QObject(host), m_host(host), m_edge(edge)
     {
         sync();
     }
@@ -59,7 +59,7 @@ public:
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override
     {
-        if (watched == m_window && event
+        if (watched == m_host && event
             && (event->type() == QEvent::Resize || event->type() == QEvent::Show
                 || event->type() == QEvent::WindowStateChange))
             sync();
@@ -69,14 +69,14 @@ protected:
 private:
     void sync()
     {
-        if (!m_window || !m_edge)
+        if (!m_host || !m_edge)
             return;
-        constexpr int edgeHeight = 7;
-        m_edge->setGeometry(0, qMax(0, m_window->height() - edgeHeight), m_window->width(), edgeHeight);
+        constexpr int edgeHeight = 9;
+        m_edge->setGeometry(0, qMax(0, m_host->height() - edgeHeight), m_host->width(), edgeHeight);
         m_edge->raise();
     }
 
-    QWidget *m_window = nullptr;
+    QWidget *m_host = nullptr;
     QWidget *m_edge = nullptr;
 };
 }
@@ -361,14 +361,14 @@ void MainWindowUiBuilder::build()
     mainStatusBar->setMinimumHeight(30);
     mainStatusBar->showMessage(QStringLiteral("Ready"));
 
-    auto *bottomEdge = new QFrame(window);
-    bottomEdge->setObjectName(QStringLiteral("mainBottomEdge"));
+    auto *bottomEdge = new QFrame(mainStatusBar);
+    bottomEdge->setObjectName(QStringLiteral("statusBottomEdge"));
     bottomEdge->setAttribute(Qt::WA_TransparentForMouseEvents);
     bottomEdge->setFocusPolicy(Qt::NoFocus);
-    bottomEdge->setFixedHeight(7);
+    bottomEdge->setFixedHeight(9);
     bottomEdge->show();
-    auto *bottomEdgePositioner = new BottomEdgePositioner(window, bottomEdge);
-    window->installEventFilter(bottomEdgePositioner);
+    auto *bottomEdgePositioner = new BottomEdgePositioner(mainStatusBar, bottomEdge);
+    mainStatusBar->installEventFilter(bottomEdgePositioner);
 
     const QList<QAbstractButton *> buttons = window->findChildren<QAbstractButton *>();
     for (QAbstractButton *button : buttons)
