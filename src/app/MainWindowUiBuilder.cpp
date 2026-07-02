@@ -22,7 +22,6 @@
 #include <QColor>
 #include <QCoreApplication>
 #include <QDesktopServices>
-#include <QEvent>
 #include <QFont>
 #include <QFrame>
 #include <QGraphicsDropShadowEffect>
@@ -45,47 +44,6 @@
 
 namespace sc2dh::app
 {
-namespace
-{
-class BottomEdgePositioner final : public QObject
-{
-public:
-    BottomEdgePositioner(QWidget *host, QWidget *edge)
-        : QObject(host), m_host(host), m_edge(edge)
-    {
-        sync();
-    }
-
-protected:
-    bool eventFilter(QObject *watched, QEvent *event) override
-    {
-        if (watched == m_host && event
-            && (event->type() == QEvent::Resize || event->type() == QEvent::Show
-                || event->type() == QEvent::WindowStateChange))
-            sync();
-        return QObject::eventFilter(watched, event);
-    }
-
-private:
-    void sync()
-    {
-        if (!m_host || !m_edge)
-            return;
-        constexpr int edgeHeight = 8;
-        constexpr int bottomInset = 10;
-        constexpr int sideInset = 6;
-        m_edge->setGeometry(sideInset,
-                            qMax(0, m_host->height() - edgeHeight - bottomInset),
-                            qMax(0, m_host->width() - sideInset * 2),
-                            edgeHeight);
-        m_edge->raise();
-    }
-
-    QWidget *m_host = nullptr;
-    QWidget *m_edge = nullptr;
-};
-}
-
 MainWindowUiBuilder::MainWindowUiBuilder(MainWindow &window)
     : m_window(window)
 {
@@ -259,6 +217,12 @@ void MainWindowUiBuilder::build()
 
     splitterLayout->addWidget(window->m_tabs);
     rootLayout->addWidget(splitterFrame, 1);
+    auto *workspaceBottomEdge = new QFrame(root);
+    workspaceBottomEdge->setObjectName(QStringLiteral("workspaceBottomEdge"));
+    workspaceBottomEdge->setAttribute(Qt::WA_TransparentForMouseEvents);
+    workspaceBottomEdge->setFocusPolicy(Qt::NoFocus);
+    workspaceBottomEdge->setFixedHeight(10);
+    rootLayout->addWidget(workspaceBottomEdge);
     window->setCentralWidget(root);
     QObject::connect(window->m_openFileAction, &QAction::triggered, window, &MainWindow::openSc2File);
     QObject::connect(window->m_openFolderAction, &QAction::triggered, window, &MainWindow::openSourceFolder);
@@ -365,15 +329,6 @@ void MainWindowUiBuilder::build()
     mainStatusBar->setSizeGripEnabled(false);
     mainStatusBar->setFixedHeight(48);
     mainStatusBar->showMessage(QStringLiteral("Ready"));
-
-    auto *bottomEdge = new QFrame(mainStatusBar);
-    bottomEdge->setObjectName(QStringLiteral("statusBottomEdge"));
-    bottomEdge->setAttribute(Qt::WA_TransparentForMouseEvents);
-    bottomEdge->setFocusPolicy(Qt::NoFocus);
-    bottomEdge->setFixedHeight(8);
-    bottomEdge->show();
-    auto *bottomEdgePositioner = new BottomEdgePositioner(mainStatusBar, bottomEdge);
-    mainStatusBar->installEventFilter(bottomEdgePositioner);
 
     const QList<QAbstractButton *> buttons = window->findChildren<QAbstractButton *>();
     for (QAbstractButton *button : buttons)

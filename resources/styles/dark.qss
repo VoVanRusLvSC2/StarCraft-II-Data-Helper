@@ -18,6 +18,19 @@ QFrame#workspaceFrame {
     background: transparent;
 }
 
+QFrame#workspaceBottomEdge {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 rgba(0, 120, 84, 180),
+                                stop:0.18 rgba(0, 235, 168, 235),
+                                stop:0.5 rgba(185, 255, 232, 255),
+                                stop:0.82 rgba(0, 235, 168, 235),
+                                stop:1 rgba(0, 120, 84, 180));
+    border-top: 2px solid rgba(128, 255, 220, 245);
+    border-bottom: 1px solid rgba(0, 98, 72, 220);
+    min-height: 10px;
+    max-height: 10px;
+}
+
 QToolBar#mainToolbar,
 QFrame#pageToolbar {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -1243,18 +1256,6 @@ QStatusBar#mainStatusBar {
 QStatusBar#mainStatusBar::item {
     border: none;
     background: transparent;
-}
-
-QFrame#statusBottomEdge {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                stop:0 rgba(0, 150, 105, 210),
-                                stop:0.45 rgba(0, 255, 184, 255),
-                                stop:0.5 rgba(182, 255, 230, 255),
-                                stop:0.55 rgba(0, 255, 184, 255),
-                                stop:1 rgba(0, 150, 105, 210));
-    border-top: 2px solid rgba(160, 255, 228, 245);
-    min-height: 8px;
-    max-height: 8px;
 }
 
 QDialog#analysisProgressDialog {
