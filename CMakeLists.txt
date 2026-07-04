@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(SC2DataHelper VERSION 1.0.0 LANGUAGES CXX)
+project(SC2DataHelper VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -81,6 +81,22 @@ target_sources(SC2DataHelper PRIVATE
     src/core/ArchiveReferenceRewriter.cpp
     src/core/AnalysisModels.h
     src/core/AnalysisModels.cpp
+    src/core/AnalysisIndex.h
+    src/core/AnalysisIndex.cpp
+    src/core/ScannedFileReader.h
+    src/core/ScannedFileReader.cpp
+    src/core/AssetFileRules.h
+    src/core/AssetFileRules.cpp
+    src/core/AssetReferenceScanner.h
+    src/core/AssetReferenceScanner.cpp
+    src/core/AssetOptimizationAnalyzer.h
+    src/core/AssetOptimizationAnalyzer.cpp
+    src/core/TriggerPerformanceAnalyzer.h
+    src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/XmlCleanupUtils.h
+    src/core/XmlCleanupUtils.cpp
+    src/core/SemanticDuplicateAnalyzer.h
+    src/core/SemanticDuplicateAnalyzer.cpp
     src/core/FolderAnalyzer.h
     src/core/FolderAnalyzer.cpp
     src/core/ReferenceGraph.h
@@ -201,6 +217,14 @@ enable_testing()
 add_executable(SC2DataHelperTests
     tests/test_core.cpp
     src/core/AnalysisModels.cpp
+    src/core/AnalysisIndex.cpp
+    src/core/ScannedFileReader.cpp
+    src/core/AssetFileRules.cpp
+    src/core/AssetReferenceScanner.cpp
+    src/core/AssetOptimizationAnalyzer.cpp
+    src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/XmlCleanupUtils.cpp
+    src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogEnumRepair.cpp
     src/core/CatalogLinkSchema.cpp
     src/core/ArchiveReferenceRewriter.cpp
@@ -247,6 +271,14 @@ add_test(NAME SC2DataHelperTests COMMAND SC2DataHelperTests)
 add_executable(SC2OptimizeFolder
     src/tools/OptimizeFolder.cpp
     src/core/AnalysisModels.cpp
+    src/core/AnalysisIndex.cpp
+    src/core/ScannedFileReader.cpp
+    src/core/AssetFileRules.cpp
+    src/core/AssetReferenceScanner.cpp
+    src/core/AssetOptimizationAnalyzer.cpp
+    src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/XmlCleanupUtils.cpp
+    src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
     src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
@@ -281,6 +313,14 @@ endif()
 add_executable(SC2DataCollectionProbe
     src/tools/DataCollectionProbe.cpp
     src/core/AnalysisModels.cpp
+    src/core/AnalysisIndex.cpp
+    src/core/ScannedFileReader.cpp
+    src/core/AssetFileRules.cpp
+    src/core/AssetReferenceScanner.cpp
+    src/core/AssetOptimizationAnalyzer.cpp
+    src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/XmlCleanupUtils.cpp
+    src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
     src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
@@ -320,6 +360,14 @@ endif()
 add_executable(SC2OptimizeMaps
     src/tools/OptimizeMaps.cpp
     src/core/AnalysisModels.cpp
+    src/core/AnalysisIndex.cpp
+    src/core/ScannedFileReader.cpp
+    src/core/AssetFileRules.cpp
+    src/core/AssetReferenceScanner.cpp
+    src/core/AssetOptimizationAnalyzer.cpp
+    src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/XmlCleanupUtils.cpp
+    src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
     src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp

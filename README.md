@@ -18,8 +18,12 @@ catalog file.
 - Find exact duplicate XML bodies, redirect references, and merge safely
 - Preview and apply Rename To Standard operations for unit-family style data
 - Run Import Cleanup for unused imported files in folders or archives
-- Run Deep Cleanup for stale strings, redundant default fields, broken actor
-  events, dependency review, and archive/helper trash
+- Run Deep Cleanup for stale strings, redundant default fields/nodes, broken
+  actor events, dependency review, and archive/helper trash
+- Scan binary model-like imports for embedded asset references before deleting
+  textures, sounds, layouts, or models
+- Review asset-size/duplicate audits, trigger/Galaxy performance hotspots, and
+  semantic duplicate data-object candidates
 - Show full XML source with syntax highlighting
 - Open an Optimization Wizard for batch review before apply
 
@@ -81,18 +85,36 @@ Editor-managed map files such as `Minimap.tga`, `LightingMap.tga`, and
 `PreloadAssetDB.txt` are protected even when normal XML references do not point
 to them.
 
+Binary model-like files such as `.m3` are also scanned for printable embedded
+asset paths. This protects textures and related imports that are referenced only
+inside model payloads rather than in XML.
+
 ### Deep Cleanup
 
 Find and optionally apply safe cleanup outside data-object and import deletion:
 
 - stale localization lines for object IDs that no longer exist
 - redundant attributes that duplicate a local parent object's value
+- redundant direct XML child nodes that duplicate a local parent object's node
 - broken actor event XML nodes that reference only missing typed IDs
 - temporary, report, backup, and pending helper files
 - dependency metadata as review-only candidates
 
 Dependency removal is intentionally review-only because hidden editor/runtime
 links can break a map even when XML references look unused.
+
+Deep Cleanup also reports review-only optimization hints that are useful for
+manual work but are not safe to auto-apply:
+
+- byte-identical imported assets and unusually large imported assets
+- frequent trigger/Galaxy timer patterns and unit-group scan hotspots
+- semantic duplicate catalog objects that match after ignoring editor-only text,
+  icon, tooltip, and category fields
+
+These checks follow the same general direction as community SC2 tooling such as
+Talv's Plaxtony and sc2-galaxy-toolkit: Galaxy, Trigger XML, Layout XML, and
+GameData should be analyzed as structured SC2 data instead of treated only as
+plain text. This project does not vendor that TypeScript code.
 
 ### Rename To Standard
 
@@ -104,6 +126,11 @@ mode. This remains review-first because many maps use custom naming rules.
 Build one batch plan, review every step, apply changes, refresh analysis, then
 close the wizard. One unsafe unused-chain row no longer cancels the whole apply;
 it is skipped and reported while the rest of the selected safe work continues.
+
+When archive optimization rewrites an MPQ-backed `.SC2Map` or `.SC2Mod`, the
+archive writer also attempts a best-effort compact/repack after replacements or
+deletions. If StormLib cannot safely compact a legacy archive, the already
+verified rewrite is kept instead of failing a valid cleanup.
 
 ## Typical usage
 

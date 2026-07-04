@@ -1,13 +1,20 @@
 #include "core/DeepCleanupService.h"
 
+#include "core/AnalysisIndex.h"
+#include "core/AssetFileRules.h"
+#include "core/AssetOptimizationAnalyzer.h"
+#include "core/AssetReferenceScanner.h"
 #include "core/BackupManager.h"
 #include "core/CatalogProtection.h"
-#include "core/Sc2Archive.h"
+#include "core/SemanticDuplicateAnalyzer.h"
+#include "core/TriggerPerformanceAnalyzer.h"
+#include "core/XmlCleanupUtils.h"
 #include "core/XmlLoader.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -34,101 +41,6 @@ QString absoluteCandidatePath(const QString &rootFolder, const QString &filePath
     return QDir::isAbsolutePath(filePath) ? filePath : QDir(rootFolder).absoluteFilePath(filePath);
 }
 
-bool isBackupOrTrashName(const QString &relative)
-{
-    const QString normalized = QDir::cleanPath(relative).replace('\\', '/').toLower();
-    const QString fileName = QFileInfo(normalized).fileName();
-    return normalized.contains(QStringLiteral("/backup_"))
-        || fileName.startsWith(QStringLiteral("backup_"))
-        || fileName.contains(QStringLiteral(".bak-"))
-        || fileName.endsWith(QStringLiteral(".bak"))
-        || fileName.endsWith(QStringLiteral(".tmp"))
-        || fileName.endsWith(QStringLiteral(".old"))
-        || fileName.endsWith(QStringLiteral(".orig"))
-        || fileName.endsWith(QStringLiteral(".log"))
-        || fileName.endsWith(QStringLiteral(".sc2dh.pending"))
-        || fileName == QStringLiteral("analysis_report.txt")
-        || fileName == QStringLiteral("planned_changes_report.txt")
-        || fileName == QStringLiteral("rename_to_standard_preview.txt")
-        || fileName == QStringLiteral("data_collection_preview.txt");
-}
-
-bool isArchivePath(const QString &path)
-{
-    const QString suffix = QFileInfo(path).suffix().toLower();
-    static const QSet<QString> extensions = {
-        QStringLiteral("sc2map"), QStringLiteral("sc2mod"), QStringLiteral("sc2components"),
-        QStringLiteral("sc2campaign"), QStringLiteral("sc2archive")
-    };
-    return extensions.contains(suffix);
-}
-
-bool isLocalizationFile(const QString &relative);
-
-bool isEditorManagedMapFile(const QString &relative)
-{
-    const QString normalized = QDir::cleanPath(relative).replace('\\', '/').toLower();
-    const QString fileName = QFileInfo(normalized).fileName().toLower();
-    static const QSet<QString> fileNames = {
-        QStringLiteral("minimap.tga"),
-        QStringLiteral("lightingmap.tga"),
-        QStringLiteral("preloadassetdb.txt"),
-        QStringLiteral("descindex.sc2layout"),
-        QStringLiteral("descindex.version")
-    };
-    if (fileNames.contains(fileName))
-        return true;
-    return normalized == QStringLiteral("base.sc2data/ui/layout/descindex.sc2layout")
-        || normalized == QStringLiteral("base.sc2data/ui/layout/descindex.version");
-}
-
-bool isMapPreviewImage(const QFileInfo &info, const QString &relative)
-{
-    const QString normalized = QDir::cleanPath(relative).replace('\\', '/').toLower();
-    const QString fileName = QFileInfo(normalized).fileName().toLower();
-    static const QSet<QString> imageExtensions = {
-        QStringLiteral("jpg"), QStringLiteral("jpeg"), QStringLiteral("png"),
-        QStringLiteral("tga"), QStringLiteral("bmp"), QStringLiteral("dds")
-    };
-    if (!imageExtensions.contains(info.suffix().toLower()))
-        return false;
-    return fileName.contains(QStringLiteral("thumbnail"))
-        || fileName.contains(QStringLiteral("thumnail"))
-        || fileName.contains(QStringLiteral("screenshot"))
-        || fileName.contains(QStringLiteral("screen_shot"))
-        || fileName.contains(QStringLiteral("preview"))
-        || fileName.contains(QStringLiteral("loading"))
-        || normalized.contains(QStringLiteral("/screenshots/"))
-        || normalized.contains(QStringLiteral("/screenshot/"))
-        || normalized.contains(QStringLiteral("/preview/"))
-        || normalized.contains(QStringLiteral("/loading/"));
-}
-
-bool isAssetFile(const QFileInfo &info, const QString &relative)
-{
-    static const QSet<QString> extensions = {
-        QStringLiteral("dds"), QStringLiteral("tga"), QStringLiteral("png"), QStringLiteral("jpg"),
-        QStringLiteral("jpeg"), QStringLiteral("bmp"), QStringLiteral("m3"), QStringLiteral("ogg"),
-        QStringLiteral("wav"), QStringLiteral("mp3"), QStringLiteral("webm"), QStringLiteral("mp4"),
-        QStringLiteral("fxa"), QStringLiteral("fxs"), QStringLiteral("fxh"), QStringLiteral("layout"),
-        QStringLiteral("sc2layout"), QStringLiteral("txt")
-    };
-    if (info.exists() && !info.isFile())
-        return false;
-    if (isBackupOrTrashName(relative) || isLocalizationFile(relative) || isEditorManagedMapFile(relative)
-        || isMapPreviewImage(info, relative))
-        return false;
-    return extensions.contains(info.suffix().toLower());
-}
-
-bool isLocalizationFile(const QString &relative)
-{
-    const QString normalized = relative.toLower();
-    return normalized.contains(QStringLiteral("localizeddata/"))
-        || normalized.contains(QStringLiteral("gamestrings"))
-        || normalized.contains(QStringLiteral("objectstrings"));
-}
-
 bool containsToken(const QString &haystack, const QString &token)
 {
     if (token.trimmed().isEmpty())
@@ -146,38 +58,6 @@ QString readTextFileBestEffort(const QString &path)
     if (!file.open(QIODevice::ReadOnly))
         return {};
     return QString::fromUtf8(file.readAll());
-}
-
-QSet<QString> knownIds(const AnalysisResult &analysis)
-{
-    QSet<QString> ids;
-    for (const DataNode &node : analysis.nodes)
-        if (!node.id.isEmpty())
-            ids.insert(node.id);
-    return ids;
-}
-
-QString referenceCorpus(const AnalysisResult &analysis)
-{
-    QStringList parts;
-    for (const QString &xml : analysis.sourceXmlByFile)
-        parts << xml;
-    Sc2Archive archive;
-    QString archiveError;
-    const bool readArchiveEntries = isArchivePath(analysis.rootFolder) && archive.load(analysis.rootFolder, &archiveError);
-    for (const ScannedFileInfo &file : analysis.scannedFiles) {
-        if (!file.isSc2DataLike || file.isXml || file.size > 4 * 1024 * 1024)
-            continue;
-        if (readArchiveEntries && !QDir::isAbsolutePath(file.filePath)) {
-            QByteArray bytes;
-            QString readError;
-            if (archive.readEntry(file.filePath, &bytes, &readError) && bytes.size() <= 4 * 1024 * 1024)
-                parts << QString::fromUtf8(bytes);
-            continue;
-        }
-        parts << readTextFileBestEffort(file.filePath);
-    }
-    return parts.join(QLatin1Char('\n'));
 }
 
 bool assetIsReferenced(const QString &corpus, const QString &relative, const QFileInfo &info)
@@ -380,6 +260,74 @@ void appendActorEventCandidates(const AnalysisResult &analysis,
     }
 }
 
+void appendRedundantChildNodeCandidates(const AnalysisResult &analysis,
+                                        const QHash<QString, const DataNode *> &nodesByTypeAndId,
+                                        QVector<DeepCleanupCandidate> *candidates)
+{
+    for (const DataNode &node : analysis.nodes) {
+        if (sc2dh::isProtectedCatalogNode(node))
+            continue;
+        const QString parentId = node.attributes.value(QStringLiteral("parent"));
+        if (parentId.isEmpty())
+            continue;
+        const DataNode *parent = nodesByTypeAndId.value(AnalysisIndex::typeIdKey(node.elementName, parentId), nullptr);
+        if (!parent)
+            continue;
+
+        pugi::xml_document nodeDocument;
+        pugi::xml_document parentDocument;
+        pugi::xml_node nodeRoot;
+        pugi::xml_node parentRoot;
+        if (!sc2dh::xmlcleanup::loadSerializedRoot(node.serializedXml, &nodeDocument, &nodeRoot)
+            || !sc2dh::xmlcleanup::loadSerializedRoot(parent->serializedXml, &parentDocument, &parentRoot)) {
+            continue;
+        }
+
+        QHash<QString, int> inheritedChildCounts;
+        for (pugi::xml_node child = parentRoot.first_child(); child; child = child.next_sibling()) {
+            if (child.type() != pugi::node_element)
+                continue;
+            const QString key = sc2dh::xmlcleanup::canonicalNode(child, false);
+            if (!key.isEmpty())
+                ++inheritedChildCounts[key];
+        }
+
+        for (pugi::xml_node child = nodeRoot.first_child(); child; child = child.next_sibling()) {
+            if (child.type() != pugi::node_element)
+                continue;
+            const QString key = sc2dh::xmlcleanup::canonicalNode(child, false);
+            auto inherited = inheritedChildCounts.find(key);
+            if (inherited == inheritedChildCounts.end() || inherited.value() <= 0)
+                continue;
+            --inherited.value();
+
+            DeepCleanupCandidate candidate;
+            candidate.index = candidates->size();
+            candidate.kind = DeepCleanupKind::RedundantDefaultNode;
+            candidate.action = DeepCleanupAction::RemoveXmlNode;
+            candidate.state = CandidateState::Safe;
+            candidate.filePath = node.sourceFile;
+            candidate.label = QStringLiteral("%1.%2").arg(node.id, QString::fromUtf8(child.name()));
+            candidate.xmlLocation = node.originalLocation + QLatin1Char('/') + sc2dh::xmlcleanup::locationSegmentForNode(child);
+            candidate.reason = QStringLiteral("Child XML node is identical to inherited parent object %1.").arg(parent->id);
+            candidate.detail = serializeNode(child).left(600);
+            candidate.recommended = true;
+            candidates->append(candidate);
+        }
+    }
+}
+
+class XmlInheritanceAnalyzer
+{
+public:
+    void appendCandidates(const AnalysisResult &analysis,
+                          const QHash<QString, const DataNode *> &nodesByTypeAndId,
+                          QVector<DeepCleanupCandidate> *candidates) const
+    {
+        appendRedundantChildNodeCandidates(analysis, nodesByTypeAndId, candidates);
+    }
+};
+
 QStringList localizationKeyTokens(const QString &key)
 {
     QStringList tokens = key.split(QRegularExpression(QStringLiteral("[/:.\\\\\\s]+")), Qt::SkipEmptyParts);
@@ -431,9 +379,13 @@ QString deepCleanupKindName(DeepCleanupKind kind)
     case DeepCleanupKind::UnusedAsset: return QStringLiteral("Unused asset");
     case DeepCleanupKind::LocalizationEntry: return QStringLiteral("Localization");
     case DeepCleanupKind::RedundantDefaultField: return QStringLiteral("Default field");
+    case DeepCleanupKind::RedundantDefaultNode: return QStringLiteral("Default XML node");
     case DeepCleanupKind::BrokenActorEvent: return QStringLiteral("Actor event");
     case DeepCleanupKind::DependencyEntry: return QStringLiteral("Dependency review");
     case DeepCleanupKind::ArchiveTrash: return QStringLiteral("Archive trash");
+    case DeepCleanupKind::AssetAudit: return QStringLiteral("Asset audit");
+    case DeepCleanupKind::TriggerPerformance: return QStringLiteral("Trigger performance");
+    case DeepCleanupKind::NearDuplicateObject: return QStringLiteral("Semantic duplicate");
     }
     return QStringLiteral("Deep cleanup");
 }
@@ -455,8 +407,9 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
     if (!analysis)
         return;
     analysis->deepCleanupCandidates.clear();
-    const QSet<QString> ids = knownIds(*analysis);
-    const QString corpus = referenceCorpus(*analysis);
+    const AnalysisIndex index(*analysis);
+    const QSet<QString> &ids = index.knownIds();
+    const QString corpus = AssetReferenceScanner().buildCorpus(*analysis);
 
     auto append = [&](DeepCleanupCandidate candidate) {
         candidate.index = analysis->deepCleanupCandidates.size();
@@ -466,7 +419,7 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
     for (const ScannedFileInfo &file : analysis->scannedFiles) {
         const QString rel = relativePath(analysis->rootFolder, file.filePath);
         const QFileInfo info(file.filePath);
-        if (isBackupOrTrashName(rel)) {
+        if (sc2dh::asset::isBackupOrTrashName(rel)) {
             DeepCleanupCandidate candidate;
             candidate.kind = DeepCleanupKind::ArchiveTrash;
             candidate.action = DeepCleanupAction::DeleteFile;
@@ -479,7 +432,7 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
             append(candidate);
             continue;
         }
-        if (isAssetFile(info, rel) && !assetIsReferenced(corpus, rel, info)) {
+        if (sc2dh::asset::isAssetFile(info, rel) && !assetIsReferenced(corpus, rel, info)) {
             DeepCleanupCandidate candidate;
             candidate.kind = DeepCleanupKind::UnusedAsset;
             candidate.action = DeepCleanupAction::DeleteFile;
@@ -495,7 +448,7 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
 
     for (const ScannedFileInfo &file : analysis->scannedFiles) {
         const QString rel = relativePath(analysis->rootFolder, file.filePath);
-        if (!file.isSc2DataLike || file.isXml || !isLocalizationFile(rel) || file.size > 4 * 1024 * 1024)
+        if (!file.isSc2DataLike || file.isXml || !sc2dh::asset::isLocalizationFile(rel) || file.size > 4 * 1024 * 1024)
             continue;
         QFile source(file.filePath);
         if (!source.open(QIODevice::ReadOnly))
@@ -537,16 +490,13 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
         }
     }
 
-    QHash<QString, const DataNode *> nodesByTypeAndId;
-    for (const DataNode &node : analysis->nodes)
-        nodesByTypeAndId.insert(node.elementName.toLower() + QChar(0x1f) + node.id.toLower(), &node);
     for (const DataNode &node : analysis->nodes) {
         if (sc2dh::isProtectedCatalogNode(node))
             continue;
         const QString parentId = node.attributes.value(QStringLiteral("parent"));
         if (parentId.isEmpty())
             continue;
-        const DataNode *parent = nodesByTypeAndId.value(node.elementName.toLower() + QChar(0x1f) + parentId.toLower(), nullptr);
+        const DataNode *parent = index.nodesByTypeAndId().value(AnalysisIndex::typeIdKey(node.elementName, parentId), nullptr);
         if (!parent)
             continue;
         for (auto it = node.attributes.cbegin(); it != node.attributes.cend(); ++it) {
@@ -573,7 +523,11 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
         }
     }
 
+    XmlInheritanceAnalyzer().appendCandidates(*analysis, index.nodesByTypeAndId(), &analysis->deepCleanupCandidates);
     appendActorEventCandidates(*analysis, ids, &analysis->deepCleanupCandidates);
+    AssetOptimizationAnalyzer().appendCandidates(*analysis, &analysis->deepCleanupCandidates);
+    TriggerPerformanceAnalyzer().appendCandidates(*analysis, &analysis->deepCleanupCandidates);
+    SemanticDuplicateAnalyzer().appendCandidates(*analysis, &analysis->deepCleanupCandidates);
 
     for (const ScannedFileInfo &file : analysis->scannedFiles) {
         const QString rel = relativePath(analysis->rootFolder, file.filePath);

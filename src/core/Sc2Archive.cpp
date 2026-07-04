@@ -525,6 +525,12 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         writeOk = false;
         writeError = QStringLiteral("StormLib could not flush the rewritten archive (error %1).").arg(GetLastError());
     }
+    if (writeOk && (!replacementEntries.isEmpty() || !removedEntries.isEmpty())) {
+        // Compact is best-effort: some legacy MPQs cannot be compacted when
+        // StormLib cannot prove all keys/listfile entries. Keeping the
+        // rewritten archive is safer than failing a valid cleanup apply.
+        SFileCompactArchive(archive, nullptr, false);
+    }
     if (!SFileCloseArchive(archive) && writeOk) {
         writeOk = false;
         writeError = QStringLiteral("StormLib could not close the rewritten archive (error %1).").arg(GetLastError());

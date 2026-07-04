@@ -44,9 +44,13 @@ enum class DeepCleanupKind {
     UnusedAsset,
     LocalizationEntry,
     RedundantDefaultField,
+    RedundantDefaultNode,
     BrokenActorEvent,
     DependencyEntry,
-    ArchiveTrash
+    ArchiveTrash,
+    AssetAudit,
+    TriggerPerformance,
+    NearDuplicateObject
 };
 enum class DeepCleanupAction {
     DeleteFile,

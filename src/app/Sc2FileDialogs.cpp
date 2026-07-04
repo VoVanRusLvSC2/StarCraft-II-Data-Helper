@@ -500,11 +500,19 @@ namespace
     class Sc2FileOpenDialog final : public QDialog
     {
     public:
-        explicit Sc2FileOpenDialog(QWidget *parent, const QString &startPath)
+        enum class Mode
+        {
+            File,
+            Folder,
+        };
+
+        explicit Sc2FileOpenDialog(QWidget *parent, const QString &startPath, Mode mode = Mode::File)
             : QDialog(parent)
+            , m_mode(mode)
         {
             setObjectName(QStringLiteral("sc2OpenFileDialog"));
-            setWindowTitle(QStringLiteral("Open SC2 File"));
+            setWindowTitle(m_mode == Mode::Folder ? QStringLiteral("Open SC2 Folder")
+                                                   : QStringLiteral("Open SC2 File"));
             setWindowFlags((windowFlags() | Qt::FramelessWindowHint) & ~Qt::WindowContextHelpButtonHint);
             setModal(true);
             setMinimumSize(940, 560);
@@ -570,7 +578,8 @@ namespace
             auto *panelIcon = new QLabel(panelHeader);
             panelIcon->setObjectName(QStringLiteral("sc2OpenFilePanelIcon"));
             panelIcon->setPixmap(QPixmap(QStringLiteral(":/icons/Icon.png")).scaled(30, 30, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-            auto *title = new QLabel(QStringLiteral("OPEN SC2 FILE"), panelHeader);
+            auto *title = new QLabel(m_mode == Mode::Folder ? QStringLiteral("OPEN SC2 FOLDER")
+                                                            : QStringLiteral("OPEN SC2 FILE"), panelHeader);
             title->setObjectName(QStringLiteral("sc2OpenFilePanelTitle"));
             auto *titleGlow = new QGraphicsDropShadowEffect(title);
             titleGlow->setBlurRadius(14.0);
@@ -667,7 +676,8 @@ namespace
             m_name->setObjectName(QStringLiteral("sc2OpenFileName"));
             m_name->setMinimumHeight(34);
             m_name->setMaximumHeight(34);
-            m_name->setPlaceholderText(QStringLiteral("Selected file or folder..."));
+            m_name->setPlaceholderText(m_mode == Mode::Folder ? QStringLiteral("Selected folder...")
+                                                              : QStringLiteral("Selected file or folder..."));
             nameRow->addWidget(nameLabel);
             nameRow->addWidget(m_name, 1);
             layout->addLayout(nameRow);
@@ -721,7 +731,7 @@ namespace
             updateHighlightFrameRegion();
         }
 
-        QString selectedFile() const { return m_selectedFile; }
+        QString selectedFile() const { return m_selectedPath; }
 
     protected:
         void keyPressEvent(QKeyEvent *event) override
@@ -992,6 +1002,11 @@ namespace
                 openDirectory(info.absoluteFilePath());
                 return;
             }
+            if (m_mode == Mode::Folder)
+            {
+                setStatus(QStringLiteral("Select a folder."));
+                return;
+            }
             if (info.isFile())
             {
                 m_name->setText(info.fileName());
@@ -1008,9 +1023,26 @@ namespace
                 if (QTableWidgetItem *item = m_table->item(m_table->currentRow(), 0))
                     candidate = item->data(Qt::UserRole).toString();
             }
+            if (m_mode == Mode::Folder && candidate.isEmpty())
+            {
+                m_selectedPath = QFileInfo(m_currentDir).absoluteFilePath();
+                accept();
+                return;
+            }
             QFileInfo info(candidate);
             if (!info.isAbsolute())
                 info = QFileInfo(QDir(m_currentDir).absoluteFilePath(candidate));
+            if (m_mode == Mode::Folder)
+            {
+                if (!info.isDir())
+                {
+                    setStatus(QStringLiteral("Select a folder."));
+                    return;
+                }
+                m_selectedPath = info.absoluteFilePath();
+                accept();
+                return;
+            }
             if (info.isDir())
             {
                 openDirectory(info.absoluteFilePath());
@@ -1026,7 +1058,7 @@ namespace
                 setStatus(QStringLiteral("File does not match selected filter."));
                 return;
             }
-            m_selectedFile = info.absoluteFilePath();
+            m_selectedPath = info.absoluteFilePath();
             accept();
         }
 
@@ -1102,8 +1134,9 @@ namespace
         Sc2FrameHighlightRenderer m_highlightRenderer;
         QTimer *m_highlightTimer = nullptr;
         int m_highlightPhase = 0;
+        Mode m_mode = Mode::File;
         QString m_currentDir;
-        QString m_selectedFile;
+        QString m_selectedPath;
         QString m_selectionFullText;
         QPoint m_dragPosition;
         bool m_dragging = false;
@@ -1128,19 +1161,10 @@ namespace sc2dh::app
 
     QString openFolderStyled(QWidget *parent, const QString &startPath)
     {
-        QFileDialog dialog(parent, QStringLiteral("Open SC2 Folder"), startPath);
-        dialog.setObjectName(QStringLiteral("sc2FileDialog"));
-        dialog.setOption(QFileDialog::DontUseNativeDialog, true);
-        dialog.setOption(QFileDialog::ShowDirsOnly, true);
-        dialog.setFileMode(QFileDialog::Directory);
-        dialog.setAcceptMode(QFileDialog::AcceptOpen);
-        dialog.setLabelText(QFileDialog::Accept, QStringLiteral("Open"));
-        dialog.setMinimumSize(980, 640);
+        Sc2FileOpenDialog dialog(parent, startPath, Sc2FileOpenDialog::Mode::Folder);
         ScopedModalBackdrop backdrop(parent);
         animateModalOpen(&dialog);
-        return dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().isEmpty()
-            ? dialog.selectedFiles().front()
-            : QString();
+        return dialog.exec() == QDialog::Accepted ? dialog.selectedFile() : QString();
     }
 
     QString saveTextFileStyled(QWidget *parent, const QString &title, const QString &startPath)

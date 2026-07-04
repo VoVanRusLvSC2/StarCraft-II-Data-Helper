@@ -1,21 +1,59 @@
 #include "app/ModalBackdrop.h"
 
-#include <QAbstractAnimation>
 #include <QEasingCurve>
+#include <QElapsedTimer>
 #include <QEvent>
-#include <QGraphicsBlurEffect>
 #include <QGraphicsOpacityEffect>
 #include <QMainWindow>
-#include <QPropertyAnimation>
 #include <QStatusBar>
 #include <QTimer>
 #include <QToolBar>
 #include <QWidget>
 
+#include <functional>
 #include <utility>
 
 namespace sc2dh::app
 {
+namespace
+{
+constexpr int kModalFrameMs = 33;
+constexpr int kModalOpenMs = 300;
+constexpr qreal kModalStartOpacity = 0.08;
+
+void animateOpacity(QObject *owner, const std::function<void(qreal)> &setOpacity,
+                    qreal startOpacity, qreal endOpacity, int durationMs)
+{
+    if (!owner)
+        return;
+
+    setOpacity(startOpacity);
+    auto *timer = new QTimer(owner);
+    auto *elapsed = new QElapsedTimer;
+    const QEasingCurve curve(QEasingCurve::OutCubic);
+    QObject::connect(timer, &QObject::destroyed, timer, [elapsed]
+    {
+        delete elapsed;
+    });
+    elapsed->start();
+    timer->setTimerType(Qt::PreciseTimer);
+    timer->setInterval(kModalFrameMs);
+    QObject::connect(timer, &QTimer::timeout, owner, [timer, elapsed, curve, setOpacity, startOpacity, endOpacity, durationMs]
+    {
+        const qreal progress = qBound<qreal>(0.0, qreal(elapsed->elapsed()) / qreal(durationMs), 1.0);
+        const qreal eased = curve.valueForProgress(progress);
+        setOpacity(startOpacity + (endOpacity - startOpacity) * eased);
+        if (progress >= 1.0)
+        {
+            setOpacity(endOpacity);
+            timer->stop();
+            timer->deleteLater();
+        }
+    });
+    timer->start();
+}
+}
+
 ScopedModalBackdrop::ScopedModalBackdrop(QWidget *parent)
 {
     QWidget *window = parent ? parent->window() : nullptr;
@@ -35,37 +73,10 @@ ScopedModalBackdrop::ScopedModalBackdrop(QWidget *parent)
     m_overlay->raise();
     m_overlay->show();
 
-    for (QWidget *target : findBlurTargets(window))
+    animateOpacity(overlayOpacity, [overlayOpacity](qreal opacity)
     {
-        if (!target || target->graphicsEffect())
-            continue;
-
-        auto *blur = new QGraphicsBlurEffect(target);
-        blur->setBlurRadius(0.0);
-        blur->setBlurHints(QGraphicsBlurEffect::PerformanceHint);
-        target->setGraphicsEffect(blur);
-        m_blurTargets.push_back(target);
-
-        QTimer::singleShot(45, blur, [blur]
-        {
-            auto *animation = new QPropertyAnimation(blur, "blurRadius", blur);
-            animation->setDuration(220);
-            animation->setStartValue(0.0);
-            animation->setEndValue(3.5);
-            animation->setEasingCurve(QEasingCurve::OutCubic);
-            animation->start(QAbstractAnimation::DeleteWhenStopped);
-        });
-    }
-
-    QTimer::singleShot(35, m_overlay, [overlayOpacity]
-    {
-        auto *animation = new QPropertyAnimation(overlayOpacity, "opacity", overlayOpacity);
-        animation->setDuration(220);
-        animation->setStartValue(0.0);
-        animation->setEndValue(1.0);
-        animation->setEasingCurve(QEasingCurve::OutCubic);
-        animation->start(QAbstractAnimation::DeleteWhenStopped);
-    });
+        overlayOpacity->setOpacity(opacity);
+    }, 0.0, 1.0, 220);
 
     window->installEventFilter(this);
 }
@@ -143,15 +154,13 @@ void animateModalOpen(QWidget *dialog)
     if (!dialog)
         return;
 
-    dialog->setWindowOpacity(0.0);
+    dialog->setWindowOpacity(kModalStartOpacity);
     QTimer::singleShot(0, dialog, [dialog]
     {
-        auto *animation = new QPropertyAnimation(dialog, "windowOpacity", dialog);
-        animation->setDuration(150);
-        animation->setStartValue(0.0);
-        animation->setEndValue(1.0);
-        animation->setEasingCurve(QEasingCurve::OutCubic);
-        animation->start(QAbstractAnimation::DeleteWhenStopped);
+        animateOpacity(dialog, [dialog](qreal opacity)
+        {
+            dialog->setWindowOpacity(opacity);
+        }, kModalStartOpacity, 1.0, kModalOpenMs);
     });
 }
 }

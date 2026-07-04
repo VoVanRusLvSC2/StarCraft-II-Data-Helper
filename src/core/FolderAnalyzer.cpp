@@ -8,6 +8,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QIODevice>
 #include <QSaveFile>
 #include <QRegularExpression>
@@ -72,20 +73,26 @@ namespace
         return QStringLiteral("%1(%2)").arg(type, node.id);
     }
 
-    int tokenCount(const QString &text, const QString &id)
+    QHash<QString, int> countKnownScriptTokens(const QString &text, const QSet<QString> &knownIds)
     {
-        if (!sc2dh::isSafeAutomaticObjectId(id))
-            return 0;
-        const QRegularExpression expression(QStringLiteral("(?<![A-Za-z0-9_])%1(?![A-Za-z0-9_])")
-                                                .arg(QRegularExpression::escape(id)));
-        int count = 0;
+        QHash<QString, int> counts;
+        static const QRegularExpression expression(QStringLiteral("[A-Za-z0-9_@.]+"));
+        static const QRegularExpression scopedSeparator(QStringLiteral("[@.]"));
         auto matches = expression.globalMatch(text);
         while (matches.hasNext())
         {
-            matches.next();
-            ++count;
+            const QString token = matches.next().captured(0);
+            if (knownIds.contains(token))
+                ++counts[token];
+            if (!token.contains(QLatin1Char('@')) && !token.contains(QLatin1Char('.')))
+                continue;
+            const QStringList parts = token.split(scopedSeparator, Qt::SkipEmptyParts);
+            for (const QString &part : parts) {
+                if (part != token && knownIds.contains(part))
+                    ++counts[part];
+            }
         }
-        return count;
+        return counts;
     }
 
     QString numberedIdBase(const QString &id)
@@ -282,21 +289,23 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
 
     QHash<QString, int> scriptReferences;
     QHash<QString, QStringList> externalSources;
+    QSet<QString> scriptReferenceIds;
+    for (const DataNode &node : result->nodes)
+        if (!node.id.isEmpty() && sc2dh::isSafeAutomaticObjectId(node.id))
+            scriptReferenceIds.insert(node.id);
     for (const ScannedFileInfo &fileInfo : result->scannedFiles)
     {
-        if (fileInfo.isXml || !fileInfo.isSc2DataLike)
+        if (fileInfo.isXml || !fileInfo.isSc2DataLike || scriptReferenceIds.isEmpty())
             continue;
         QFile file(fileInfo.filePath);
         if (!file.open(QIODevice::ReadOnly))
             continue;
         const QString text = QString::fromUtf8(file.readAll());
-        for (const DataNode &node : result->nodes)
-        {
-            if (!node.id.isEmpty()) {
-                const int matches = tokenCount(text, node.id);
-                scriptReferences[node.id] += matches;
-                if (matches > 0) externalSources[node.id].append(QFileInfo(fileInfo.filePath).fileName());
-            }
+        const QHash<QString, int> matchesById = countKnownScriptTokens(text, scriptReferenceIds);
+        for (auto match = matchesById.cbegin(); match != matchesById.cend(); ++match) {
+            scriptReferences[match.key()] += match.value();
+            if (match.value() > 0)
+                externalSources[match.key()].append(QFileInfo(fileInfo.filePath).fileName());
         }
     }
 

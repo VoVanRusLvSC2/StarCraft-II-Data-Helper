@@ -148,6 +148,10 @@ private slots:
     void editorRuntimeCatalogObjectsAreProtected();
     void deepCleanupAppliesSafeCandidates();
     void deepCleanupRemovesStructurallyInvalidActorEvents();
+    void binaryAssetReferencesProtectImports();
+    void deepCleanupRemovesRedundantInheritedXmlNodes();
+    void deepCleanupReportsAssetAndTriggerOptimization();
+    void deepCleanupReportsSemanticDuplicateReview();
     void unitFamilyDetectionAndStandardPlanning();
     void renamePlannerBlocksConflicts();
     void renamePlannerSkipsDependencyCatalogObjects();
@@ -158,6 +162,7 @@ private slots:
     void referenceRenameDoesNotRewriteFilterFields();
     void referenceRenameDoesNotRewriteParentFields();
     void referenceRenameUsesTypedCatalogFields();
+    void referenceRenameActorIdDoesNotRewriteUnitScope();
     void referenceRenameSkipsOccupiedTargetWhenOwnerNotMoved();
     void referenceRenameRollback();
     void dataCollectionAliasMapping();
@@ -1412,6 +1417,51 @@ void CoreTests::referenceRenameUsesTypedCatalogFields()
     QVERIFY(!output.contains(QStringLiteral("unitName=\"GhostCustom@Model\"")));
 }
 
+void CoreTests::referenceRenameActorIdDoesNotRewriteUnitScope()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("ActorScope.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"Probe\"/>"
+        "<CActorUnit id=\"Probe\" unitName=\"Probe\"/>"
+        "<CActorUnit id=\"Probe2\" unitName=\"Probe2\"/>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int actorProbe = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        const DataNode &node = analysis.nodes[i];
+        if (node.elementName == QStringLiteral("CActorUnit") && node.id == QStringLiteral("Probe"))
+            actorProbe = i;
+    }
+    QVERIFY(actorProbe >= 0);
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem item;
+    item.nodeIndex = actorProbe;
+    item.oldId = QStringLiteral("Probe");
+    item.newId = QStringLiteral("Probe@Actor");
+    item.role = UnitFamilyRole::Actor;
+    item.selected = true;
+    plan.items.append(item);
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+
+    QFile rewritten(path);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    QVERIFY(output.contains(QStringLiteral("<CActorUnit id=\"Probe@Actor\" unitName=\"Probe\"")));
+    QVERIFY(output.contains(QStringLiteral("<CActorUnit id=\"Probe2\" unitName=\"Probe2\"")));
+    QVERIFY(!output.contains(QStringLiteral("unitName=\"Probe@Actor\"")));
+}
+
 void CoreTests::referenceRenameSkipsOccupiedTargetWhenOwnerNotMoved()
 {
     QTemporaryDir dir;
@@ -2092,6 +2142,147 @@ void CoreTests::deepCleanupRemovesStructurallyInvalidActorEvents()
     QVERIFY(!xml.contains("index=\"2\"/>"));
     QVERIFY(xml.contains("index=\"3\" removed=\"1\""));
     QVERIFY(xml.contains("index=\"4\" Terms=\"UnitBirth.BrokenActor\" Send=\"Create\""));
+}
+
+void CoreTests::binaryAssetReferencesProtectImports()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/ModelData.xml"));
+    const QString modelPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Model.m3"));
+    const QString usedPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Used.dds"));
+    const QString unusedPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Unused.dds"));
+
+    QVERIFY(writeTextFile(xmlPath, QByteArrayLiteral("<Catalog><CModel id=\"Model\" File=\"Assets/Model.m3\"/></Catalog>")));
+    QByteArray modelBytes;
+    modelBytes.append('\0');
+    modelBytes.append("Assets\\Used.dds");
+    modelBytes.append('\0');
+    QVERIFY(writeTextFile(modelPath, modelBytes));
+    QVERIFY(writeTextFile(usedPath, QByteArrayLiteral("used texture")));
+    QVERIFY(writeTextFile(unusedPath, QByteArrayLiteral("unused texture")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    bool usedTextureWasOfferedForDeletion = false;
+    bool unusedTextureWasOfferedForDeletion = false;
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates) {
+        if (candidate.kind != DeepCleanupKind::UnusedAsset)
+            continue;
+        if (candidate.label.endsWith(QStringLiteral("Used.dds")))
+            usedTextureWasOfferedForDeletion = true;
+        if (candidate.label.endsWith(QStringLiteral("Unused.dds")))
+            unusedTextureWasOfferedForDeletion = true;
+    }
+    QVERIFY(!usedTextureWasOfferedForDeletion);
+    QVERIFY(unusedTextureWasOfferedForDeletion);
+}
+
+void CoreTests::deepCleanupRemovesRedundantInheritedXmlNodes()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/UnitData.xml"));
+    QVERIFY(writeTextFile(xmlPath, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"Parent\"><Life value=\"100\"/><Flags><Flag value=\"Heroic\"/></Flags></CUnit>"
+        "<CUnit id=\"Child\" parent=\"Parent\"><Life value=\"100\"/><Flags><Flag value=\"Heroic\"/></Flags><Cost value=\"50\"/></CUnit>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    QVector<int> selected;
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates) {
+        if (candidate.kind == DeepCleanupKind::RedundantDefaultNode
+            && candidate.state == CandidateState::Safe
+            && candidate.recommended) {
+            selected.append(candidate.index);
+        }
+    }
+    QCOMPARE(selected.size(), 2);
+
+    const DeepCleanupApplyResult applied = DeepCleanupService().apply(analysis, selected, dir.path(), true);
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QCOMPARE(applied.xmlNodesRemoved, 2);
+
+    QFile result(xmlPath);
+    QVERIFY(result.open(QIODevice::ReadOnly));
+    const QByteArray xml = result.readAll();
+    QCOMPARE(xml.count("<Life"), 1);
+    QCOMPARE(xml.count("<Flags"), 1);
+    QVERIFY(xml.contains("<Cost"));
+}
+
+void CoreTests::deepCleanupReportsAssetAndTriggerOptimization()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    const QString assetA = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/A.dds"));
+    const QString assetB = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/B.dds"));
+    const QString script = QDir(dir.path()).absoluteFilePath(QStringLiteral("MapScript.galaxy"));
+    QVERIFY(writeTextFile(assetA, QByteArrayLiteral("same bytes")));
+    QVERIFY(writeTextFile(assetB, QByteArrayLiteral("same bytes")));
+    QVERIFY(writeTextFile(script, QByteArrayLiteral(
+        "void HotLoop() {\n"
+        "    TriggerAddEventTimePeriodic(null, 0.125);\n"
+        "    UnitGroupLoopBegin(g);\n"
+        "}\n")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    bool assetAudit = false;
+    bool triggerAudit = false;
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates) {
+        if (candidate.kind == DeepCleanupKind::AssetAudit) {
+            assetAudit = true;
+            QCOMPARE(candidate.action, DeepCleanupAction::ReportOnly);
+            QCOMPARE(candidate.state, CandidateState::Risky);
+        }
+        if (candidate.kind == DeepCleanupKind::TriggerPerformance) {
+            triggerAudit = true;
+            QCOMPARE(candidate.action, DeepCleanupAction::ReportOnly);
+            QCOMPARE(candidate.state, CandidateState::Risky);
+        }
+    }
+    QVERIFY(assetAudit);
+    QVERIFY(triggerAudit);
+}
+
+void CoreTests::deepCleanupReportsSemanticDuplicateReview()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/EffectData.xml"));
+    QVERIFY(writeTextFile(xmlPath, QByteArrayLiteral(
+        "<Catalog>"
+        "<CEffectDamage id=\"DamageA\"><Amount value=\"10\"/><Name value=\"A\"/></CEffectDamage>"
+        "<CEffectDamage id=\"DamageB\"><Amount value=\"10\"/><Name value=\"B\"/></CEffectDamage>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    bool found = false;
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates) {
+        if (candidate.kind == DeepCleanupKind::NearDuplicateObject) {
+            found = true;
+            QCOMPARE(candidate.action, DeepCleanupAction::ReportOnly);
+            QCOMPARE(candidate.state, CandidateState::Risky);
+        }
+    }
+    QVERIFY(found);
 }
 
 void CoreTests::objectFileFilterUsesFullSourcePath()

@@ -682,6 +682,12 @@ int usableRenameItemCount(const RenamePlan &plan)
     }));
 }
 
+bool isRiskyBatchRenameNode(const DataNode &node)
+{
+    return node.elementName.startsWith(QStringLiteral("CActor"), Qt::CaseInsensitive)
+        || node.elementName.startsWith(QStringLiteral("CModel"), Qt::CaseInsensitive);
+}
+
 bool applyRenamePlans(QString workspace, AnalysisResult *analysis,
                       const ArchiveReferenceStats &referenceStats,
                       const QStringList &archiveReferenceEntries,
@@ -719,6 +725,9 @@ bool applyRenamePlans(QString workspace, AnalysisResult *analysis,
             QVector<RenamePlanItem> acceptedItems;
             for (const RenamePlanItem &item : plan.items) {
                 if (!item.selected || item.blocked || item.oldId == item.newId)
+                    continue;
+                if (item.nodeIndex < 0 || item.nodeIndex >= analysis->nodes.size()
+                    || isRiskyBatchRenameNode(analysis->nodes.at(item.nodeIndex)))
                     continue;
                 const QString newKey = item.newId.toLower();
                 if (selectedNodes.contains(item.nodeIndex) || selectedNewIds.contains(newKey)) {
