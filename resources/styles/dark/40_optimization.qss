@@ -83,6 +83,42 @@ QWidget#optimizationWizardPage QScrollBar:horizontal {
     margin: 0;
 }
 
+QLabel#optimizationAssetPreview {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 rgba(4, 21, 22, 242),
+                                stop:1 rgba(0, 8, 11, 248));
+    border: 8px solid transparent;
+    border-image: url(:/textures/ui_nova_global_tooltip.png) 8 8 8 8 repeat repeat;
+    color: #b8f6e4;
+    padding: 8px;
+}
+
+/* Keep the row scrollbar clearly visible beside wide wizard tables.  Without
+   this scoped rule the splitter handle and the global transparent scrollbar
+   skin are almost indistinguishable at some Windows DPI scales. */
+QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar:vertical {
+    background-color: rgba(0, 18, 20, 245);
+    border: 4px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 22 5 22 5 repeat repeat;
+    width: 28px;
+    min-width: 28px;
+    margin: 0;
+}
+
+QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar::handle:vertical {
+    background-color: rgba(0, 215, 153, 80);
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal.png) 24 10 24 10 repeat repeat;
+    min-height: 64px;
+    margin: 2px;
+}
+
+QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar::handle:vertical:hover,
+QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar::handle:vertical:pressed {
+    background-color: rgba(0, 255, 184, 120);
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 14 7 14 7 repeat repeat;
+}
+
 QWidget#optimizationWizardPage QScrollBar::handle:horizontal {
     background: transparent;
     border: 5px solid transparent;

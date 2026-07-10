@@ -149,6 +149,8 @@ target_sources(SC2DataHelper PRIVATE
     src/ui/DuplicatesPage.cpp
     src/ui/FormatterPage.h
     src/ui/FormatterPage.cpp
+    src/ui/M3PreviewWidget.h
+    src/ui/M3PreviewWidget.cpp
     src/ui/LogPanel.h
     src/ui/LogPanel.cpp
     src/ui/XmlSourcePage.h

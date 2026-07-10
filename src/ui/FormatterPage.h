@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <QWidget>
 class QLabel; class QPlainTextEdit; class QPushButton; class QTableWidget; class QTabWidget;
+class M3PreviewWidget;
 
 struct OptimizationPlanRow
 {
@@ -95,6 +96,7 @@ private:
     void updatePostApplyAudit();
     void updateNavigation();
     void updateDetails();
+    void updateAssetPreview(const QString &filePath);
     void setRecommendedSelection(bool selected);
     QString buildIdChangePreview() const;
     void openCurrentStep();
@@ -113,6 +115,8 @@ private:
     QPlainTextEdit *m_summary = nullptr;
     QPlainTextEdit *m_audit = nullptr;
     QPlainTextEdit *m_details = nullptr;
+    QLabel *m_assetPreview = nullptr;
+    M3PreviewWidget *m_modelPreview = nullptr;
     QLabel *m_stepLabel = nullptr;
     QPushButton *m_backButton = nullptr;
     QPushButton *m_buildButton = nullptr;

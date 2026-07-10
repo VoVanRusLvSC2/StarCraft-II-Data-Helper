@@ -2,6 +2,8 @@
 #include "core/DataCollectionUnitBuilder.h"
 #include "core/DeepCleanupService.h"
 #include "core/StandardNamePlanner.h"
+#include "core/ScannedFileReader.h"
+#include "ui/M3PreviewWidget.h"
 #include "core/UnitFamilyDetector.h"
 #include <QFont>
 #include <QAbstractItemView>
@@ -9,6 +11,8 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QFileInfo>
+#include <QPixmap>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -275,7 +279,24 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     m_steps->addTab(m_rename, QStringLiteral("Rename")); m_steps->addTab(m_collection, QStringLiteral("Data Collection")); m_steps->addTab(m_summary, QStringLiteral("Summary"));
     m_steps->addTab(m_audit, QStringLiteral("Post-Apply Audit"));
     m_steps->tabBar()->hide();
-    m_details = new QPlainTextEdit(this);
+    auto *detailsPane = new QWidget(this);
+    auto *detailsLayout = new QVBoxLayout(detailsPane);
+    detailsLayout->setContentsMargins(0, 0, 0, 0);
+    detailsLayout->setSpacing(8);
+    m_assetPreview = new QLabel(detailsPane);
+    m_assetPreview->setObjectName(QStringLiteral("optimizationAssetPreview"));
+    m_assetPreview->setAlignment(Qt::AlignCenter);
+    m_assetPreview->setMinimumHeight(180);
+    m_assetPreview->setMaximumHeight(320);
+    m_assetPreview->setWordWrap(true);
+    m_assetPreview->hide();
+    m_modelPreview = new M3PreviewWidget(detailsPane);
+    m_modelPreview->setObjectName(QStringLiteral("optimizationModelPreview"));
+    m_modelPreview->setMaximumHeight(360);
+    m_modelPreview->hide();
+    detailsLayout->addWidget(m_modelPreview);
+    detailsLayout->addWidget(m_assetPreview);
+    m_details = new QPlainTextEdit(detailsPane);
     m_details->setObjectName(QStringLiteral("optimizationDetails"));
     m_details->setReadOnly(true);
     m_details->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -283,10 +304,11 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     new XmlTextHighlighter(m_details->document());
     m_details->setMinimumWidth(420);
     m_details->setPlaceholderText(QStringLiteral("Select an item to inspect its XML or compare Keep / Remove objects."));
+    detailsLayout->addWidget(m_details, 1);
     auto *content = new QSplitter(Qt::Horizontal, this);
     content->setObjectName(QStringLiteral("optimizationContent"));
     content->addWidget(m_steps);
-    content->addWidget(m_details);
+    content->addWidget(detailsPane);
     content->setStretchFactor(0, 3);
     content->setStretchFactor(1, 2);
     content->setSizes({1250, 600});
@@ -483,6 +505,10 @@ void FormatterPage::selectRecommendedItems()
 void FormatterPage::updateDetails()
 {
     if (!m_details) return;
+    if (m_assetPreview)
+        m_assetPreview->hide();
+    if (m_modelPreview)
+        m_modelPreview->clearModel();
     const int step = m_steps->currentIndex();
     if (step == kSummaryStep) {
         m_details->setPlainText(buildIdChangePreview());
@@ -522,6 +548,7 @@ void FormatterPage::updateDetails()
             fields << QStringLiteral("File: %1").arg(candidate.filePath);
             if (candidate.bytes > 0)
                 fields << QStringLiteral("Bytes: %1").arg(candidate.bytes);
+            updateAssetPreview(candidate.filePath);
         }
         m_details->setPlainText(QStringLiteral("IMPORT CLEANUP REVIEW\n\n%1").arg(fields.join(QLatin1Char('\n'))));
     } else if (step == kDeepCleanupStep) {
@@ -552,6 +579,106 @@ void FormatterPage::updateDetails()
             fields << QStringLiteral("%1: %2").arg(table->horizontalHeaderItem(column)->text(), table->item(row, column)->text());
         m_details->setPlainText(QStringLiteral("DATA COLLECTION PREVIEW\n\n%1").arg(fields.join(QLatin1Char('\n'))));
     }
+}
+
+void FormatterPage::updateAssetPreview(const QString &filePath)
+{
+    if (!m_assetPreview || filePath.isEmpty())
+        return;
+
+    const auto scanned = std::find_if(m_result.scannedFiles.cbegin(), m_result.scannedFiles.cend(),
+                                      [&](const ScannedFileInfo &file) {
+        return file.filePath.compare(filePath, Qt::CaseInsensitive) == 0;
+    });
+    if (scanned == m_result.scannedFiles.cend())
+        return;
+
+    ScannedFileReader reader(m_result);
+    QByteArray bytes;
+    if (!reader.readBytes(*scanned, 64 * 1024 * 1024, &bytes)) {
+        m_assetPreview->setText(QStringLiteral("Preview unavailable\nThe asset could not be read from the map archive."));
+        m_assetPreview->setPixmap({});
+        m_assetPreview->show();
+        return;
+    }
+
+    const QString suffix = QFileInfo(filePath).suffix().toLower();
+    static const QSet<QString> imageSuffixes = {
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("bmp"), QStringLiteral("tga"), QStringLiteral("dds")
+    };
+    const auto showPixmap = [&](const QByteArray &imageBytes, const QString &caption) {
+        QPixmap pixmap;
+        if (!pixmap.loadFromData(imageBytes))
+            return false;
+        const QSize area(qMax(240, m_assetPreview->width() - 20), 280);
+        m_assetPreview->setPixmap(pixmap.scaled(area, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        m_assetPreview->setToolTip(caption + QStringLiteral("\n%1 x %2").arg(pixmap.width()).arg(pixmap.height()));
+        m_assetPreview->show();
+        return true;
+    };
+
+    if (imageSuffixes.contains(suffix)) {
+        if (!showPixmap(bytes, filePath)) {
+            m_assetPreview->setPixmap({});
+            m_assetPreview->setText(QStringLiteral("IMAGE PREVIEW\n%1\n\nThis Qt build cannot decode the %2 format.")
+                                        .arg(QFileInfo(filePath).fileName(), suffix.toUpper()));
+            m_assetPreview->show();
+        }
+        return;
+    }
+
+    static const QSet<QString> modelSuffixes = {
+        QStringLiteral("m3"), QStringLiteral("m3a"), QStringLiteral("m3h"), QStringLiteral("m3skl")
+    };
+    if (!modelSuffixes.contains(suffix))
+        return;
+
+    QString modelError;
+    if (m_modelPreview && m_modelPreview->setModelData(bytes, &modelError)) {
+        m_assetPreview->hide();
+        return;
+    }
+
+    // M3 rendering is not part of Qt.  Show the first embedded model texture
+    // when it is present in the same map, which is much more useful than a
+    // blank pane while remaining honest about what is being previewed.
+    const QString binaryText = QString::fromLatin1(bytes);
+    static const QRegularExpression textureExpression(
+        QStringLiteral("([A-Za-z0-9_@./\\\\ -]+\\.(?:dds|tga|png|jpe?g|bmp))"),
+        QRegularExpression::CaseInsensitiveOption);
+    auto matches = textureExpression.globalMatch(binaryText);
+    QStringList textureNames;
+    while (matches.hasNext() && textureNames.size() < 20) {
+        QString texture = matches.next().captured(1).trimmed();
+        texture.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (!textureNames.contains(texture, Qt::CaseInsensitive))
+            textureNames << texture;
+    }
+    for (const QString &texture : std::as_const(textureNames)) {
+        const auto textureFile = std::find_if(m_result.scannedFiles.cbegin(), m_result.scannedFiles.cend(),
+                                              [&](const ScannedFileInfo &file) {
+            QString normalized = file.filePath;
+            normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+            return normalized.endsWith(texture, Qt::CaseInsensitive)
+                || QFileInfo(normalized).fileName().compare(QFileInfo(texture).fileName(), Qt::CaseInsensitive) == 0;
+        });
+        QByteArray textureBytes;
+        if (textureFile != m_result.scannedFiles.cend()
+            && reader.readBytes(*textureFile, 64 * 1024 * 1024, &textureBytes)
+            && showPixmap(textureBytes, QStringLiteral("Texture used by %1: %2").arg(filePath, texture))) {
+            return;
+        }
+    }
+
+    m_assetPreview->setPixmap({});
+    m_assetPreview->setText(QStringLiteral("3D MODEL PREVIEW\n%1\n%2\n\nGeometry preview: %3")
+                                .arg(QFileInfo(filePath).fileName(),
+                                     textureNames.isEmpty()
+                                         ? QStringLiteral("No texture paths detected")
+                                         : QStringLiteral("Textures: %1").arg(textureNames.join(QStringLiteral(", "))),
+                                     modelError.isEmpty() ? QStringLiteral("unsupported model layout") : modelError));
+    m_assetPreview->show();
 }
 
 QString FormatterPage::buildIdChangePreview() const

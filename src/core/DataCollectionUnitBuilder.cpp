@@ -255,12 +255,54 @@ struct AliasOwnerCandidate
     int pathDepth = 100000;
 };
 
-bool patternMatchesEntity(const QString &pattern, DataCollectionEntityType entity)
+enum PatternEntityFlag
 {
-    const QString expected = entity == DataCollectionEntityType::Unit ? QStringLiteral("UnitPattern")
-        : entity == DataCollectionEntityType::Ability ? QStringLiteral("AbilityPattern")
-                                                      : QStringLiteral("WeaponPattern");
-    return pattern.startsWith(expected, Qt::CaseInsensitive);
+    PatternEntityNone = 0,
+    PatternEntityUnit = 1 << 0,
+    PatternEntityAbility = 1 << 1,
+    PatternEntityWeapon = 1 << 2
+};
+
+int entityFlag(DataCollectionEntityType entity)
+{
+    switch (entity) {
+    case DataCollectionEntityType::Unit: return PatternEntityUnit;
+    case DataCollectionEntityType::Ability: return PatternEntityAbility;
+    case DataCollectionEntityType::Weapon: return PatternEntityWeapon;
+    }
+    return PatternEntityNone;
+}
+
+int patternNameEntityFlags(const QString &pattern)
+{
+    const QString name = pattern.toLower();
+    int flags = PatternEntityNone;
+    if (name.contains(QStringLiteral("unit")))
+        flags |= PatternEntityUnit;
+    if (name.contains(QStringLiteral("abil")) || name.contains(QStringLiteral("ability")))
+        flags |= PatternEntityAbility;
+    if (name.contains(QStringLiteral("weapon")))
+        flags |= PatternEntityWeapon;
+    return flags;
+}
+
+int patternReferenceEntityFlags(const pugi::xml_node &pattern)
+{
+    int flags = PatternEntityNone;
+    for (pugi::xml_node child = pattern.first_child(); child; child = child.next_sibling()) {
+        if (child.type() != pugi::node_element)
+            continue;
+        const QString reference = QString::fromUtf8(child.attribute("Reference").value()).trimmed();
+        const QString catalog = reference.section(QLatin1Char(','), 0, 0).trimmed();
+        if (catalog.compare(QStringLiteral("Unit"), Qt::CaseInsensitive) == 0)
+            flags |= PatternEntityUnit;
+        else if (catalog.compare(QStringLiteral("Abil"), Qt::CaseInsensitive) == 0
+                 || catalog.compare(QStringLiteral("Ability"), Qt::CaseInsensitive) == 0)
+            flags |= PatternEntityAbility;
+        else if (catalog.compare(QStringLiteral("Weapon"), Qt::CaseInsensitive) == 0)
+            flags |= PatternEntityWeapon;
+    }
+    return flags;
 }
 
 QHash<QString, QString> standardCollectionParents()
@@ -456,17 +498,45 @@ void ensureStandardDataCollectionSupport(pugi::xml_node catalog)
     }
 }
 
+void orderDataCollectionCatalog(pugi::xml_node catalog)
+{
+    QVector<pugi::xml_node> patterns;
+    QVector<pugi::xml_node> templates;
+    for (pugi::xml_node node = catalog.first_child(); node; node = node.next_sibling()) {
+        if (node.type() != pugi::node_element)
+            continue;
+        const QString type = QString::fromUtf8(node.name());
+        if (type.startsWith(QStringLiteral("CDataCollectionPattern"), Qt::CaseInsensitive))
+            patterns.append(node);
+        else if (type.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)
+                 && QString::fromUtf8(node.attribute("default").value()) == QStringLiteral("1"))
+            templates.append(node);
+    }
+    for (auto it = templates.crbegin(); it != templates.crend(); ++it)
+        catalog.prepend_move(*it);
+    for (auto it = patterns.crbegin(); it != patterns.crend(); ++it)
+        catalog.prepend_move(*it);
+}
+
 void validatePatternInheritance(const AnalysisResult &analysis, const DataNode *collection,
                                 const QString &requestedParent, DataCollectionEntityType entity,
                                 DataCollectionPreviewReport *report)
 {
     QHash<QString, QString> parentByCollection;
     QHash<QString, QString> patternByCollection;
+    QHash<QString, QString> parentByPattern;
+    QHash<QString, int> directPatternEntityFlags;
     QSet<QString> patterns;
     for (const DataNode &node : analysis.nodes) {
-        if (node.elementName.startsWith(QStringLiteral("CDataCollectionPattern"), Qt::CaseInsensitive))
+        if (node.elementName.startsWith(QStringLiteral("CDataCollectionPattern"), Qt::CaseInsensitive)) {
             patterns.insert(node.id.toLower());
-        else if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)) {
+            pugi::xml_document fragment;
+            if (fragment.load_string(node.serializedXml.toUtf8().constData())) {
+                const pugi::xml_node value = fragment.first_child();
+                parentByPattern.insert(node.id.toLower(), QString::fromUtf8(value.attribute("parent").value()));
+                directPatternEntityFlags.insert(node.id.toLower(), patternReferenceEntityFlags(value));
+            }
+        } else if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)) {
             QString nodeParent;
             QString nodePattern;
             pugi::xml_document fragment;
@@ -480,6 +550,27 @@ void validatePatternInheritance(const AnalysisResult &analysis, const DataNode *
         }
     }
     patterns.unite(standardPatternIds());
+    const auto patternEntityFlags = [&](const QString &patternId) {
+        int flags = PatternEntityNone;
+        QSet<QString> visited;
+        QString current = patternId;
+        while (!current.isEmpty()) {
+            const QString key = current.toLower();
+            if (visited.contains(key))
+                break;
+            visited.insert(key);
+            flags |= directPatternEntityFlags.value(key, PatternEntityNone);
+            current = parentByPattern.value(key);
+        }
+        // Older maps and generated support patterns can contain no Fields in the
+        // current analysis. Their conventional names remain a compatibility fallback.
+        if (flags == PatternEntityNone)
+            flags = patternNameEntityFlags(patternId);
+        return flags;
+    };
+    const auto patternMatchesEntity = [&](const QString &patternId) {
+        return (patternEntityFlags(patternId) & entityFlag(entity)) != 0;
+    };
     const QHash<QString, QString> standardParents = standardCollectionParents();
     const QHash<QString, QString> standardPatterns = standardCollectionPatterns();
     for (auto it = standardParents.cbegin(); it != standardParents.cend(); ++it)
@@ -505,7 +596,7 @@ void validatePatternInheritance(const AnalysisResult &analysis, const DataNode *
         if (!patterns.contains(report->directPattern.toLower())) {
             report->patternState = DataCollectionPatternState::MissingReferencedPattern;
             report->patternDetail = QStringLiteral("Direct Pattern '%1' does not exist.").arg(report->directPattern);
-        } else if (!patternMatchesEntity(report->directPattern, entity)) {
+        } else if (!patternMatchesEntity(report->directPattern)) {
             report->patternState = DataCollectionPatternState::InvalidPatternForEntity;
             report->patternDetail = QStringLiteral("Pattern '%1' is incompatible with %2.")
                                         .arg(report->directPattern, dataCollectionEntityTypeName(entity));
@@ -539,7 +630,7 @@ void validatePatternInheritance(const AnalysisResult &analysis, const DataNode *
             if (!patterns.contains(inherited.toLower())) {
                 report->patternState = DataCollectionPatternState::MissingReferencedPattern;
                 report->patternDetail = QStringLiteral("Inherited Pattern '%1' does not exist.").arg(inherited);
-            } else if (!patternMatchesEntity(inherited, entity)) {
+            } else if (!patternMatchesEntity(inherited)) {
                 report->patternState = DataCollectionPatternState::InvalidPatternForEntity;
                 report->patternDetail = QStringLiteral("Inherited Pattern '%1' is incompatible with %2.")
                                             .arg(inherited, dataCollectionEntityTypeName(entity));
@@ -695,6 +786,7 @@ QByteArray buildCollectionDocument(const QString &targetFile, const QString &ele
         setAttribute(collection, "id", id);
     }
     updateCollection(collection, parent, categories, records, pruneUnrelated);
+    orderDataCollectionCatalog(catalog);
     std::ostringstream stream;
     doc.save(stream, "    ", pugi::format_default, pugi::encoding_utf8);
     QByteArray staged = QByteArray::fromStdString(stream.str());

@@ -178,6 +178,7 @@ private slots:
     void dataCollectionTypedSplitPreservesSharedMemberships();
     void dataCollectionMigrationRollbackRestoresAllCollections();
     void dataCollectionPatternInheritanceValidation();
+    void dataCollectionRecognizesEvoSemanticPatternNames();
     void dataCollectionEntityRootsAndConflicts();
     void gargantuaReferenceFixture();
     void gargantuaApplyFixture();
@@ -267,6 +268,15 @@ void CoreTests::dataCollectionCreatePreviewAndApply()
     QVERIFY(preview.generatedXml.startsWith(QStringLiteral("<?xml")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("<Catalog>")));
     QVERIFY(preview.targetFile.endsWith(QStringLiteral("DataCollectionData.xml")));
+    DataCollectionBuildRequest orderedRequest = request;
+    orderedRequest.parent = QStringLiteral("UnitGround");
+    const QString orderedXml = builder.preview(analysis, orderedRequest).generatedXml;
+    const qsizetype firstPattern = orderedXml.indexOf(QStringLiteral("<CDataCollectionPattern"));
+    const qsizetype firstTemplate = orderedXml.indexOf(QStringLiteral(" default=\"1\""));
+    const qsizetype firstRecord = orderedXml.indexOf(QStringLiteral("<DataRecord"));
+    QVERIFY(firstPattern >= 0);
+    QVERIFY(firstTemplate > firstPattern);
+    QVERIFY(firstRecord > firstTemplate);
     QVERIFY(preview.listfileNeedsUpdate);
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Actor,Vassel@Actor\"")));
     QVERIFY(preview.generatedXml.contains(QStringLiteral("Entry=\"Weapon,Vassel@Weapon\"")));
@@ -718,6 +728,69 @@ void CoreTests::dataCollectionPatternInheritanceValidation()
     QCOMPARE(stateFor(QStringLiteral("WrongPatternRoot")), DataCollectionPatternState::InvalidPatternForEntity);
     QCOMPARE(stateFor(QStringLiteral("CycleRoot")), DataCollectionPatternState::InheritanceCycle);
     QCOMPARE(stateFor(QStringLiteral("MissingParentRoot")), DataCollectionPatternState::MissingParent);
+}
+
+void CoreTests::dataCollectionRecognizesEvoSemanticPatternNames()
+{
+    QTemporaryDir dir;
+    QVERIFY(writeTextFile(QDir(dir.path()).absoluteFilePath(QStringLiteral("EvoPatterns.xml")), QByteArrayLiteral(R"xml(
+<Catalog>
+  <CDataCollectionPattern id="SCBW_Unit">
+    <Fields Reference="Actor,^ParamId^,UnitIcon"/>
+    <Fields Reference="Unit,^ParamId^,LifeMax"/>
+  </CDataCollectionPattern>
+  <CDataCollectionPattern id="SCBW_Abil">
+    <Fields Reference="Abil,^ParamId^,Cost.Vital[Energy]"/>
+  </CDataCollectionPattern>
+  <CDataCollectionPattern id="SCBW_Weapon">
+    <Fields Reference="Weapon,^ParamId^,Range"/>
+    <Fields Reference="Effect,^ParamId^@Damage,Amount"/>
+  </CDataCollectionPattern>
+  <CDataCollectionPattern id="SCBW_Weapon_Accumulator" parent="SCBW_Weapon">
+    <Fields Reference="Accumulator,^ParamId^@Damage,Amount"/>
+  </CDataCollectionPattern>
+
+  <CDataCollectionUnit default="1" id="SCBWUnitTemplate"><Pattern value="SCBW_Unit"/></CDataCollectionUnit>
+  <CDataCollectionAbil default="1" id="SCBWAbilTemplate"><Pattern value="SCBW_Abil"/></CDataCollectionAbil>
+  <CDataCollectionAbil default="1" id="SCBWWeaponTemplate"><Pattern value="SCBW_Weapon"/></CDataCollectionAbil>
+
+  <CUnit id="DragoonSCBW"/>
+  <CAbilEffectTarget id="PsionicStormSCBW"/>
+  <CWeaponLegacy id="DragoonSCBWWeapon"/>
+  <CDataCollectionUnit id="DragoonSCBW" parent="SCBWUnitTemplate"><DataRecord Entry="Unit,DragoonSCBW"/></CDataCollectionUnit>
+  <CDataCollectionAbil id="PsionicStormSCBW" parent="SCBWAbilTemplate"><DataRecord Entry="Abil,PsionicStormSCBW"/></CDataCollectionAbil>
+  <CDataCollectionAbil id="DragoonSCBWWeapon" parent="SCBWWeaponTemplate">
+    <DataRecord Entry="Weapon,DragoonSCBWWeapon"/>
+    <Pattern value="SCBW_Weapon_Accumulator"/>
+  </CDataCollectionAbil>
+</Catalog>)xml")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(
+        analysis, DataCollectionMode::UnitAbilWeapon);
+    const auto previewFor = [&](const QString &id) {
+        const auto family = std::find_if(families.cbegin(), families.cend(), [&](const UnitFamily &value) {
+            return value.rootId == id;
+        });
+        if (family == families.cend())
+            return DataCollectionPreviewReport{};
+        DataCollectionBuildRequest request;
+        request.family = *family;
+        return DataCollectionUnitBuilder().preview(analysis, request, &families);
+    };
+
+    const DataCollectionPreviewReport unit = previewFor(QStringLiteral("DragoonSCBW"));
+    QCOMPARE(unit.patternState, DataCollectionPatternState::InheritedPattern);
+    QCOMPARE(unit.effectivePattern, QStringLiteral("SCBW_Unit"));
+    const DataCollectionPreviewReport ability = previewFor(QStringLiteral("PsionicStormSCBW"));
+    QCOMPARE(ability.patternState, DataCollectionPatternState::InheritedPattern);
+    QCOMPARE(ability.effectivePattern, QStringLiteral("SCBW_Abil"));
+    const DataCollectionPreviewReport weapon = previewFor(QStringLiteral("DragoonSCBWWeapon"));
+    QCOMPARE(weapon.patternState, DataCollectionPatternState::DirectPattern);
+    QCOMPARE(weapon.effectivePattern, QStringLiteral("SCBW_Weapon_Accumulator"));
 }
 
 void CoreTests::dataCollectionEntityRootsAndConflicts()
