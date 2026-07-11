@@ -243,6 +243,7 @@ void CoreTests::dataCollectionAliasMapping()
     QCOMPARE(alias(QStringLiteral("CActorUnit"), QStringLiteral("Vassel@Actor"), UnitFamilyRole::Actor), QStringLiteral("Actor,Vassel@Actor"));
     QCOMPARE(alias(QStringLiteral("CTexture"), QStringLiteral("Vassel@Texture"), UnitFamilyRole::Other), QStringLiteral("Texture,Vassel@Texture"));
     QCOMPARE(alias(QStringLiteral("CRequirementNode"), QStringLiteral("Vassel@RequirementNode"), UnitFamilyRole::Other), QStringLiteral("RequirementNode,Vassel@RequirementNode"));
+    QCOMPARE(alias(QStringLiteral("CConversationState"), QStringLiteral("Vassel@Conversation"), UnitFamilyRole::Other), QStringLiteral("ConversationState,Vassel@Conversation"));
 }
 
 void CoreTests::dataCollectionCreatePreviewAndApply()

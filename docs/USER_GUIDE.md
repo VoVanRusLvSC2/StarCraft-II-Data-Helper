@@ -1,0 +1,49 @@
+# SC2 Data Helper — User Guide
+
+## What the tool changes
+
+SC2 Data Helper analyzes StarCraft II XML catalogs and archive entries. Every
+destructive action is shown as a preview and can create a backup first.
+
+Supported inputs are `.SC2Map`, `.SC2Mod`, component folders, and standalone
+catalog XML files.
+
+## Recommended workflow
+
+1. Open the map, mod, folder, or XML file.
+2. Run **Analyze** and inspect parse errors and dependencies.
+3. Review **Data Collection** before cleanup. Existing records are preserved.
+4. Use **Unused Data Objects** for catalog objects and **Import Cleanup** for
+   files such as textures, sounds, layouts, and M3 models.
+5. Use **Duplicate Merge** only after checking the reference preview.
+6. Apply changes with backup enabled.
+7. Open the result in StarCraft II Editor and test the affected maps.
+
+## Data Collection
+
+The builder creates the editor schema first (`CDataCollectionPattern` and
+default collection templates), then creates a concrete collection and adds
+real `DataRecord` entries. Patterns control editor fields; they do not replace
+records for custom effects, validators, behaviors, or requirements.
+
+## Asset preview
+
+Image assets can be previewed directly. M3 files can be rotated with the left
+mouse button and zoomed with the mouse wheel. The current viewer renders static
+geometry. Unsupported M3 versions fall back to metadata and texture previews.
+
+## Safety
+
+Do not delete dependencies unless you understand the map's dependency graph.
+Binary references cannot always be proven from XML alone. Always test the
+optimized copy in the StarCraft II Editor before distributing it.
+
+## Building
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+The Windows executable is written to `build/Release/SC2DataHelper.exe`.

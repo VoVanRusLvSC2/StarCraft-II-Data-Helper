@@ -1,0 +1,32 @@
+; Inno Setup script for maintainers. Build the Release binaries first.
+#define AppName "SC2 Data Helper"
+#define AppVersion "2.0.0"
+#define AppPublisher "VoVanRusLvSC2"
+#define AppExeName "SC2DataHelper.exe"
+
+[Setup]
+AppId={{8D6A4F47-0D9B-4F76-9D2B-0B2C7E5B2C31}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppPublisher={#AppPublisher}
+DefaultDirName={autopf}\SC2 Data Helper
+DefaultGroupName={#AppName}
+OutputDir=..\dist
+OutputBaseFilename=SC2DataHelper-{#AppVersion}-setup
+Compression=lzma2
+SolidCompression=yes
+ArchitecturesInstallIn64BitMode=x64
+LicenseFile=..\LICENSE
+
+[Files]
+Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+
+[Icons]
+Name: "{group}\SC2 Data Helper"; Filename: "{app}\{#AppExeName}"
+Name: "{commondesktop}\SC2 Data Helper"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+
+[Run]
+Filename: "{app}\{#AppExeName}"; Description: "Launch SC2 Data Helper"; Flags: nowait postinstall skipifsilent

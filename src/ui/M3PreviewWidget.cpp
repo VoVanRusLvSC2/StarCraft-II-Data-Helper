@@ -49,7 +49,7 @@ void M3PreviewWidget::paintEvent(QPaintEvent*)
     QVector<QVector3D> v;v.reserve(m_vertices.size());for(const auto &x:m_vertices)v<<m.map(x);
     struct Draw{float z;QPolygonF q;QColor c;}; QVector<Draw> draw;draw.reserve(m_faces.size()); const float s=qMin(width(),height())*.82f*m_zoom;
     for(const Face &f:m_faces){const auto&a=v[int(f.a)],&b=v[int(f.b)],&c=v[int(f.c)]; QVector3D n=QVector3D::crossProduct(b-a,c-a).normalized(); if(n.z()>=0)continue; float light=qBound(.15f,-QVector3D::dotProduct(n,QVector3D(.3f,-.4f,-.85f).normalized()),1.f); QPolygonF q{QPointF(width()/2+a.x()*s,height()/2-a.y()*s),QPointF(width()/2+b.x()*s,height()/2-b.y()*s),QPointF(width()/2+c.x()*s,height()/2-c.y()*s)};draw.push_back({(a.z()+b.z()+c.z())/3,q,QColor::fromRgbF(.05,.65*light,.48*light)});}
-    std::sort(draw.begin(),draw.end(),[](const Draw&a,const Draw&b){return a.z>b.z;});p.setPen(QPen(QColor(70,255,190,90),.5));for(const Draw&d:draw){p.setBrush(d.c);p.drawPolygon(d.q);} p.setPen(QColor(190,255,235));p.drawText(12,22,QStringLiteral("Drag to rotate • Wheel to zoom • %1 triangles").arg(m_faces.size()));
+    std::sort(draw.begin(),draw.end(),[](const Draw&a,const Draw&b){return a.z>b.z;});p.setPen(QPen(QColor(70,255,190,90),.5));for(const Draw&d:draw){p.setBrush(d.c);p.drawPolygon(d.q);} p.setPen(QColor(190,255,235));p.drawText(12,22,QStringLiteral("Drag to rotate - Wheel to zoom - %1 triangles").arg(m_faces.size()));
 }
 void M3PreviewWidget::mousePressEvent(QMouseEvent*e){m_lastMouse=e->position().toPoint();}
 void M3PreviewWidget::mouseMoveEvent(QMouseEvent*e){if(e->buttons()&Qt::LeftButton){QPoint d=e->position().toPoint()-m_lastMouse;m_yaw+=d.x()*.5f;m_pitch+=d.y()*.5f;m_lastMouse=e->position().toPoint();update();}}

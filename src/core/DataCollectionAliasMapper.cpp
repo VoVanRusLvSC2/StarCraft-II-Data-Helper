@@ -28,6 +28,16 @@ QString DataCollectionAliasMapper::catalogType(const QString &elementName) const
     if (type.startsWith(QStringLiteral("cfootprint"))) return QStringLiteral("Footprint");
     if (type.startsWith(QStringLiteral("csiteop"))) return QStringLiteral("SiteOp");
     if (type.startsWith(QStringLiteral("cbeam"))) return QStringLiteral("Beam");
+    // Newer/custom SC2 catalogs generally follow the C<Type> convention.
+    // Keep their DataRecord links instead of dropping them just because this
+    // release does not have a dedicated semantic role yet.
+    if (type.startsWith(QLatin1Char('c'))
+        && !type.startsWith(QStringLiteral("cdata"))
+        && type.size() > 1) {
+        QString catalog = elementName.mid(1);
+        catalog[0] = catalog.at(0).toUpper();
+        return catalog;
+    }
     return {};
 }
 
