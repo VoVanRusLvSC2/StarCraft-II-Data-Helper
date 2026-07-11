@@ -469,13 +469,23 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
         {
             DeepCleanupCandidate candidate;
             candidate.kind = DeepCleanupKind::UnusedAsset;
-            candidate.action = DeepCleanupAction::DeleteFile;
-            candidate.state = CandidateState::Safe;
             candidate.filePath = file.filePath;
             candidate.label = rel;
-            candidate.reason = QStringLiteral("Asset filename/path is not referenced by XML, trigger, script or text data.");
             candidate.bytes = file.size;
-            candidate.recommended = true;
+            if (analysis->externalConsumersUnknown)
+            {
+                candidate.action = DeepCleanupAction::ReportOnly;
+                candidate.state = CandidateState::Risky;
+                candidate.reason = QStringLiteral("No local reference was found, but a standalone SC2Mod can be referenced by external maps/mods that were not analyzed together.");
+                candidate.recommended = false;
+            }
+            else
+            {
+                candidate.action = DeepCleanupAction::DeleteFile;
+                candidate.state = CandidateState::Safe;
+                candidate.reason = QStringLiteral("Asset filename/path is not referenced by XML, trigger, script or text data.");
+                candidate.recommended = true;
+            }
             append(candidate);
         }
     }

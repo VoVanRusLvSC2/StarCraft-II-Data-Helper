@@ -26,6 +26,11 @@ default collection templates), then creates a concrete collection and adds
 real `DataRecord` entries. Patterns control editor fields; they do not replace
 records for custom effects, validators, behaviors, or requirements.
 
+Plans above the automatic scale limit are marked **Review large plan** and are
+not selected automatically. The batch wizard previews the first 200 families
+and summarizes the remainder; use the dedicated Data Collection tab for an
+individual family. Other optimization steps are not blocked by this limit.
+
 ## Asset and M3 preview
 
 Image assets can be previewed directly. M3 files can be rotated with the left
@@ -50,6 +55,11 @@ release publication triggers the Windows installer workflow.
 Do not delete dependencies unless you understand the map's dependency graph.
 Binary references cannot always be proven from XML alone. Always test the
 optimized copy in the StarCraft II Editor before distributing it.
+
+When a `.SC2Mod` or `.SC2Campaign` is opened by itself, its exported catalog IDs
+and apparently unused imports may have consumers in another map. The tool keeps
+those deletions and ID renames blocked. Analyze the complete consumer project or
+perform an explicit project-wide review before changing that public interface.
 
 ## Building
 

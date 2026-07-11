@@ -122,6 +122,8 @@ target_sources(SC2DataHelper PRIVATE
     src/core/MergeService.cpp
     src/core/UnitFamilyDetector.h
     src/core/UnitFamilyDetector.cpp
+    src/core/DataCollectionScalePolicy.h
+    src/core/ExternalConsumerSafetyPolicy.h
     src/core/StandardNamePlanner.h
     src/core/StandardNamePlanner.cpp
     src/core/ReferenceRenamer.h

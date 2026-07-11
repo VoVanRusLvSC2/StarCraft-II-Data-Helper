@@ -3,9 +3,11 @@
 #include "core/CatalogEnumRepair.h"
 #include "core/DataCollectionAliasMapper.h"
 #include "core/DataCollectionPreservation.h"
+#include "core/DataCollectionScalePolicy.h"
 #include "core/DataCollectionUnitBuilder.h"
 #include "core/DeepCleanupService.h"
 #include "core/FolderAnalyzer.h"
+#include "core/ExternalConsumerSafetyPolicy.h"
 #include "core/ReferenceRenamer.h"
 #include "core/Sc2Archive.h"
 #include "core/StandardNamePlanner.h"
@@ -696,6 +698,11 @@ bool applyRenamePlans(QString workspace, AnalysisResult *analysis,
 {
     if (!analysis || !report || !changedFiles)
         return false;
+    if (analysis->externalConsumersUnknown) {
+        logProgress(report->mapPath, QStringLiteral("rename_review_only"),
+                    QStringLiteral("standalone mod has unknown external consumers"));
+        return true;
+    }
 
     QSet<QString> skippedArchiveRoots;
     bool appliedAnyRenamePass = false;
@@ -864,6 +871,7 @@ bool applyDataCollections(const QString &mapPath, QString workspace, const Analy
     const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(
         analysis, DataCollectionMode::UnitAbilWeapon);
     report->collectionFamiliesDetected = families.size();
+    const DataCollectionScaleAssessment scale = assessDataCollectionScale(families);
     qsizetype totalMemberships = 0;
     int maxFamilyObjects = 0;
     QString maxFamilyRoot;
@@ -880,6 +888,12 @@ bool applyDataCollections(const QString &mapPath, QString workspace, const Analy
                     .arg(totalMemberships)
                     .arg(maxFamilyObjects)
                     .arg(maxFamilyRoot));
+    if (!scale.automaticBatchAllowed)
+    {
+        report->collectionFamiliesSkipped += families.size();
+        logProgress(mapPath, QStringLiteral("collection_review_only"), scale.reason);
+        return true;
+    }
 
     QHash<QString, QVector<int>> familiesByTargetFile;
     for (int familyIndex = 0; familyIndex < families.size(); ++familyIndex) {
@@ -1098,7 +1112,8 @@ bool commitArchiveChanges(const QString &archivePath, const QString &tempRoot,
     return true;
 }
 
-bool verifyOptimizedMap(const QString &archivePath, MapReport *report, QString *error)
+bool verifyOptimizedMap(const QString &archivePath, MapReport *report, QString *error,
+                        bool requireCompleteDataCollections)
 {
     Sc2Archive archive;
     if (!archive.load(archivePath, error))
@@ -1121,20 +1136,28 @@ bool verifyOptimizedMap(const QString &archivePath, MapReport *report, QString *
         return false;
     const ArchiveReferenceStats referenceStats = scanArchiveReferences(archive, analysis);
     applyArchiveReferenceSafety(&analysis, referenceStats);
+    if (sourceMayHaveExternalConsumers(archivePath)) {
+        analysis.externalConsumersUnknown = true;
+        applyExternalConsumerSafety(&analysis);
+    }
 
     report->objectsAfter = analysis.totalDataNodes();
     report->finalSafeUnused = safeUnusedRemovalCount(analysis);
     report->finalDuplicateMergeCandidates = duplicateMergeCandidateCount(analysis);
 
-    const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(
-        analysis, DataCollectionMode::UnitAbilWeapon);
+    CollectionStats collectionStats;
+    collectStats(workspace.path(), &collectionStats);
+
     int rootConflicts = 0;
-    const QSet<QString> expected = expectedCollectionPairs(analysis, families, &rootConflicts);
+    QSet<QString> expected;
+    if (requireCompleteDataCollections || collectionStats.files > 0) {
+        const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(
+            analysis, DataCollectionMode::UnitAbilWeapon);
+        expected = expectedCollectionPairs(analysis, families, &rootConflicts);
+    }
     report->expectedCollectionPairs = expected.size();
     report->rootTypeConflicts = qMax(report->rootTypeConflicts, rootConflicts);
 
-    CollectionStats collectionStats;
-    collectStats(workspace.path(), &collectionStats);
     QSet<QString> missing = expected;
     missing.subtract(collectionStats.pairs);
     QSet<QString> extra = collectionStats.pairs;
@@ -1147,7 +1170,7 @@ bool verifyOptimizedMap(const QString &archivePath, MapReport *report, QString *
     report->finalCollectionUniqueEntries = collectionStats.entries.size();
     report->missingExpectedCollectionPairs = missing.size();
     report->extraCollectionPairs = extra.size();
-    return missing.isEmpty();
+    return !requireCompleteDataCollections || missing.isEmpty();
 }
 
 bool optimizeMap(const QString &mapPath, MapReport *report)
@@ -1188,6 +1211,10 @@ bool optimizeMap(const QString &mapPath, MapReport *report)
     if (!analyzeWorkspace(workspace.path(), &analysis, &error)) {
         report->error = error;
         return false;
+    }
+    if (sourceMayHaveExternalConsumers(report->mapPath)) {
+        analysis.externalConsumersUnknown = true;
+        applyExternalConsumerSafety(&analysis);
     }
     logProgress(report->mapPath, QStringLiteral("analysis_done"),
                 QStringLiteral("objects=%1").arg(analysis.totalDataNodes()));
@@ -1240,6 +1267,10 @@ bool optimizeMap(const QString &mapPath, MapReport *report)
             report->error = error;
             return false;
         }
+        if (sourceMayHaveExternalConsumers(report->mapPath)) {
+            analysis.externalConsumersUnknown = true;
+            applyExternalConsumerSafety(&analysis);
+        }
         applyArchiveReferenceSafety(&analysis, referenceStats);
     }
 
@@ -1266,6 +1297,10 @@ bool optimizeMap(const QString &mapPath, MapReport *report)
         if (!analyzeWorkspace(workspace.path(), &analysis, &error)) {
             report->error = error;
             return false;
+        }
+        if (sourceMayHaveExternalConsumers(report->mapPath)) {
+            analysis.externalConsumersUnknown = true;
+            applyExternalConsumerSafety(&analysis);
         }
         applyArchiveReferenceSafety(&analysis, referenceStats);
     }
@@ -1306,7 +1341,8 @@ bool optimizeMap(const QString &mapPath, MapReport *report)
 
     report->afterBytes = QFileInfo(report->mapPath).size();
     logProgress(report->mapPath, QStringLiteral("verify_start"));
-    if (!verifyOptimizedMap(report->mapPath, report, &error)) {
+    if (!verifyOptimizedMap(report->mapPath, report, &error,
+                            report->collectionFamiliesApplied > 0)) {
         report->error = error.isEmpty()
             ? QStringLiteral("Verification failed: Data Collection is missing expected pairs.")
             : error;
@@ -1333,7 +1369,7 @@ bool verifyOnlyMap(const QString &mapPath, MapReport *report)
     }
     report->archiveEntriesBefore = archive.totalEntriesCount();
 
-    if (!verifyOptimizedMap(report->mapPath, report, &error)) {
+    if (!verifyOptimizedMap(report->mapPath, report, &error, false)) {
         report->error = error.isEmpty()
             ? QStringLiteral("Verification failed: Data Collection is missing expected pairs.")
             : error;

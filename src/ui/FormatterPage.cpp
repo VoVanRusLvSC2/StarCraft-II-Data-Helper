@@ -1,5 +1,6 @@
 #include "ui/FormatterPage.h"
 #include "core/DataCollectionUnitBuilder.h"
+#include "core/DataCollectionScalePolicy.h"
 #include "core/DeepCleanupService.h"
 #include "core/StandardNamePlanner.h"
 #include "core/ScannedFileReader.h"
@@ -223,20 +224,41 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
         }
     }
     const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(result, collectionMode);
+    const DataCollectionScaleAssessment collectionScale = assessDataCollectionScale(collectionFamilies);
+    constexpr int kMaximumLargePlanPreviewFamilies = 200;
+    const int previewFamilyCount = collectionScale.automaticBatchAllowed
+        ? collectionFamilies.size()
+        : qMin(collectionFamilies.size(), kMaximumLargePlanPreviewFamilies);
     DataCollectionUnitBuilder collectionBuilder;
-    for (int familyIndex = 0; familyIndex < collectionFamilies.size(); ++familyIndex) {
+    for (int familyIndex = 0; familyIndex < previewFamilyCount; ++familyIndex) {
         const UnitFamily &family = collectionFamilies[familyIndex];
         DataCollectionBuildRequest request;
         request.family = family;
         request.summaryOnly = true;
         request.confirmNonStandard = true;
         const DataCollectionPreviewReport collection = collectionBuilder.preview(result, request, &collectionFamilies);
-        plan.collection.append({{QString(), QStringLiteral("%1 [%2]").arg(family.rootId, dataCollectionEntityTypeName(family.entityType)),
+        const bool automaticallySelected = collection.valid && collectionScale.automaticBatchAllowed;
+        const QString status = !collection.valid ? QStringLiteral("Blocked")
+            : automaticallySelected ? QStringLiteral("Recommended")
+                                    : QStringLiteral("Review large plan");
+        QStringList warnings = collection.warnings;
+        if (!collectionScale.automaticBatchAllowed && familyIndex == 0)
+            warnings.prepend(collectionScale.reason);
+        plan.collection.append({{status, QStringLiteral("%1 [%2]").arg(family.rootId, dataCollectionEntityTypeName(family.entityType)),
                                  QString::number(collection.existingRecordsPreserved.size()),
                                  QString::number(collection.recordsToAdd.size()),
                                  QStringLiteral("%1 remove / %2 copy").arg(collection.recordsToRemove.size()).arg(collection.recordsToMove.size()),
-                                 collection.warnings.join(QStringLiteral("; "))},
-                                collection.valid, collection.valid, familyIndex, -1});
+                                 warnings.join(QStringLiteral("; "))},
+                                automaticallySelected, collection.valid, familyIndex, -1});
+    }
+    if (previewFamilyCount < collectionFamilies.size()) {
+        plan.collection.append({{QStringLiteral("Review large plan"),
+                                 QStringLiteral("%1 additional families").arg(collectionFamilies.size() - previewFamilyCount),
+                                 QString(), QString(), QString(),
+                                 QStringLiteral("%1 Only the first %2 families are shown in the batch wizard; use the Data Collection tab for individual review.")
+                                     .arg(collectionScale.reason)
+                                     .arg(previewFamilyCount)},
+                                false, false, -1, -1});
     }
     return plan;
 }

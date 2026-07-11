@@ -161,6 +161,13 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         item.confidence = object.confidence;
         item.reason = object.reason;
         item.riskLevel = object.confidence == QStringLiteral("High") ? QStringLiteral("Low") : QStringLiteral("Medium");
+        if (analysis.externalConsumersUnknown)
+        {
+            item.selected = false;
+            item.blocked = true;
+            item.riskLevel = QStringLiteral("High");
+            item.conflict = QStringLiteral("External maps/mods may reference this public ID");
+        }
         result.items << item;
         ++proposedCounts[identityKey(node.elementName, expected)];
     }
@@ -175,7 +182,11 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
     {
         const DataNode &node = analysis.nodes[item.nodeIndex];
         const QString newIdentity = identityKey(node.elementName, item.newId);
-        if (proposedCounts.value(newIdentity) > 1)
+        if (item.blocked)
+        {
+            // Preserve the external-consumer conflict assigned above.
+        }
+        else if (proposedCounts.value(newIdentity) > 1)
         {
             item.blocked = true;
             item.conflict = QStringLiteral("Duplicate proposed ID");

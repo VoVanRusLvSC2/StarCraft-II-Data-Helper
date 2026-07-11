@@ -7,6 +7,8 @@
 #include "core/M3ModelParser.h"
 #include "core/ReferenceRenamer.h"
 #include "core/StandardNamePlanner.h"
+#include "core/DataCollectionScalePolicy.h"
+#include "core/ExternalConsumerSafetyPolicy.h"
 #include "core/UnitFamilyDetector.h"
 #include "core/DataCollectionAliasMapper.h"
 #include "core/DataCollectionPreservation.h"
@@ -150,6 +152,8 @@ private slots:
     void deepCleanupAppliesSafeCandidates();
     void deepCleanupRemovesStructurallyInvalidActorEvents();
     void binaryAssetReferencesProtectImports();
+    void standaloneModExternalConsumersAreProtected();
+    void largeDataCollectionPlansRequireExplicitReview();
     void deepCleanupRemovesRedundantInheritedXmlNodes();
     void deepCleanupReportsAssetAndTriggerOptimization();
     void deepCleanupReportsSemanticDuplicateReview();
@@ -2293,6 +2297,66 @@ void CoreTests::binaryAssetReferencesProtectImports()
     }
     QVERIFY(!usedTextureWasOfferedForDeletion);
     QVERIFY(unusedTextureWasOfferedForDeletion);
+}
+
+void CoreTests::standaloneModExternalConsumersAreProtected()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    QVERIFY(writeTextFile(QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/UnitData.xml")),
+                          QByteArrayLiteral("<Catalog><CUnit id=\"ExportedUnit\"/></Catalog>")));
+    QVERIFY(writeTextFile(QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Exported.dds")),
+                          QByteArrayLiteral("external texture")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    analysis.externalConsumersUnknown = true;
+    applyExternalConsumerSafety(&analysis);
+
+    QVERIFY(analysis.possibleUnusedNodeIndices.isEmpty());
+    QVERIFY(!analysis.unusedCandidates.isEmpty());
+    for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates)
+        QVERIFY(candidate.state != CandidateState::Safe);
+
+    bool protectedAsset = false;
+    for (const DeepCleanupCandidate &candidate : analysis.deepCleanupCandidates) {
+        if (candidate.kind == DeepCleanupKind::UnusedAsset
+            && candidate.label.endsWith(QStringLiteral("Exported.dds"))) {
+            protectedAsset = true;
+            QCOMPARE(candidate.action, DeepCleanupAction::ReportOnly);
+            QCOMPARE(candidate.state, CandidateState::Risky);
+            QVERIFY(!candidate.recommended);
+        }
+    }
+    QVERIFY(protectedAsset);
+
+    UnitFamily family;
+    family.rootId = QStringLiteral("ExportedUnit");
+    family.rootNodeIndex = 0;
+    family.objects.append({0, UnitFamilyRole::Unit, QStringLiteral("High"), QString()});
+    const RenamePlan rename = StandardNamePlanner().plan(analysis, family, QStringLiteral("RenamedUnit"));
+    QVERIFY(!rename.items.isEmpty());
+    QVERIFY(rename.items.first().blocked);
+    QVERIFY(!rename.items.first().selected);
+}
+
+void CoreTests::largeDataCollectionPlansRequireExplicitReview()
+{
+    UnitFamily small;
+    small.rootId = QStringLiteral("Small");
+    small.objects.resize(10);
+    QVERIFY(assessDataCollectionScale({small}).automaticBatchAllowed);
+
+    UnitFamily large;
+    large.rootId = QStringLiteral("Large");
+    large.objects.resize(20001);
+    const DataCollectionScaleAssessment assessment = assessDataCollectionScale({large});
+    QVERIFY(!assessment.automaticBatchAllowed);
+    QCOMPARE(assessment.totalMemberships, qsizetype(20001));
+    QVERIFY(assessment.reason.contains(QStringLiteral("explicit review")));
 }
 
 void CoreTests::deepCleanupRemovesRedundantInheritedXmlNodes()

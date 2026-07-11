@@ -61,6 +61,8 @@ Destructive operations are preview-first and backup-first.
 - Rollback is used on apply failure
 - Archive mode stays conservative when binary references cannot be proven
 - Data Collection records are preserved even when related objects are deleted
+- Standalone `.SC2Mod`/`.SC2Campaign` sources protect public catalog IDs and
+  imports that may be consumed by maps or mods outside the current analysis
 
 ## Main tools
 
@@ -83,8 +85,10 @@ Find unused imported files separately from catalog object cleanup. This covers
 assets such as `.dds`, `.m3`, `.ogg`, `.wav`, `.tga`, `.layout`, and related
 files when they are not referenced by Data XML, layouts, triggers, preload
 data, or game strings. In archive mode the wizard materializes cleanup-relevant
-archive entries into its workspace before apply, so direct `.SC2Map` and
-`.SC2Mod` optimization can remove proven unused imports from the packed file.
+archive entries into its workspace before apply. A direct `.SC2Map` can remove
+proven unused imports from the packed file. For a standalone `.SC2Mod` or
+`.SC2Campaign`, imports with no local reference remain review-only because an
+external consumer can still use them.
 Editor-managed map files such as `Minimap.tga`, `LightingMap.tga`, and
 `PreloadAssetDB.txt` are protected even when normal XML references do not point
 to them.
@@ -130,6 +134,11 @@ mode. This remains review-first because many maps use custom naming rules.
 Build one batch plan, review every step, apply changes, refresh analysis, then
 close the wizard. One unsafe unused-chain row no longer cancels the whole apply;
 it is skipped and reported while the rest of the selected safe work continues.
+
+Very large Data Collection plans remain available for inspection but are not
+preselected. This prevents a broad family-detection result from adding tens of
+thousands of records without explicit review; the remaining safe cleanup steps
+still run for large extension mods and asset packs.
 
 When archive optimization rewrites an MPQ-backed `.SC2Map` or `.SC2Mod`, the
 archive writer also attempts a best-effort compact/repack after replacements or

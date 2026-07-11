@@ -99,6 +99,10 @@ struct DeepCleanupCandidate
 struct AnalysisResult
 {
     QString rootFolder;
+    // A standalone SC2Mod may expose catalog IDs and assets to maps or extension
+    // mods that are not part of this analysis. Absence of a local reference is
+    // not proof that an exported object or asset is unused.
+    bool externalConsumersUnknown = false;
     QVector<ScannedFileInfo> scannedFiles;
     QVector<DataNode> nodes;
     QVector<ParseErrorInfo> parseErrors;

@@ -26,6 +26,7 @@
 #include "core/CatalogEnumRepair.h"
 #include "core/Sc2Archive.h"
 #include "core/DataCollectionPreservation.h"
+#include "core/ExternalConsumerSafetyPolicy.h"
 
 #include <QAction>
 #include <QApplication>
@@ -682,7 +683,7 @@ bool MainWindow::analyzeFolderPath(const QString &folderPath, QString *errorMess
     m_archiveStrongReferenceSources.clear();
     m_archiveWeakReferenceSources.clear();
     m_archiveReferenceScanComplete = false;
-    return m_analyzer.analyzeFolder(folderPath, m_whitelistIds, &m_result, errorMessage, [this](int current, int total, const QString &file)
+    const bool analyzed = m_analyzer.analyzeFolder(folderPath, m_whitelistIds, &m_result, errorMessage, [this](int current, int total, const QString &file)
                                     {
             if (!m_activeProgressDialog) return;
             const int percent = total > 0 ? 22 + (current * 62 / total) : 22;
@@ -690,6 +691,14 @@ bool MainWindow::analyzeFolderPath(const QString &folderPath, QString *errorMess
                                                 file.isEmpty() ? QStringLiteral("Finalizing scan") : QDir::toNativeSeparators(file));
             QApplication::processEvents(); }, [this]
                                     { return m_activeProgressDialog && m_activeProgressDialog->isCancelled(); });
+    if (analyzed && sourceMayHaveExternalConsumers(folderPath))
+    {
+        m_result.externalConsumersUnknown = true;
+        applyExternalConsumerSafety(&m_result);
+        m_result.analysisReportText = m_analyzer.buildAnalysisReport(m_result);
+        m_result.plannedChangesReportText = m_analyzer.buildDryRunReport(m_result, {});
+    }
+    return analyzed;
 }
 
 bool MainWindow::analyzeArchiveFolderPath(const QString &folderPath, QString *errorMessage)
@@ -1172,7 +1181,9 @@ void MainWindow::normalizeArchiveAnalysis(AnalysisResult *analysis, const QStrin
             node.sourceFile = QDir(tempRoot).relativeFilePath(node.sourceFile);
     }
     analysis->rootFolder = archivePath;
+    analysis->externalConsumersUnknown = sourceMayHaveExternalConsumers(archivePath);
     applyArchiveReferenceSafety(analysis);
+    applyExternalConsumerSafety(analysis);
     analysis->analysisReportText = m_analyzer.buildAnalysisReport(*analysis);
     analysis->plannedChangesReportText = m_analyzer.buildDryRunReport(*analysis, QVector<int>{});
 }
