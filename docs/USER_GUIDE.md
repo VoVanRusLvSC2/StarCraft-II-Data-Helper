@@ -26,11 +26,24 @@ default collection templates), then creates a concrete collection and adds
 real `DataRecord` entries. Patterns control editor fields; they do not replace
 records for custom effects, validators, behaviors, or requirements.
 
-## Asset preview
+## Asset and M3 preview
 
 Image assets can be previewed directly. M3 files can be rotated with the left
-mouse button and zoomed with the mouse wheel. The current viewer renders static
-geometry. Unsupported M3 versions fall back to metadata and texture previews.
+mouse button and zoomed with the mouse wheel. The viewer reads static geometry,
+UV coordinates, skin weights, bone hierarchy and rest transforms, animation
+sequence metadata, standard materials, diffuse layers and texture paths.
+Materials are shown as separate shaded colors, and a referenced texture is
+previewed alongside the model when it exists in the opened project.
+
+The current renderer does not yet evaluate `STC/STG` skeletal animation curves
+or map DDS pixels onto triangles. Those files remain untouched and the preview
+falls back to static geometry plus the decoded texture pane.
+
+## Updates and installation
+
+The application checks the latest GitHub release at startup and offers to open
+its release page only when the published semantic version is newer. Official
+release publication triggers the Windows installer workflow.
 
 ## Safety
 

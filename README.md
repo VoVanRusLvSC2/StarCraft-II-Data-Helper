@@ -22,10 +22,14 @@ catalog file.
   actor events, dependency review, and archive/helper trash
 - Scan binary model-like imports for embedded asset references before deleting
   textures, sounds, layouts, or models
+- Preview M3 geometry interactively and inspect standard materials, diffuse
+  texture paths, UVs, skin weights, bones, rest transforms, and animation names
 - Review asset-size/duplicate audits, trigger/Galaxy performance hotspots, and
   semantic duplicate data-object candidates
 - Show full XML source with syntax highlighting
 - Open an Optimization Wizard for batch review before apply
+- Check GitHub Releases for newer semantic versions; release builds also have a
+  portable ZIP and an automatically built Windows installer
 
 ## Main feature: Data Collection
 

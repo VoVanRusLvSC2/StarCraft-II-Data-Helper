@@ -1,6 +1,8 @@
 ; Inno Setup script for maintainers. Build the Release binaries first.
 #define AppName "SC2 Data Helper"
-#define AppVersion "2.0.0"
+#ifndef AppVersion
+  #define AppVersion "2.1.0"
+#endif
 #define AppPublisher "VoVanRusLvSC2"
 #define AppExeName "SC2DataHelper.exe"
 

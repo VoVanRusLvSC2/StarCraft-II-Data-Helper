@@ -7,6 +7,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrl>
+#include <QVersionNumber>
 
 UpdateChecker::UpdateChecker(QObject *parent) : QObject(parent), m_manager(new QNetworkAccessManager(this)) {}
 
@@ -29,8 +30,14 @@ void UpdateChecker::check()
         const QUrl url(object.value(QStringLiteral("html_url")).toString());
         if (tag.isEmpty() || !url.isValid()) {
             emit checkFailed(QStringLiteral("GitHub release response is invalid."));
-        } else if (tag != QStringLiteral("v%1").arg(QCoreApplication::applicationVersion())) {
-            emit updateAvailable(tag, url);
+        } else {
+            QString remoteText = tag;
+            if (remoteText.startsWith(QLatin1Char('v'), Qt::CaseInsensitive))
+                remoteText.remove(0, 1);
+            const QVersionNumber remoteVersion = QVersionNumber::fromString(remoteText);
+            const QVersionNumber currentVersion = QVersionNumber::fromString(QCoreApplication::applicationVersion());
+            if (!remoteVersion.isNull() && QVersionNumber::compare(remoteVersion, currentVersion) > 0)
+                emit updateAvailable(tag, url);
         }
         reply->deleteLater();
     });

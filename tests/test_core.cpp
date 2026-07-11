@@ -194,13 +194,39 @@ private slots:
 
 void CoreTests::m3ParserReadsRealModelFixture()
 {
-    const QString path = QStringLiteral("C:/Users/Vladimir/Downloads/SMX3_Marine.m3");
-    if (!QFileInfo::exists(path)) QSKIP("Real M3 fixture is unavailable.");
-    QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
-    M3Model model; QString error;
-    QVERIFY2(M3ModelParser().parseStaticModel(file.readAll(), &model, &error), qPrintable(error));
-    QVERIFY(!model.vertices.isEmpty());
-    QVERIFY(!model.triangles.isEmpty());
+    const QStringList paths = {
+        QStringLiteral("C:/Users/Vladimir/Downloads/SMX3_Marine.m3"),
+        QStringLiteral("C:/Users/Vladimir/Downloads/BattleStation_ConstructionRobot.m3")
+    };
+    if (!QFileInfo::exists(paths.front()))
+        QSKIP("Real M3 fixture is unavailable.");
+
+    for (const QString &path : paths)
+    {
+        if (!QFileInfo::exists(path))
+            continue;
+        QFile file(path);
+        QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(path));
+        M3Model model;
+        QString error;
+        QVERIFY2(M3ModelParser().parseStaticModel(file.readAll(), &model, &error), qPrintable(path + QStringLiteral(": ") + error));
+        QVERIFY2(!model.vertices.isEmpty(), qPrintable(path));
+        QVERIFY2(!model.triangles.isEmpty(), qPrintable(path));
+        QVERIFY2(model.boneCount > 0, qPrintable(path));
+        QCOMPARE(model.bones.size(), model.boneCount);
+        QVERIFY2(std::any_of(model.bones.cbegin(), model.bones.cend(), [](const M3Bone &bone) {
+            return !bone.name.isEmpty();
+        }), qPrintable(path));
+        QVERIFY2(!model.sequences.isEmpty(), qPrintable(path));
+        QVERIFY2(!model.materials.isEmpty(), qPrintable(path));
+        QVERIFY2(std::any_of(model.materials.cbegin(), model.materials.cend(), [](const M3Material &material) {
+            return !material.diffuseTexturePath.isEmpty();
+        }), qPrintable(path));
+        QVERIFY2(std::any_of(model.triangles.cbegin(), model.triangles.cend(), [](const M3Triangle &triangle) {
+            return triangle.materialIndex >= 0;
+        }), qPrintable(path));
+        QVERIFY2(!model.diagnostics.isEmpty(), qPrintable(path));
+    }
 }
 
 void CoreTests::initTestCase()
