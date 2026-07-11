@@ -4,6 +4,7 @@
 #include "core/CatalogEnumRepair.h"
 #include "core/FolderAnalyzer.h"
 #include "core/MergeService.h"
+#include "core/M3ModelParser.h"
 #include "core/ReferenceRenamer.h"
 #include "core/StandardNamePlanner.h"
 #include "core/UnitFamilyDetector.h"
@@ -188,7 +189,19 @@ private slots:
     void folderAnalysisStoresFullXmlSource();
     void folderAnalysisCanBeCancelled();
     void unrelatedIdenticalBodiesAreAllowed();
+    void m3ParserReadsRealModelFixture();
 };
+
+void CoreTests::m3ParserReadsRealModelFixture()
+{
+    const QString path = QStringLiteral("C:/Users/Vladimir/Downloads/SMX3_Marine.m3");
+    if (!QFileInfo::exists(path)) QSKIP("Real M3 fixture is unavailable.");
+    QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
+    M3Model model; QString error;
+    QVERIFY2(M3ModelParser().parseStaticModel(file.readAll(), &model, &error), qPrintable(error));
+    QVERIFY(!model.vertices.isEmpty());
+    QVERIFY(!model.triangles.isEmpty());
+}
 
 void CoreTests::initTestCase()
 {

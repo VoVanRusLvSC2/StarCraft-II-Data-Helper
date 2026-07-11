@@ -23,10 +23,10 @@ bool M3ModelParser::parseStaticModel(const QByteArray &bytes, M3Model *model, QS
     for (quint32 i = 0; i < count; ++i) { const qsizetype p = indexOffset + qsizetype(i) * 16; entries << Entry{tag(bytes,p,&ok),u32(bytes,p+4,&ok),u32(bytes,p+8,&ok),u32(bytes,p+12,&ok)}; }
     const Entry header = entries.at(int(modelId));
     if (!ok || header.tag != QStringLiteral("MODL") || header.offset + 124 > quint32(bytes.size())) { if (error) *error = QStringLiteral("Unsupported M3 model header."); return false; }
-    const quint32 flags = u32(bytes, header.offset + 96, &ok), vertexCount = u32(bytes, header.offset + 100, &ok), vertexId = u32(bytes, header.offset + 104, &ok), divisionCount = u32(bytes, header.offset + 112, &ok), divisionId = u32(bytes, header.offset + 116, &ok);
-    if (!ok || !vertexCount || vertexCount > 5000000 || vertexId >= count || !divisionCount || divisionId >= count) { if (error) *error = QStringLiteral("M3 has no supported mesh."); return false; }
+    const quint32 flags = u32(bytes, header.offset + 96, &ok), vertexBytes = u32(bytes, header.offset + 100, &ok), vertexId = u32(bytes, header.offset + 104, &ok), divisionCount = u32(bytes, header.offset + 112, &ok), divisionId = u32(bytes, header.offset + 116, &ok);
+    if (!ok || !vertexBytes || vertexId >= count || !divisionCount || divisionId >= count) { if (error) *error = QStringLiteral("M3 has no supported mesh."); return false; }
     int uvSets = flags & 0x100000 ? 4 : flags & 0x80000 ? 3 : flags & 0x40000 ? 2 : 1;
-    const int stride = (7 + uvSets) * 4; const Entry vertices = entries.at(int(vertexId));
+    const int stride = (7 + uvSets) * 4; const quint32 vertexCount = vertexBytes / quint32(stride); const Entry vertices = entries.at(int(vertexId));
     if (quint64(vertices.offset) + quint64(vertexCount) * stride > quint64(bytes.size())) { if (error) *error = QStringLiteral("Invalid M3 vertex buffer."); return false; }
     model->vertices.reserve(int(vertexCount));
     for (quint32 i = 0; i < vertexCount; ++i) { const qsizetype p = vertices.offset + qsizetype(i) * stride; M3Vertex v; v.position = {f32(bytes,p,&ok),f32(bytes,p+4,&ok),f32(bytes,p+8,&ok)}; if (!ok || !qIsFinite(v.position.x()) || !qIsFinite(v.position.y()) || !qIsFinite(v.position.z())) { if (error) *error = QStringLiteral("Invalid M3 vertex data."); return false; } v.uv = {float(qint16(u16(bytes,p+24,&ok))) / 32767.0f, float(qint16(u16(bytes,p+26,&ok))) / 32767.0f}; model->vertices << v; }

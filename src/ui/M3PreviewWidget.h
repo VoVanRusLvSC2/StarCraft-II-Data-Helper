@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/M3Model.h"
+
 #include <QByteArray>
 #include <QPoint>
 #include <QVector3D>
@@ -19,9 +21,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
 
 private:
-    struct Face { quint32 a = 0, b = 0, c = 0; };
-    QVector<QVector3D> m_vertices;
-    QVector<Face> m_faces;
+    M3Model m_model;
     QPoint m_lastMouse;
     float m_yaw = -35.0f;
     float m_pitch = 20.0f;

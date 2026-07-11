@@ -134,6 +134,7 @@ target_sources(SC2DataHelper PRIVATE
     src/core/DataCollectionUnitBuilder.cpp
     src/core/DeepCleanupService.h
     src/core/DeepCleanupService.cpp
+    src/core/M3ModelParser.cpp
     src/core/ConfigManager.h
     src/core/ConfigManager.cpp
     src/ui/OverviewPage.h
@@ -253,6 +254,7 @@ add_executable(SC2DataHelperTests
     src/core/DataCollectionPreservation.cpp
     src/core/DataCollectionUnitBuilder.cpp
     src/core/DeepCleanupService.cpp
+    src/core/M3ModelParser.cpp
     src/ui/ObjectTableModel.cpp
     src/ui/ObjectFilterProxyModel.cpp
 )
