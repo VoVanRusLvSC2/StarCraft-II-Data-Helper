@@ -89,15 +89,31 @@ void MainWindowAnalysisController::analyzeCurrentSource()
 
 bool MainWindowAnalysisController::loadPathAndAnalyze(const QString &path)
 {
+    if (m_window.m_analysisInProgress)
+    {
+        m_window.statusBar()->showMessage(QStringLiteral("Analysis is already running."), 4000);
+        m_window.logLine(QStringLiteral("Ignored duplicate analysis request while another analysis is running."));
+        return false;
+    }
+
+    m_window.m_analysisInProgress = true;
     QFileInfo info(path);
+    const bool previousAnalyzeEnabled = m_window.m_analyzeAction && m_window.m_analyzeAction->isEnabled();
     const bool previousOptimizationEnabled = m_window.m_dryRunAction && m_window.m_dryRunAction->isEnabled();
     const bool previousReviewEnabled = m_window.m_applyAction && m_window.m_applyAction->isEnabled();
+    if (m_window.m_analyzeAction)
+        m_window.m_analyzeAction->setEnabled(false);
     m_window.m_dryRunAction->setEnabled(false);
     m_window.m_applyAction->setEnabled(false);
     if (!info.exists())
     {
         QMessageBox::warning(&m_window, QStringLiteral("Load"), QStringLiteral("Path does not exist: %1").arg(path));
         m_window.logLine(QStringLiteral("Path does not exist: %1").arg(path));
+        m_window.m_dryRunAction->setEnabled(previousOptimizationEnabled);
+        m_window.m_applyAction->setEnabled(previousReviewEnabled);
+        if (m_window.m_analyzeAction)
+            m_window.m_analyzeAction->setEnabled(previousAnalyzeEnabled);
+        m_window.m_analysisInProgress = false;
         return false;
     }
 
@@ -153,6 +169,9 @@ bool MainWindowAnalysisController::loadPathAndAnalyze(const QString &path)
         m_window.m_result = previousResult;
         m_window.m_dryRunAction->setEnabled(previousOptimizationEnabled);
         m_window.m_applyAction->setEnabled(previousReviewEnabled);
+        if (m_window.m_analyzeAction)
+            m_window.m_analyzeAction->setEnabled(previousAnalyzeEnabled);
+        m_window.m_analysisInProgress = false;
         m_window.m_activeProgressDialog = nullptr;
         progress.close();
         if (errorMessage == QStringLiteral("Analysis canceled."))
@@ -200,6 +219,9 @@ bool MainWindowAnalysisController::loadPathAndAnalyze(const QString &path)
     m_window.showAnalysisTab();
     m_window.m_dryRunAction->setEnabled(true);
     m_window.m_applyAction->setEnabled(false);
+    if (m_window.m_analyzeAction)
+        m_window.m_analyzeAction->setEnabled(previousAnalyzeEnabled);
+    m_window.m_analysisInProgress = false;
     m_window.setCurrentSourcePath(path);
     m_window.logLine(QStringLiteral("Scanned files: %1").arg(m_window.m_result.totalFilesScanned()));
     m_window.logLine(QStringLiteral("XML files: %1").arg(m_window.m_result.totalXmlFiles()));

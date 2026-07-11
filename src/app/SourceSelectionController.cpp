@@ -5,13 +5,10 @@
 
 #include "ui/OverviewPage.h"
 
-#include <QAction>
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QSettings>
-
-#include <algorithm>
 
 namespace
 {
@@ -68,8 +65,6 @@ void SourceSelectionController::openSc2File()
         return;
 
     const QFileInfo info(selected);
-    const bool previousOptimizationEnabled = m_window.m_dryRunAction && m_window.m_dryRunAction->isEnabled();
-    const bool previousReviewEnabled = m_window.m_applyAction && m_window.m_applyAction->isEnabled();
     if (info.suffix().compare(QStringLiteral("xml"), Qt::CaseInsensitive) == 0)
         m_window.m_sourceKind = MainWindow::SourceKind::XmlFile;
     else if (isSupportedSc2ArchiveForSelection(info))
@@ -81,13 +76,10 @@ void SourceSelectionController::openSc2File()
     m_window.setCurrentSourcePath(selected);
     settings.setValue(QStringLiteral("paths/lastSourcePath"), selected);
     m_window.m_analysisPage->setFolderPath(selected);
-    m_window.m_analysisPage->setModeLabel(QStringLiteral("Mode: ready to analyze"));
-    m_window.m_analysisPage->setOutputText(QStringLiteral("File selected. Press Analyze to start scanning."));
-    if (m_window.m_result.nodes.isEmpty())
-        m_window.refreshPages();
-    m_window.m_dryRunAction->setEnabled(previousOptimizationEnabled);
-    m_window.m_applyAction->setEnabled(previousReviewEnabled);
-    m_window.logLine(QStringLiteral("File selected without analysis: %1").arg(selected));
+    m_window.m_analysisPage->setModeLabel(QStringLiteral("Mode: starting automatic analysis"));
+    m_window.m_analysisPage->setOutputText(QStringLiteral("File selected. Automatic analysis is starting..."));
+    m_window.logLine(QStringLiteral("File selected; starting automatic analysis: %1").arg(selected));
+    m_window.loadPathAndAnalyze(selected);
 }
 
 void SourceSelectionController::openSourceFolder()
@@ -102,8 +94,6 @@ void SourceSelectionController::openSourceFolder()
     if (selected.isEmpty())
         return;
 
-    const bool previousOptimizationEnabled = m_window.m_dryRunAction && m_window.m_dryRunAction->isEnabled();
-    const bool previousReviewEnabled = m_window.m_applyAction && m_window.m_applyAction->isEnabled();
     m_window.m_rootFolder = selected;
     m_window.m_sourceKind = folderContainsSupportedArchives(selected)
         ? MainWindow::SourceKind::ArchiveFolder
@@ -111,13 +101,9 @@ void SourceSelectionController::openSourceFolder()
     m_window.setCurrentSourcePath(selected);
     settings.setValue(QStringLiteral("paths/lastSourcePath"), selected);
     m_window.m_analysisPage->setFolderPath(selected);
-    m_window.m_analysisPage->setModeLabel(QStringLiteral("Mode: ready to analyze"));
-    m_window.m_analysisPage->setOutputText(QStringLiteral("Folder selected. Press Analyze to start scanning."));
-    if (m_window.m_result.nodes.isEmpty())
-        m_window.refreshPages();
-    m_window.m_dryRunAction->setEnabled(previousOptimizationEnabled);
-    m_window.m_applyAction->setEnabled(previousReviewEnabled);
-    m_window.logLine(QStringLiteral("Folder selected without analysis: %1").arg(selected));
+    m_window.m_analysisPage->setModeLabel(QStringLiteral("Mode: starting automatic analysis"));
+    m_window.m_analysisPage->setOutputText(QStringLiteral("Folder selected. Automatic analysis is starting..."));
+    m_window.logLine(QStringLiteral("Folder selected; starting automatic analysis: %1").arg(selected));
+    m_window.loadPathAndAnalyze(selected);
 }
 }
-

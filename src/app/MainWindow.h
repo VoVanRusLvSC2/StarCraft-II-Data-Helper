@@ -175,6 +175,7 @@ private:
     QAction *m_exitAction = nullptr;
     AnalysisProgressDialog *m_activeProgressDialog = nullptr;
     QDialog *m_optimizationDialog = nullptr;
+    bool m_analysisInProgress = false;
     bool m_wizardApplyAutomation = false;
     QString m_wizardApplyAutomationLogPath;
 };
