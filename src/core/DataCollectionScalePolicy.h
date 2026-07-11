@@ -14,11 +14,12 @@ struct DataCollectionScaleAssessment
     QString reason;
 };
 
-inline DataCollectionScaleAssessment assessDataCollectionScale(const QVector<UnitFamily> &families)
+inline DataCollectionScaleAssessment assessDataCollectionScale(const QVector<UnitFamily> &families,
+                                                                bool aggressiveClosedProject = false)
 {
-    constexpr int kMaximumAutomaticFamilies = 1024;
-    constexpr qsizetype kMaximumAutomaticMemberships = 20000;
-    constexpr int kMaximumAutomaticFamilySize = 2048;
+    const int maximumAutomaticFamilies = aggressiveClosedProject ? 10000 : 1024;
+    const qsizetype maximumAutomaticMemberships = aggressiveClosedProject ? 100000 : 20000;
+    const int maximumAutomaticFamilySize = aggressiveClosedProject ? 50000 : 2048;
 
     DataCollectionScaleAssessment result;
     result.familyCount = families.size();
@@ -32,16 +33,17 @@ inline DataCollectionScaleAssessment assessDataCollectionScale(const QVector<Uni
         }
     }
 
-    result.automaticBatchAllowed = result.familyCount <= kMaximumAutomaticFamilies
-        && result.totalMemberships <= kMaximumAutomaticMemberships
-        && result.largestFamily <= kMaximumAutomaticFamilySize;
+    result.automaticBatchAllowed = result.familyCount <= maximumAutomaticFamilies
+        && result.totalMemberships <= maximumAutomaticMemberships
+        && result.largestFamily <= maximumAutomaticFamilySize;
     if (!result.automaticBatchAllowed)
     {
-        result.reason = QStringLiteral("Large Data Collection plan requires explicit review: %1 families, %2 memberships; largest family %3 has %4 objects.")
+        result.reason = QStringLiteral("Large Data Collection plan requires explicit review%5: %1 families, %2 memberships; largest family %3 has %4 objects.")
                             .arg(result.familyCount)
                             .arg(result.totalMemberships)
                             .arg(result.largestFamilyRoot)
-                            .arg(result.largestFamily);
+                            .arg(result.largestFamily)
+                            .arg(aggressiveClosedProject ? QStringLiteral(" even in Closed Project mode") : QString());
     }
     return result;
 }

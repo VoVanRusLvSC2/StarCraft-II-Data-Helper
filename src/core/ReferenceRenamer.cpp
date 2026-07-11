@@ -119,6 +119,8 @@ QString typedReferenceCatalogPrefix(pugi::xml_node node, const QString &fieldNam
         return QStringLiteral("CSound");
     if (combined.contains(QStringLiteral("actor")))
         return QStringLiteral("CActor");
+    if (field.contains(QStringLiteral("unit")) || nodeName == QStringLiteral("unit"))
+        return QStringLiteral("CUnit");
     return {};
 }
 
@@ -182,6 +184,14 @@ bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, 
     if (fieldName.compare(QStringLiteral("parent"), Qt::CaseInsensitive) == 0)
         return false;
     if (sc2dh::isNonReferenceCatalogFieldName(fieldName) || sc2dh::looksLikeCatalogFilterList(value))
+        return false;
+    // Generic scalar <Field value="..."> nodes are commonly enums, numbers,
+    // flags, animation names or editor metadata. Rewrite them only when the
+    // element/attribute name identifies a catalog type (Effect, Unit, Model,
+    // Validator, etc.). This prevents an object named "Moving" from corrupting
+    // <AllowedMovement value="Moving"/> during a broad batch rename.
+    if (fieldName.compare(QStringLiteral("value"), Qt::CaseInsensitive) == 0
+        && typedReferenceCatalogPrefix(node, fieldName).isEmpty())
         return false;
 
     for (pugi::xml_node current = node; current && current.type() == pugi::node_element; current = current.parent()) {

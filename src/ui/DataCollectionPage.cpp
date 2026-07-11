@@ -19,7 +19,6 @@
 #include <QPushButton>
 #include <QPropertyAnimation>
 #include <QSignalBlocker>
-#include <QSettings>
 #include <QSyntaxHighlighter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -216,11 +215,8 @@ QTableWidget *DataCollectionPage::createEntryTable() const
 
 void DataCollectionPage::setAnalysisResult(const AnalysisResult &result)
 {
-    QSettings settings;
-    const DataCollectionMode mode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString()
-            .compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
-        ? DataCollectionMode::UnitAbilWeapon : DataCollectionMode::Unit;
-    m_result = result; m_families = UnitFamilyDetector().detectCollectionFamilies(result, mode);
+    m_result = result;
+    m_families = UnitFamilyDetector().detectCollectionFamilies(result, DataCollectionMode::UnitAbilWeapon);
     m_auditSummary = auditDataCollections(result).reportText;
     const QSignalBlocker blocker(m_selector); m_selector->clear();
     for (const UnitFamily &family : m_families)

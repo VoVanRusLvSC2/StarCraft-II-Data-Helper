@@ -91,12 +91,17 @@ int main(int argc, char *argv[])
     QTextStream out(stdout);
     QTextStream err(stderr);
     const QStringList args = app.arguments();
-    if (args.size() != 2) {
-        err << "Usage: SC2DataCollectionProbe <map.SC2Map>\n";
+    const bool statsOnly = args.contains(QStringLiteral("--stats-only"));
+    QStringList archiveArgs;
+    for (int i = 1; i < args.size(); ++i)
+        if (!args.at(i).startsWith(QStringLiteral("--")))
+            archiveArgs.append(args.at(i));
+    if (archiveArgs.size() != 1) {
+        err << "Usage: SC2DataCollectionProbe [--stats-only] <map.SC2Map>\n";
         return 2;
     }
 
-    const QString archivePath = QDir::fromNativeSeparators(args.at(1));
+    const QString archivePath = QDir::fromNativeSeparators(archiveArgs.front());
     Sc2Archive archive;
     QString error;
     if (!archive.load(archivePath, &error)) {
@@ -169,6 +174,17 @@ int main(int argc, char *argv[])
             ++expectedDirect;
             expectedPairs.insert(family.collectionElementName + QChar(0x1f) + family.rootId + QChar(0x1f) + alias);
         }
+    }
+
+    if (statsOnly) {
+        out << "archive=" << archivePath << '\n';
+        out << "archive_entries=" << archive.totalEntriesCount() << '\n';
+        out << "game_data_xml_materialized=" << materializedXml << '\n';
+        out << "families_detected=" << families.size() << '\n';
+        out << "root_type_conflicts=" << skippedConflicts << '\n';
+        out << "expected_direct_from_graph=" << expectedDirect << '\n';
+        out << "expected_unique_pairs=" << expectedPairs.size() << '\n';
+        return 0;
     }
 
     DataCollectionUnitBuilder builder;

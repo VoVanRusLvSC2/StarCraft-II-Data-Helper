@@ -26,19 +26,8 @@ void MainWindowStartup::initialize()
     AudioManager::instance()->initialize();
 
     QSettings settings;
-    const QString collectionModeKey = QStringLiteral("dataCollection/mode");
-    const QString collectionModeMigrationKey = QStringLiteral("dataCollection/unitAbilWeaponDefaultMigrated");
-    if (!settings.value(collectionModeMigrationKey, false).toBool())
-    {
-        if (!settings.contains(collectionModeKey)
-            || settings.value(collectionModeKey).toString().compare(QStringLiteral("Unit"), Qt::CaseInsensitive) == 0)
-            settings.setValue(collectionModeKey, QStringLiteral("UnitAbilWeapon"));
-        settings.setValue(collectionModeMigrationKey, true);
-    }
-    else if (!settings.contains(collectionModeKey))
-    {
-        settings.setValue(collectionModeKey, QStringLiteral("UnitAbilWeapon"));
-    }
+    settings.remove(QStringLiteral("dataCollection/mode"));
+    settings.remove(QStringLiteral("dataCollection/unitAbilWeaponDefaultMigrated"));
 
     const QString duplicateMergeKey = QStringLiteral("optimization/duplicateMergeEnabled");
     const QString duplicateMergeMigrationKey = QStringLiteral("optimization/duplicateMergeDefaultEnabledMigrated");

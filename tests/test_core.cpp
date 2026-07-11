@@ -158,6 +158,7 @@ private slots:
     void deepCleanupReportsAssetAndTriggerOptimization();
     void deepCleanupReportsSemanticDuplicateReview();
     void unitFamilyDetectionAndStandardPlanning();
+    void renamePlannerStandardizesOwnedCustomCatalogTypes();
     void renamePlannerBlocksConflicts();
     void renamePlannerSkipsDependencyCatalogObjects();
     void renamePlannerSkipsActorUnitsOutsideFamilyScope();
@@ -165,6 +166,7 @@ private slots:
     void reservedCatalogFilterTokensAreNotReferences();
     void referenceRenamePreviewAndApply();
     void referenceRenameDoesNotRewriteFilterFields();
+    void referenceRenameDoesNotRewriteUntypedEnumValues();
     void referenceRenameDoesNotRewriteParentFields();
     void referenceRenameUsesTypedCatalogFields();
     void referenceRenameActorIdDoesNotRewriteUnitScope();
@@ -180,7 +182,7 @@ private slots:
     void dataCollectionTypedSplitPreservesEveryCatalogRecord();
     void dataCollectionPreservationRestoresLossyXml();
     void dataCollectionMigrationPreservesExistingTargetRecords();
-    void dataCollectionTypedSplitPreservesSharedMemberships();
+    void dataCollectionTypedSplitAssignsCanonicalSharedOwnership();
     void dataCollectionMigrationRollbackRestoresAllCollections();
     void dataCollectionPatternInheritanceValidation();
     void dataCollectionRecognizesEvoSemanticPatternNames();
@@ -635,7 +637,7 @@ void CoreTests::dataCollectionMigrationPreservesExistingTargetRecords()
     QCOMPARE(updatedXml.count("Entry=\"Abil,Launch\""), 2);
 }
 
-void CoreTests::dataCollectionTypedSplitPreservesSharedMemberships()
+void CoreTests::dataCollectionTypedSplitAssignsCanonicalSharedOwnership()
 {
     QTemporaryDir dir;
     const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Shared.xml"));
@@ -662,7 +664,7 @@ void CoreTests::dataCollectionTypedSplitPreservesSharedMemberships()
         });
     };
     QVERIFY(contains(QStringLiteral("AbilityOne"), QStringLiteral("SharedEffect")));
-    QVERIFY(contains(QStringLiteral("AbilityTwo"), QStringLiteral("SharedEffect")));
+    QVERIFY(!contains(QStringLiteral("AbilityTwo"), QStringLiteral("SharedEffect")));
     const auto ability = std::find_if(families.cbegin(), families.cend(), [](const UnitFamily &family) {
         return family.rootId == QStringLiteral("AbilityOne");
     });
@@ -672,7 +674,7 @@ void CoreTests::dataCollectionTypedSplitPreservesSharedMemberships()
     });
     QVERIFY(shared != ability->objects.cend());
     QCOMPARE(shared->role, UnitFamilyRole::Effect);
-    QCOMPARE(shared->confidence, QStringLiteral("Shared"));
+    QCOMPARE(shared->confidence, QStringLiteral("Shared canonical"));
     DataCollectionBuildRequest request; request.family = *ability;
     request.confirmNonStandard = true;
     const DataCollectionPreviewReport preview = DataCollectionUnitBuilder().preview(analysis, request, &families);
@@ -700,7 +702,7 @@ void CoreTests::dataCollectionTypedSplitPreservesSharedMemberships()
     QFile updated(path);
     QVERIFY(updated.open(QIODevice::ReadOnly));
     const QByteArray updatedXml = updated.readAll();
-    QCOMPARE(updatedXml.count("Entry=\"Effect,SharedEffect\""), 3);
+    QCOMPARE(updatedXml.count("Entry=\"Effect,SharedEffect\""), 2);
 }
 
 void CoreTests::dataCollectionMigrationRollbackRestoresAllCollections()
@@ -1210,6 +1212,33 @@ void CoreTests::unitFamilyDetectionAndStandardPlanning()
     QVERIFY(plan.manualReview.isEmpty());
 }
 
+void CoreTests::renamePlannerStandardizesOwnedCustomCatalogTypes()
+{
+    AnalysisResult analysis;
+    DataNode root;
+    root.elementName = QStringLiteral("CAbilEffectTarget");
+    root.id = QStringLiteral("MyCustomAbility");
+    analysis.nodes.append(root);
+    DataNode custom;
+    custom.elementName = QStringLiteral("CAccumulatorConstant");
+    custom.id = QStringLiteral("LegacyAccumulator");
+    analysis.nodes.append(custom);
+
+    UnitFamily family;
+    family.rootId = QStringLiteral("MyCustomAbility");
+    family.rootNodeIndex = 0;
+    family.entityType = DataCollectionEntityType::Ability;
+    family.strictOwnership = true;
+    family.objects.append({0, UnitFamilyRole::Ability, QStringLiteral("High"), QStringLiteral("root")});
+    family.objects.append({1, UnitFamilyRole::Other, QStringLiteral("High"), QStringLiteral("unique graph owner")});
+
+    const RenamePlan plan = StandardNamePlanner().plan(analysis, family, QStringLiteral("MyCustomAbility"));
+    QVERIFY2(plan.valid, qPrintable(plan.conflicts.join(QStringLiteral("; "))));
+    QCOMPARE(plan.items.size(), 1);
+    QCOMPARE(plan.items.front().oldId, QStringLiteral("LegacyAccumulator"));
+    QCOMPARE(plan.items.front().newId, QStringLiteral("MyCustomAbility@AccumulatorConstant"));
+}
+
 void CoreTests::renamePlannerBlocksConflicts()
 {
     QTemporaryDir dir;
@@ -1429,6 +1458,49 @@ void CoreTests::referenceRenameDoesNotRewriteFilterFields()
     QVERIFY(output.contains(QStringLiteral("Collide index=\"ActorVassel\"")));
     QVERIFY(output.contains(QStringLiteral("Send=\"AnimPlay Beam1 Death 0 -1.000000 -1.000000 1.500000 AsDuration\"")));
     QVERIFY(output.contains(QStringLiteral("Anim value=\"Death,00\"")));
+}
+
+void CoreTests::referenceRenameDoesNotRewriteUntypedEnumValues()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Enums.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CValidatorUnitCompareRange id=\"CustomMotionValidator\"/>"
+        "<CWeaponLegacy id=\"Weapon\"><AllowedMovement value=\"CustomMotionValidator\"/></CWeaponLegacy>"
+        "<CAbilEffectTarget id=\"Ability\"><ValidatorArray value=\"CustomMotionValidator\"/></CAbilEffectTarget>"
+        "</Catalog>")));
+
+    AnalysisResult analysis;
+    analysis.rootFolder = dir.path();
+    ScannedFileInfo scanned;
+    scanned.filePath = path;
+    scanned.isXml = true;
+    analysis.scannedFiles.append(scanned);
+    DataNode validator;
+    validator.sourceFile = path;
+    validator.elementName = QStringLiteral("CValidatorUnitCompareRange");
+    validator.id = QStringLiteral("CustomMotionValidator");
+    analysis.nodes.append(validator);
+    const int validatorIndex = 0;
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem item;
+    item.nodeIndex = validatorIndex;
+    item.oldId = QStringLiteral("CustomMotionValidator");
+    item.newId = QStringLiteral("Ability@Validator");
+    item.role = UnitFamilyRole::Validator;
+    plan.items.append(item);
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QFile rewritten(path);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    QVERIFY(output.contains(QStringLiteral("id=\"Ability@Validator\"")));
+    QVERIFY(output.contains(QStringLiteral("AllowedMovement value=\"CustomMotionValidator\"")));
+    QVERIFY(output.contains(QStringLiteral("ValidatorArray value=\"Ability@Validator\"")));
 }
 
 void CoreTests::referenceRenameDoesNotRewriteParentFields()
@@ -2341,6 +2413,12 @@ void CoreTests::standaloneModExternalConsumersAreProtected()
     QVERIFY(!rename.items.isEmpty());
     QVERIFY(rename.items.first().blocked);
     QVERIFY(!rename.items.first().selected);
+
+    analysis.externalConsumersUnknown = false;
+    const RenamePlan closedProjectRename = StandardNamePlanner().plan(analysis, family, QStringLiteral("RenamedUnit"));
+    QVERIFY(closedProjectRename.valid);
+    QVERIFY(!closedProjectRename.items.first().blocked);
+    QVERIFY(closedProjectRename.items.first().selected);
 }
 
 void CoreTests::largeDataCollectionPlansRequireExplicitReview()
@@ -2357,6 +2435,7 @@ void CoreTests::largeDataCollectionPlansRequireExplicitReview()
     QVERIFY(!assessment.automaticBatchAllowed);
     QCOMPARE(assessment.totalMemberships, qsizetype(20001));
     QVERIFY(assessment.reason.contains(QStringLiteral("explicit review")));
+    QVERIFY(assessDataCollectionScale({large}, true).automaticBatchAllowed);
 }
 
 void CoreTests::deepCleanupRemovesRedundantInheritedXmlNodes()

@@ -2,7 +2,14 @@
 
 #include "core/UnitFamilyDetector.h"
 
+#include <QHash>
 #include <QSet>
+
+struct StandardNamePlanningIndex
+{
+    QSet<QString> existingIdentities;
+    QHash<QString, QSet<QString>> scopesById;
+};
 
 struct RenamePlanItem
 {
@@ -32,6 +39,8 @@ struct RenamePlan
 class StandardNamePlanner
 {
 public:
+    StandardNamePlanningIndex buildIndex(const AnalysisResult &analysis) const;
     RenamePlan plan(const AnalysisResult &analysis, const UnitFamily &family,
-                    const QString &targetRootId, const QSet<int> &includedNodeIndices = {}) const;
+                    const QString &targetRootId, const QSet<int> &includedNodeIndices = {},
+                    const StandardNamePlanningIndex *preparedIndex = nullptr) const;
 };

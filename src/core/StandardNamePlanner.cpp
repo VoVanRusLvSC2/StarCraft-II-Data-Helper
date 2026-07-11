@@ -1,6 +1,7 @@
 #include "core/StandardNamePlanner.h"
 
 #include "core/CatalogProtection.h"
+#include "core/DataCollectionAliasMapper.h"
 
 #include <QHash>
 #include <QRegularExpression>
@@ -17,8 +18,23 @@ namespace
 
 } // namespace
 
+StandardNamePlanningIndex StandardNamePlanner::buildIndex(const AnalysisResult &analysis) const
+{
+    StandardNamePlanningIndex index;
+    for (const DataNode &node : analysis.nodes) {
+        if (node.id.isEmpty())
+            continue;
+        index.existingIdentities.insert(sc2dh::catalogIdentityKey(node.elementName, node.id));
+        const QString scope = sc2dh::catalogIdentityScope(node.elementName);
+        if (!scope.isEmpty())
+            index.scopesById[node.id.toCaseFolded()].insert(scope);
+    }
+    return index;
+}
+
 RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitFamily &family,
-                                     const QString &targetRootId, const QSet<int> &includedNodeIndices) const
+                                     const QString &targetRootId, const QSet<int> &includedNodeIndices,
+                                     const StandardNamePlanningIndex *preparedIndex) const
 {
     RenamePlan result;
     result.family = family;
@@ -39,16 +55,11 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         return sc2dh::catalogIdentityKey(elementName, id);
     };
 
-    QSet<QString> existingIdentities;
-    QHash<QString, QSet<QString>> scopesById;
-    for (const DataNode &node : analysis.nodes)
-        if (!node.id.isEmpty())
-        {
-            existingIdentities.insert(identityKey(node.elementName, node.id));
-            const QString scope = sc2dh::catalogIdentityScope(node.elementName);
-            if (!scope.isEmpty())
-                scopesById[node.id.toCaseFolded()].insert(scope);
-        }
+    const StandardNamePlanningIndex localIndex = preparedIndex ? StandardNamePlanningIndex{}
+                                                               : buildIndex(analysis);
+    const StandardNamePlanningIndex &planningIndex = preparedIndex ? *preparedIndex : localIndex;
+    const QSet<QString> &existingIdentities = planningIndex.existingIdentities;
+    const QHash<QString, QSet<QString>> &scopesById = planningIndex.scopesById;
 
     QSet<QString> familyUnitIds;
     familyUnitIds.insert(family.rootId.toCaseFolded());
@@ -61,9 +72,22 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
     }
 
     QHash<UnitFamilyRole, int> roleCounts;
-    for (const UnitFamilyObject &object : family.objects)
+    QHash<QString, int> dynamicRoleCounts;
+    const auto effectiveRoleName = [&analysis](const UnitFamilyObject &object)
+    {
+        if (object.role != UnitFamilyRole::Other
+            || object.nodeIndex < 0 || object.nodeIndex >= analysis.nodes.size())
+            return unitFamilyRoleName(object.role);
+        const QString catalog = DataCollectionAliasMapper().catalogType(analysis.nodes[object.nodeIndex].elementName);
+        return catalog.isEmpty() ? QStringLiteral("Other") : catalog;
+    };
+    for (const UnitFamilyObject &object : family.objects) {
         ++roleCounts[object.role];
+        if (object.role == UnitFamilyRole::Other)
+            ++dynamicRoleCounts[effectiveRoleName(object)];
+    }
     QHash<UnitFamilyRole, int> roleOrdinals;
+    QHash<QString, int> dynamicRoleOrdinals;
     QHash<QString, int> actorUnitOrdinals;
     QHash<QString, int> proposedCounts;
 
@@ -96,7 +120,8 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
             result.manualReview << manual;
             continue;
         }
-        if (object.role == UnitFamilyRole::ManualReview || object.role == UnitFamilyRole::Other)
+        if (object.role == UnitFamilyRole::ManualReview
+            || object.confidence.startsWith(QStringLiteral("Shared"), Qt::CaseInsensitive))
         {
             result.manualReview << object;
             continue;
@@ -109,7 +134,7 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
             result.manualReview << manual;
             continue;
         }
-        const QString role = unitFamilyRoleName(object.role);
+        const QString role = effectiveRoleName(object);
         QString expected;
         if (object.nodeIndex == family.rootNodeIndex)
         {
@@ -138,7 +163,12 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
         }
         else
         {
-            const int ordinal = ++roleOrdinals[object.role];
+            const int ordinal = object.role == UnitFamilyRole::Other
+                ? ++dynamicRoleOrdinals[role]
+                : ++roleOrdinals[object.role];
+            const int sameRoleCount = object.role == UnitFamilyRole::Other
+                ? dynamicRoleCounts.value(role)
+                : roleCounts.value(object.role);
             QString suffix;
             if (node.id.startsWith(family.rootId, Qt::CaseInsensitive))
             {
@@ -148,7 +178,7 @@ RenamePlan StandardNamePlanner::plan(const AnalysisResult &analysis, const UnitF
                 suffix.remove(QRegularExpression(QStringLiteral("[^A-Za-z0-9_]")));
             }
             if (suffix.isEmpty() || suffix.compare(family.rootId, Qt::CaseInsensitive) == 0)
-                suffix = role + (roleCounts.value(object.role) > 1 && ordinal > 1 ? QString::number(ordinal) : QString());
+                suffix = role + (sameRoleCount > 1 && ordinal > 1 ? QString::number(ordinal) : QString());
             expected = result.targetRootId + QLatin1Char('@') + suffix;
         }
         if (node.id == expected)

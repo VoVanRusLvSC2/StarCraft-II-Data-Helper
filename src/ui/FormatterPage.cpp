@@ -136,13 +136,11 @@ private:
 };
 
 DataCollectionMode configuredDataCollectionMode() {
-    QSettings settings;
-    return settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString()
-                   .compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
-        ? DataCollectionMode::UnitAbilWeapon : DataCollectionMode::Unit;
+    return DataCollectionMode::UnitAbilWeapon;
 }
 
-OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateMergeEnabled, DataCollectionMode collectionMode) {
+OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateMergeEnabled,
+                                   DataCollectionMode collectionMode, bool aggressiveClosedProject) {
     OptimizationPlanData plan;
     for (const UnusedCandidateInfo &candidate : result.unusedCandidates) {
         if (candidate.state != CandidateState::Safe
@@ -203,11 +201,13 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
                                      -1});
         }
     }
-    const QVector<UnitFamily> renameFamilies = UnitFamilyDetector().detect(result);
+    const QVector<UnitFamily> renameFamilies = UnitFamilyDetector().detectCollectionFamilies(result, collectionMode);
+    StandardNamePlanner renamePlanner;
+    const StandardNamePlanningIndex renamePlanningIndex = renamePlanner.buildIndex(result);
     for (const UnitFamily &family : renameFamilies) {
         if (family.rootId.isEmpty())
             continue;
-        const RenamePlan renamePlan = StandardNamePlanner().plan(result, family, family.rootId);
+        const RenamePlan renamePlan = renamePlanner.plan(result, family, family.rootId, {}, &renamePlanningIndex);
         for (const RenamePlanItem &item : renamePlan.items) {
             const bool usable = !item.blocked;
             const QString atChange = item.newId.contains(QLatin1Char('@'))
@@ -224,7 +224,7 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
         }
     }
     const QVector<UnitFamily> collectionFamilies = UnitFamilyDetector().detectCollectionFamilies(result, collectionMode);
-    const DataCollectionScaleAssessment collectionScale = assessDataCollectionScale(collectionFamilies);
+    const DataCollectionScaleAssessment collectionScale = assessDataCollectionScale(collectionFamilies, aggressiveClosedProject);
     constexpr int kMaximumLargePlanPreviewFamilies = 200;
     const int previewFamilyCount = collectionScale.automaticBatchAllowed
         ? collectionFamilies.size()
@@ -462,8 +462,9 @@ void FormatterPage::buildPreview() {
         watcher->deleteLater();
     });
     const DataCollectionMode collectionMode = configuredDataCollectionMode();
-    watcher->setFuture(QtConcurrent::run([result = m_result, duplicates = m_duplicateMergeEnabled, collectionMode] {
-        return calculatePlan(result, duplicates, collectionMode);
+    const bool aggressiveClosedProject = QSettings().value(QStringLiteral("optimization/closedProjectMode"), false).toBool();
+    watcher->setFuture(QtConcurrent::run([result = m_result, duplicates = m_duplicateMergeEnabled, collectionMode, aggressiveClosedProject] {
+        return calculatePlan(result, duplicates, collectionMode, aggressiveClosedProject);
     }));
 }
 void FormatterPage::updateNavigation() {

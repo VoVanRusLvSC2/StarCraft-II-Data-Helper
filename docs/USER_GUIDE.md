@@ -26,6 +26,11 @@ default collection templates), then creates a concrete collection and adds
 real `DataRecord` entries. Patterns control editor fields; they do not replace
 records for custom effects, validators, behaviors, or requirements.
 
+The application always uses the optimized `UnitAbilWeapon` layout: separate
+Unit, Ability, and Weapon roots. There is no mode selector. Shared objects get
+one canonical owner in newly generated collections, while existing legacy
+records are preserved unless explicitly reviewed.
+
 Plans above the automatic scale limit are marked **Review large plan** and are
 not selected automatically. The batch wizard previews the first 200 families
 and summarizes the remainder; use the dedicated Data Collection tab for an
@@ -60,6 +65,11 @@ When a `.SC2Mod` or `.SC2Campaign` is opened by itself, its exported catalog IDs
 and apparently unused imports may have consumers in another map. The tool keeps
 those deletions and ID renames blocked. Analyze the complete consumer project or
 perform an explicit project-wide review before changing that public interface.
+
+**Closed Project / Aggressive standardization** in Settings removes that block,
+raises the Data Collection batch limit, standardizes uniquely owned child IDs
+to `CollectionID@Role`, and then creates Patterns and Records. It can break any
+external consumer that is not updated together, so keep backups enabled.
 
 ## Building
 

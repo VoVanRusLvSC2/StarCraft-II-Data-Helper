@@ -47,6 +47,12 @@ Supported workflow:
 - default to `UnitAbilWeapon` mode, creating separate Unit, Ability, and Weapon
   collections where the data supports it
 
+`UnitAbilWeapon` is the single optimized mode used by the application. Shared
+unscoped objects receive one deterministic canonical owner instead of being
+copied into every reachable collection. Unique owned child IDs can be
+standardized as `CollectionID@Role`; remaining shared or non-standard objects
+stay linked through explicit `DataRecord` entries.
+
 The tool works with real SC2 object IDs. It can also handle non-standard naming
 when the map already contains existing custom IDs outside the `CollectionID@Child`
 style.
@@ -139,6 +145,15 @@ Very large Data Collection plans remain available for inspection but are not
 preselected. This prevents a broad family-detection result from adding tens of
 thousands of records without explicit review; the remaining safe cleanup steps
 still run for large extension mods and asset packs.
+
+### Closed Project / Aggressive standardization
+
+Settings includes an explicit **Closed Project / Aggressive standardization**
+option. It enables public ID/import changes for `.SC2Mod` and `.SC2Campaign`
+sources, uses higher reviewed batch limits, and allows the rename-first,
+Patterns-then-Records workflow. Enable it only when every consuming map/mod is
+owned and will be updated together. The command-line equivalent is
+`SC2OptimizeMaps --closed-project <archive.SC2Mod>`.
 
 When archive optimization rewrites an MPQ-backed `.SC2Map` or `.SC2Mod`, the
 archive writer also attempts a best-effort compact/repack after replacements or

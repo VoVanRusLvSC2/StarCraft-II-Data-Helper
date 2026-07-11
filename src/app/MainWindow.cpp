@@ -207,15 +207,6 @@ namespace
         return true;
     }
 
-
-    DataCollectionMode configuredDataCollectionMode()
-    {
-        QSettings settings;
-        return settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString().compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
-                   ? DataCollectionMode::UnitAbilWeapon
-                   : DataCollectionMode::Unit;
-    }
-
     enum class ArchiveReferenceStrength
     {
         None,
@@ -691,7 +682,8 @@ bool MainWindow::analyzeFolderPath(const QString &folderPath, QString *errorMess
                                                 file.isEmpty() ? QStringLiteral("Finalizing scan") : QDir::toNativeSeparators(file));
             QApplication::processEvents(); }, [this]
                                     { return m_activeProgressDialog && m_activeProgressDialog->isCancelled(); });
-    if (analyzed && sourceMayHaveExternalConsumers(folderPath))
+    const bool closedProjectMode = QSettings().value(QStringLiteral("optimization/closedProjectMode"), false).toBool();
+    if (analyzed && sourceMayHaveExternalConsumers(folderPath) && !closedProjectMode)
     {
         m_result.externalConsumersUnknown = true;
         applyExternalConsumerSafety(&m_result);
@@ -1181,7 +1173,8 @@ void MainWindow::normalizeArchiveAnalysis(AnalysisResult *analysis, const QStrin
             node.sourceFile = QDir(tempRoot).relativeFilePath(node.sourceFile);
     }
     analysis->rootFolder = archivePath;
-    analysis->externalConsumersUnknown = sourceMayHaveExternalConsumers(archivePath);
+    const bool closedProjectMode = QSettings().value(QStringLiteral("optimization/closedProjectMode"), false).toBool();
+    analysis->externalConsumersUnknown = sourceMayHaveExternalConsumers(archivePath) && !closedProjectMode;
     applyArchiveReferenceSafety(analysis);
     applyExternalConsumerSafety(analysis);
     analysis->analysisReportText = m_analyzer.buildAnalysisReport(*analysis);

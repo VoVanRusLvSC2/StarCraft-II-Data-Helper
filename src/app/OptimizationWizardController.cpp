@@ -5,6 +5,7 @@
 
 #include "core/ArchiveReferenceRewriter.h"
 #include "core/DeepCleanupService.h"
+#include "core/ExternalConsumerSafetyPolicy.h"
 #include "core/StandardNamePlanner.h"
 #include "core/UnitFamilyDetector.h"
 
@@ -25,10 +26,7 @@ namespace
 {
     DataCollectionMode configuredDataCollectionMode()
     {
-        QSettings settings;
-        return settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString().compare(QStringLiteral("UnitAbilWeapon"), Qt::CaseInsensitive) == 0
-                   ? DataCollectionMode::UnitAbilWeapon
-                   : DataCollectionMode::Unit;
+        return DataCollectionMode::UnitAbilWeapon;
     }
 
     bool persistentBackupsEnabledForUi()
@@ -159,9 +157,16 @@ void OptimizationWizardController::applyPlan()
     int automaticFollowUpCleanupChanges = 0;
     int serviceSkippedRecommendations = 0;
 
-    const auto reloadWorkingAnalysis = [window](const QString &rootFolder, AnalysisResult *analysis, QString *errorMessage)
+    const bool protectExternalConsumers = window->m_result.externalConsumersUnknown;
+    const auto reloadWorkingAnalysis = [window, protectExternalConsumers](const QString &rootFolder, AnalysisResult *analysis, QString *errorMessage)
     {
-        return window->m_analyzer.analyzeFolder(rootFolder, window->m_whitelistIds, analysis, errorMessage);
+        if (!window->m_analyzer.analyzeFolder(rootFolder, window->m_whitelistIds, analysis, errorMessage))
+            return false;
+        if (protectExternalConsumers) {
+            analysis->externalConsumersUnknown = true;
+            applyExternalConsumerSafety(analysis);
+        }
+        return true;
     };
     const auto groupKey = [](const WizardNodeRef &ref)
     {
@@ -224,7 +229,8 @@ void OptimizationWizardController::applyPlan()
         if (renameByFamily.isEmpty())
             return combined;
 
-        const QVector<UnitFamily> families = UnitFamilyDetector().detect(analysis);
+        const QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(
+            analysis, configuredDataCollectionMode());
         QHash<QString, UnitFamily> familyByRoot;
         for (const UnitFamily &family : families)
             familyByRoot.insert(family.rootId, family);
@@ -234,6 +240,7 @@ void OptimizationWizardController::applyPlan()
             existingIds.insert(node.id);
 
         StandardNamePlanner planner;
+        const StandardNamePlanningIndex planningIndex = planner.buildIndex(analysis);
         QVector<RenamePlanItem> candidates;
         QSet<int> selectedNodes;
         QHash<QString, int> proposedNewCounts;
@@ -257,7 +264,8 @@ void OptimizationWizardController::applyPlan()
             if (includedNodeIndices.isEmpty())
                 continue;
 
-            const RenamePlan plan = planner.plan(analysis, familyIt.value(), familyIt.value().rootId, includedNodeIndices);
+            const RenamePlan plan = planner.plan(analysis, familyIt.value(), familyIt.value().rootId,
+                                                 includedNodeIndices, &planningIndex);
             if (!plan.valid)
             {
                 if (planWarnings)

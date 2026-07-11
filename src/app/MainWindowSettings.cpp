@@ -5,7 +5,6 @@
 #include "app/ModalBackdrop.h"
 
 #include <QCheckBox>
-#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEasingCurve>
@@ -16,6 +15,7 @@
 #include <QLinearGradient>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPixmap>
@@ -379,17 +379,18 @@ void MainWindowSettings::show()
         QStringLiteral("Create backup files before applying changes"),
         settings.value(QStringLiteral("backup/enabled"), true).toBool(),
         QStringLiteral("When disabled, SC2 archives and folders are edited without creating persistent .bak or backup_ copies."));
+    const bool savedClosedProjectMode = settings.value(QStringLiteral("optimization/closedProjectMode"), false).toBool();
+    auto *closedProjectCheck = checkBoxRow(
+        QStringLiteral("Closed Project / Aggressive standardization"),
+        savedClosedProjectMode,
+        QStringLiteral("Allows public SC2Mod/SC2Campaign IDs and imports to change. Enable only when every consuming map/mod is included in your project and will be updated together."));
+    auto *closedProjectWarning = new QLabel(
+        QStringLiteral("WARNING: this mode can break external maps that depend on renamed catalog IDs or removed imports. A backup is strongly recommended."),
+        &dialog);
+    closedProjectWarning->setObjectName(QStringLiteral("inspectorSubtitle"));
+    closedProjectWarning->setWordWrap(true);
     auto *startFullscreenCheck = checkBoxRow(QStringLiteral("Start in full screen"),
                                              settings.value(QStringLiteral("ui/startFullscreen"), true).toBool());
-    auto *collectionModeLabel = new QLabel(QStringLiteral("DATA COLLECTION MODE"), &dialog);
-    collectionModeLabel->setObjectName(QStringLiteral("panelTitle"));
-    auto *collectionMode = new QComboBox(&dialog);
-    collectionMode->addItem(QStringLiteral("Unit - one collection per unit family"), QStringLiteral("Unit"));
-    collectionMode->addItem(QStringLiteral("UnitAbilWeapon - separate Unit, Ability and Weapon collections"), QStringLiteral("UnitAbilWeapon"));
-    const QString savedCollectionMode = settings.value(QStringLiteral("dataCollection/mode"), QStringLiteral("UnitAbilWeapon")).toString();
-    collectionMode->setCurrentIndex(qMax(0, collectionMode->findData(savedCollectionMode)));
-    collectionMode->setToolTip(QStringLiteral("Unit keeps the current behavior. UnitAbilWeapon creates separate collections like Gargantua, Gargantua_Jump and Gargantua_Weapon."));
-
     auto *body = new QHBoxLayout;
     body->setContentsMargins(0, 0, 0, 0);
     body->setSpacing(12);
@@ -400,7 +401,6 @@ void MainWindowSettings::show()
     navigation->setFocusPolicy(Qt::NoFocus);
     navigation->addItem(QStringLiteral("Interface"));
     navigation->addItem(QStringLiteral("Optimization"));
-    navigation->addItem(QStringLiteral("Data Collection"));
     body->addWidget(navigation);
 
     auto *pages = new QStackedWidget(&dialog);
@@ -434,33 +434,40 @@ void MainWindowSettings::show()
     auto *optimizationPage = makePage(QStringLiteral("OPTIMIZATION SETTINGS"));
     optimizationPage->addWidget(duplicatesCheck);
     optimizationPage->addWidget(backupCheck);
+    optimizationPage->addWidget(closedProjectCheck);
+    optimizationPage->addWidget(closedProjectWarning);
     optimizationPage->addStretch(1);
-
-    auto *collectionPage = makePage(QStringLiteral("DATA COLLECTION MODE"));
-    collectionPage->addWidget(collectionModeLabel);
-    collectionPage->addWidget(collectionMode);
-    collectionPage->addStretch(1);
 
     navigation->setCurrentRow(0);
     QObject::connect(navigation, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
     layout->addLayout(body, 1);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    bool reanalyzeAfterSave = false;
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]()
             {
+        if (!savedClosedProjectMode && closedProjectCheck->isChecked()
+            && QMessageBox::warning(&dialog,
+                                    QStringLiteral("Enable Closed Project mode?"),
+                                    QStringLiteral("This allows public SC2Mod/SC2Campaign IDs and imports to change. External maps that are not updated together can break. Enable aggressive standardization?"),
+                                    QMessageBox::Yes | QMessageBox::No,
+                                    QMessageBox::No) != QMessageBox::Yes)
+            return;
         settings.setValue(QStringLiteral("ui/buttonSounds"), soundCheck->isChecked());
         settings.setValue(QStringLiteral("ui/buttonAnimations"), animationCheck->isChecked());
         settings.setValue(QStringLiteral("ui/backgroundGlows"), backgroundGlowCheck->isChecked());
         settings.setValue(QStringLiteral("optimization/duplicateMergeEnabled"), duplicatesCheck->isChecked());
+        settings.setValue(QStringLiteral("optimization/closedProjectMode"), closedProjectCheck->isChecked());
         settings.setValue(QStringLiteral("backup/enabled"), backupCheck->isChecked());
         settings.setValue(QStringLiteral("ui/startFullscreen"), startFullscreenCheck->isChecked());
-        settings.setValue(QStringLiteral("dataCollection/mode"), collectionMode->currentData().toString());
         AudioManager::setMusicSettings(musicCheck->isChecked(), musicSlider->value() / 100.0);
         m_window.setDuplicateMergeEnabled(duplicatesCheck->isChecked());
         if (auto *root = m_window.findChild<QWidget *>(QStringLiteral("workspaceRoot")))
             root->update();
         if (!m_window.m_result.nodes.isEmpty())
             m_window.refreshPages();
+        reanalyzeAfterSave = savedClosedProjectMode != closedProjectCheck->isChecked()
+            && !m_window.m_currentSourcePath.isEmpty();
         dialog.accept(); });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     QObject::connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::reject);
@@ -469,5 +476,7 @@ void MainWindowSettings::show()
     ScopedModalBackdrop backdrop(&m_window);
     animateModalOpen(&dialog);
     dialog.exec();
+    if (reanalyzeAfterSave)
+        m_window.loadPathAndAnalyze(m_window.m_currentSourcePath);
 }
 }

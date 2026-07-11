@@ -10,6 +10,9 @@
 
 #include <pugixml.hpp>
 
+#include <algorithm>
+#include <utility>
+
 namespace {
 
 void traceCollectionDetect(const QString &stage, const QString &detail = {})
@@ -118,6 +121,98 @@ UnitFamilyRole roleFromNode(const DataNode &node, const QString &root, QString *
     if (type.startsWith(QStringLiteral("cbeam"))) return UnitFamilyRole::Beam;
     if (id.startsWith(rootLower) || id.endsWith(rootLower)) return UnitFamilyRole::Other;
     return UnitFamilyRole::ManualReview;
+}
+
+int sharedOwnerEntityPriority(UnitFamilyRole role, DataCollectionEntityType entity)
+{
+    const bool abilityData = role == UnitFamilyRole::Effect
+        || role == UnitFamilyRole::Behavior
+        || role == UnitFamilyRole::Validator
+        || role == UnitFamilyRole::Requirement
+        || role == UnitFamilyRole::RequirementNode
+        || role == UnitFamilyRole::Button;
+    if (abilityData) {
+        if (entity == DataCollectionEntityType::Ability) return 0;
+        if (entity == DataCollectionEntityType::Weapon) return 1;
+        return 2;
+    }
+    if (entity == DataCollectionEntityType::Unit) return 0;
+    if (entity == DataCollectionEntityType::Ability) return 1;
+    return 2;
+}
+
+void canonicalizeSharedFamilyObjects(QVector<UnitFamily> *families, const QVector<DataNode> &nodes)
+{
+    if (!families)
+        return;
+    QHash<int, QVector<int>> familyIndicesByNode;
+    for (int familyIndex = 0; familyIndex < families->size(); ++familyIndex)
+        for (const UnitFamilyObject &object : families->at(familyIndex).objects)
+            familyIndicesByNode[object.nodeIndex].append(familyIndex);
+
+    QHash<int, QSet<int>> removalsByFamily;
+    for (auto it = familyIndicesByNode.cbegin(); it != familyIndicesByNode.cend(); ++it) {
+        QVector<int> owners = it.value();
+        std::sort(owners.begin(), owners.end());
+        owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+        if (owners.size() < 2 || it.key() < 0 || it.key() >= nodes.size())
+            continue;
+
+        const DataNode &node = nodes.at(it.key());
+        int canonicalFamily = owners.front();
+        int canonicalScopeLength = -1;
+        int canonicalPriority = 100;
+        QString canonicalRoot;
+        UnitFamilyRole sharedRole = UnitFamilyRole::Other;
+        for (int familyIndex : owners) {
+            const UnitFamily &family = families->at(familyIndex);
+            const auto objectIt = std::find_if(family.objects.cbegin(), family.objects.cend(), [&](const UnitFamilyObject &object) {
+                return object.nodeIndex == it.key();
+            });
+            const UnitFamilyRole role = objectIt == family.objects.cend() ? UnitFamilyRole::Other : objectIt->role;
+            const bool scoped = node.id.compare(family.rootId, Qt::CaseInsensitive) == 0
+                || node.id.startsWith(family.rootId + QLatin1Char('@'), Qt::CaseInsensitive)
+                || node.id.startsWith(family.rootId + QLatin1Char('_'), Qt::CaseInsensitive);
+            const int scopeLength = scoped ? family.rootId.size() : -1;
+            const int priority = sharedOwnerEntityPriority(role, family.entityType);
+            const bool better = scopeLength > canonicalScopeLength
+                || (scopeLength == canonicalScopeLength && priority < canonicalPriority)
+                || (scopeLength == canonicalScopeLength && priority == canonicalPriority
+                    && (canonicalRoot.isEmpty() || family.rootId.compare(canonicalRoot, Qt::CaseInsensitive) < 0));
+            if (better) {
+                canonicalFamily = familyIndex;
+                canonicalScopeLength = scopeLength;
+                canonicalPriority = priority;
+                canonicalRoot = family.rootId;
+                sharedRole = role;
+            }
+        }
+
+        for (int familyIndex : owners)
+            if (familyIndex != canonicalFamily)
+                removalsByFamily[familyIndex].insert(it.key());
+        for (UnitFamilyObject &object : (*families)[canonicalFamily].objects) {
+            if (object.nodeIndex != it.key())
+                continue;
+            object.role = sharedRole;
+            object.confidence = QStringLiteral("Shared canonical");
+            object.reason += QStringLiteral("; canonical owner selected from %1 reachable collections")
+                                 .arg(owners.size());
+            break;
+        }
+    }
+
+    for (int familyIndex = 0; familyIndex < families->size(); ++familyIndex) {
+        const QSet<int> removals = removalsByFamily.value(familyIndex);
+        if (removals.isEmpty())
+            continue;
+        QVector<UnitFamilyObject> kept;
+        kept.reserve((*families)[familyIndex].objects.size() - removals.size());
+        for (const UnitFamilyObject &object : std::as_const((*families)[familyIndex].objects))
+            if (!removals.contains(object.nodeIndex))
+                kept.append(object);
+        (*families)[familyIndex].objects = kept;
+    }
 }
 
 } // namespace
@@ -652,11 +747,12 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
         buildForEntity(DataCollectionEntityType::Unit);
         buildForEntity(DataCollectionEntityType::Ability);
         buildForEntity(DataCollectionEntityType::Weapon);
+        canonicalizeSharedFamilyObjects(&result, analysis.nodes);
         traceCollectionDetect(QStringLiteral("all_entities_done"),
                               QStringLiteral("families=%1").arg(result.size()));
-        // No-loss collection generation is many-to-many by design.  If a shared
-        // catalog object is reachable from several roots, keep it in every
-        // reachable collection instead of doing an expensive single-owner pass.
+        // Shared unscoped objects receive one deterministic canonical owner.
+        // Existing legacy records remain preserved by the builder, but new plans
+        // do not multiply the same object across every reachable collection.
         std::sort(result.begin(), result.end(), [](const UnitFamily &left, const UnitFamily &right) {
             const int idOrder = left.rootId.compare(right.rootId, Qt::CaseInsensitive);
             return idOrder != 0 ? idOrder < 0 : int(left.entityType) < int(right.entityType);
