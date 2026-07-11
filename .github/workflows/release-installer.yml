@@ -3,10 +3,18 @@ name: Build Windows installer
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag that receives the installer
+        required: true
+        default: v2.1.0
 
 jobs:
   installer:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
@@ -17,13 +25,13 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -S . -B build -G "Ninja Multi-Config"
       - name: Build
         run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums
       - name: Stage release files
         shell: pwsh
         run: |
-          $version = '${{ github.event.release.tag_name }}'.TrimStart('v')
+          $version = $env:RELEASE_TAG.TrimStart('v')
           $stage = "dist/SC2DataHelper-$version-win64"
           New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item build/Release/SC2DataHelper.exe $stage/
@@ -37,16 +45,16 @@ jobs:
       - name: Deploy Qt
         shell: pwsh
         run: |
-          $version = '${{ github.event.release.tag_name }}'.TrimStart('v')
+          $version = $env:RELEASE_TAG.TrimStart('v')
           windeployqt --release --no-translations --compiler-runtime "dist/SC2DataHelper-$version-win64/SC2DataHelper.exe"
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Build installer
         shell: pwsh
         run: |
-          $version = '${{ github.event.release.tag_name }}'.TrimStart('v')
+          $version = $env:RELEASE_TAG.TrimStart('v')
           iscc "/DAppVersion=$version" packaging/SC2DataHelper.iss
       - name: Upload installer
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.event.release.tag_name }} dist/SC2DataHelper-*-setup.exe --clobber
+        run: gh release upload $env:RELEASE_TAG dist/SC2DataHelper-*-setup.exe --clobber
