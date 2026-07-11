@@ -16,6 +16,7 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("SC2 Data Helper"));
+    QApplication::setApplicationVersion(QStringLiteral("2.0.0"));
     QApplication::setOrganizationName(QStringLiteral("SC2DataHelper"));
     QApplication::setOrganizationDomain(QStringLiteral("local"));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));

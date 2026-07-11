@@ -10,7 +10,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Test Concurrent)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Test Concurrent Network)
 
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -49,6 +49,8 @@ target_sources(SC2DataHelper PRIVATE
     src/app/MainWindowSettings.cpp
     src/app/MainWindowStartup.h
     src/app/MainWindowStartup.cpp
+    src/app/UpdateChecker.h
+    src/app/UpdateChecker.cpp
     src/app/MainWindowUiBuilder.h
     src/app/MainWindowUiBuilder.cpp
     src/app/MainWindowUiSupport.h
@@ -171,6 +173,7 @@ target_include_directories(SC2DataHelper PRIVATE src)
 target_link_libraries(SC2DataHelper PRIVATE
     Qt6::Widgets
     Qt6::Concurrent
+    Qt6::Network
     spdlog::spdlog_header_only
     pugixml
     StormLib::storm

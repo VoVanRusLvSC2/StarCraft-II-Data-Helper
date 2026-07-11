@@ -3,8 +3,12 @@
 #include "app/AudioManager.h"
 #include "app/MainWindow.h"
 #include "app/Sc2FileDialogs.h"
+#include "app/UpdateChecker.h"
 
+#include <QDesktopServices>
+#include <QMessageBox>
 #include <QSettings>
+#include <QTimer>
 
 namespace sc2dh::app
 {
@@ -60,6 +64,17 @@ void MainWindowStartup::initialize()
         m_window.logLine(QStringLiteral("Config load skipped: %1").arg(errorMessage));
     }
     m_window.updateFullscreenActionText();
-}
-}
 
+    // Do not block startup. Network errors are intentionally silent; an
+    // update check must never prevent the editor from opening a map.
+    auto *checker = new UpdateChecker(&m_window);
+    QObject::connect(checker, &UpdateChecker::updateAvailable, &m_window,
+                     [&window = m_window](const QString &version, const QUrl &url) {
+        if (QMessageBox::question(&window, QStringLiteral("Update available"),
+                                  QStringLiteral("SC2 Data Helper %1 is available. Open the GitHub release page?").arg(version))
+            == QMessageBox::Yes)
+            QDesktopServices::openUrl(url);
+    });
+    QTimer::singleShot(2500, checker, &UpdateChecker::check);
+}
+}

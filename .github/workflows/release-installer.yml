@@ -1,0 +1,34 @@
+name: Build Windows installer
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: lukka/get-cmake@latest
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - name: Build
+        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums
+      - name: Stage release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/SC2DataHelper-${{ github.event.release.tag_name }}-win64 | Out-Null
+          Copy-Item build/Release/*.exe dist/SC2DataHelper-${{ github.event.release.tag_name }}-win64/
+          Copy-Item resources dist/SC2DataHelper-${{ github.event.release.tag_name }}-win64/resources -Recurse
+          Copy-Item LICENSE dist/SC2DataHelper-${{ github.event.release.tag_name }}-win64/
+      - name: Deploy Qt
+        run: windeployqt --release --no-translations dist/SC2DataHelper-${{ github.event.release.tag_name }}-win64/SC2DataHelper.exe
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Build installer
+        run: iscc packaging/SC2DataHelper.iss
+      - name: Upload installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.event.release.tag_name }} dist/SC2DataHelper-*-setup.exe --clobber
