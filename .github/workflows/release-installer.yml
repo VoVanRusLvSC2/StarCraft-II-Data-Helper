@@ -1,5 +1,8 @@
 name: Build Windows installer
 
+permissions:
+  contents: write
+
 on:
   release:
     types: [published]
