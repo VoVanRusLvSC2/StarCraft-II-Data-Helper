@@ -71,6 +71,13 @@ target_sources(SC2DataHelper PRIVATE
     src/app/ThemeManager.cpp
     src/core/Sc2Archive.h
     src/core/Sc2Archive.cpp
+    src/core/M3Model.h
+    src/core/M3ModelParser.h
+    src/core/M3ModelParser.cpp
+    src/core/M3MaterialResolver.h
+    src/core/M3MaterialResolver.cpp
+    src/core/M3AnimationPlayer.h
+    src/core/M3AnimationPlayer.cpp
     src/core/XmlLoader.h
     src/core/XmlLoader.cpp
     src/core/DataNode.h
