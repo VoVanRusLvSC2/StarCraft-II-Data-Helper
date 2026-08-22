@@ -103,6 +103,49 @@ namespace
         return match.hasMatch() ? match.captured(1) : QString();
     }
 
+    QString attributeValue(const DataNode &node, const QString &name)
+    {
+        const auto exact = node.attributes.constFind(name);
+        if (exact != node.attributes.cend())
+            return exact.value();
+        for (auto it = node.attributes.cbegin(); it != node.attributes.cend(); ++it)
+            if (it.key().compare(name, Qt::CaseInsensitive) == 0)
+                return it.value();
+        return {};
+    }
+
+    void appendUniqueReference(DataNode *node, const QString &reference)
+    {
+        if (!node || reference.trimmed().isEmpty() || node->referencedIds.contains(reference))
+            return;
+        node->referencedIds.append(reference);
+    }
+
+    void appendImplicitActorUnitReferences(AnalysisResult *result)
+    {
+        if (!result)
+            return;
+        QHash<QString, QStringList> actorIdsByUnitId;
+        for (const DataNode &node : result->nodes)
+        {
+            if (!node.elementName.startsWith(QStringLiteral("CActorUnit"), Qt::CaseInsensitive)
+                || node.id.isEmpty())
+                continue;
+            const QString unitName = attributeValue(node, QStringLiteral("unitName")).trimmed();
+            if (unitName.isEmpty())
+                continue;
+            actorIdsByUnitId[unitName].append(node.id);
+        }
+        for (DataNode &node : result->nodes)
+        {
+            if (!node.elementName.startsWith(QStringLiteral("CUnit"), Qt::CaseInsensitive))
+                continue;
+            for (const QString &actorId : actorIdsByUnitId.value(node.id))
+                appendUniqueReference(&node, actorId);
+            std::sort(node.referencedIds.begin(), node.referencedIds.end());
+        }
+    }
+
 }
 
 bool FolderAnalyzer::isXmlFile(const QFileInfo &info) const
@@ -444,6 +487,7 @@ bool FolderAnalyzer::populateReferenceIds(AnalysisResult *result,
         node.referencedIds = sc2dh::extractCatalogLinkReferences(node).values();
         std::sort(node.referencedIds.begin(), node.referencedIds.end());
     }
+    appendImplicitActorUnitReferences(result);
     return true;
 }
 

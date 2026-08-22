@@ -226,6 +226,7 @@ private slots:
     void mergeRollbackOnFailure();
     void unusedSafetyClassification();
     void unusedReachabilityDistinguishesStatesAndPaths();
+    void unusedReachabilityUsesActorUnitNameWithoutTestRefs();
     void unusedObjectChainsCoverFullCatalogGraphAndPlacementRoots();
     void unusedDeletionRemovesWholeUnusedChain();
     void unusedDeletionSkipsPartialChainWithoutFailingBatch();
@@ -2611,6 +2612,70 @@ void CoreTests::unusedReachabilityDistinguishesStatesAndPaths()
     QVERIFY(analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("DisconnectedUnit")].nodeIndex));
     QCOMPARE(byId[QStringLiteral("CollectionOnly")].usageState, UsageState::Disconnected);
     QCOMPARE(byId[QStringLiteral("CollectionOnly")].dataCollectionReferences, 1);
+}
+
+void CoreTests::unusedReachabilityUsesActorUnitNameWithoutTestRefs()
+{
+    struct EnvGuard
+    {
+        bool had = qEnvironmentVariableIsSet("SC2DH_ENABLE_TEST_REFS");
+        QByteArray previous = qgetenv("SC2DH_ENABLE_TEST_REFS");
+        ~EnvGuard()
+        {
+            if (had)
+                qputenv("SC2DH_ENABLE_TEST_REFS", previous);
+            else
+                qunsetenv("SC2DH_ENABLE_TEST_REFS");
+        }
+    } guard;
+    qunsetenv("SC2DH_ENABLE_TEST_REFS");
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dataPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("ActorUnitName.xml"));
+    const QString objectsPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Objects"));
+    QVERIFY(writeTextFile(objectsPath, QByteArrayLiteral(
+        "ObjectUnit { Id = 1 Unit = \"HeroUnit\" Position = (10, 10, 0) }\n")));
+    QVERIFY(writeTextFile(dataPath, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"HeroUnit\"/>"
+        "<CActorUnit id=\"HeroActor\" unitName=\"HeroUnit\" Model=\"HeroModel\"><SoundArray value=\"HeroSound\"/></CActorUnit>"
+        "<CModel id=\"HeroModel\"/>"
+        "<CSound id=\"HeroSound\"/>"
+        "<CUnit id=\"DeadUnit\"/>"
+        "<CActorUnit id=\"DeadActor\" unitName=\"DeadUnit\" Model=\"DeadModel\"/>"
+        "<CModel id=\"DeadModel\"/>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    QHash<QString, int> indexById;
+    QHash<QString, UnusedCandidateInfo> byId;
+    for (int i = 0; i < analysis.nodes.size(); ++i)
+        indexById.insert(analysis.nodes.at(i).id, i);
+    for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates)
+        byId.insert(analysis.nodes.at(candidate.nodeIndex).id, candidate);
+
+    const QStringList usedVisualChain = {
+        QStringLiteral("HeroUnit"), QStringLiteral("HeroActor"),
+        QStringLiteral("HeroModel"), QStringLiteral("HeroSound")
+    };
+    for (const QString &id : usedVisualChain) {
+        QVERIFY2(byId.contains(id), qPrintable(id));
+        QVERIFY2(byId.value(id).usageState == UsageState::Used
+                     || byId.value(id).usageState == UsageState::Blocked,
+                 qPrintable(id));
+        QVERIFY2(!analysis.possibleUnusedNodeIndices.contains(indexById.value(id)), qPrintable(id));
+    }
+    QVERIFY(analysis.nodes.at(indexById.value(QStringLiteral("HeroUnit"))).referencedIds.contains(QStringLiteral("HeroActor")));
+    QVERIFY(analysis.nodes.at(indexById.value(QStringLiteral("HeroActor"))).referencedIds.contains(QStringLiteral("HeroModel")));
+    QVERIFY(analysis.nodes.at(indexById.value(QStringLiteral("HeroActor"))).referencedIds.contains(QStringLiteral("HeroSound")));
+
+    QCOMPARE(byId.value(QStringLiteral("DeadActor")).state, CandidateState::Safe);
+    QCOMPARE(byId.value(QStringLiteral("DeadModel")).state, CandidateState::Safe);
 }
 
 void CoreTests::unusedObjectChainsCoverFullCatalogGraphAndPlacementRoots()
