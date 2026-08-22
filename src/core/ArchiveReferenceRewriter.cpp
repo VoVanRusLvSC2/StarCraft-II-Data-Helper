@@ -256,4 +256,65 @@ bool rewriteArchiveReferenceFiles(const QString &rootFolder,
     return true;
 }
 
+bool previewArchiveReferenceFileRewrites(const QString &rootFolder,
+                                         const QStringList &relativeFiles,
+                                         const QHash<QString, QString> &renames,
+                                         ArchiveReferenceRewriteReport *report,
+                                         QString *errorMessage)
+{
+    if (report)
+        *report = {};
+    if (renames.isEmpty())
+        return true;
+
+    QSet<QString> seen;
+    for (QString relative : relativeFiles) {
+        relative = QDir::cleanPath(relative).replace('\\', '/');
+        if (relative.isEmpty() || seen.contains(relative))
+            continue;
+        seen.insert(relative);
+        if (relative.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(relative)) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unsafe archive reference entry path: %1").arg(relative);
+            return false;
+        }
+
+        QFile file(QDir(rootFolder).absoluteFilePath(relative));
+        if (!file.open(QIODevice::ReadOnly))
+            continue;
+        const QByteArray original = file.readAll();
+        file.close();
+
+        if (!containsTokenBytes(original, renames))
+            continue;
+
+        int replacements = 0;
+        QByteArray rewritten;
+        if (looksLikeUtf8Text(original)) {
+            rewritten = rewriteText(QString::fromUtf8(original), renames, &replacements).toUtf8();
+        } else if (looksLikeUtf16LeText(original)) {
+            const auto *data = reinterpret_cast<const char16_t *>(original.constData());
+            const QString text = QString::fromUtf16(data, original.size() / 2);
+            const QString changed = rewriteText(text, renames, &replacements);
+            rewritten = QByteArray(reinterpret_cast<const char *>(changed.utf16()), changed.size() * 2);
+        } else {
+            if (report)
+                report->blockedFiles << relative;
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Archive reference entry contains renamed IDs but is not safe text: %1").arg(relative);
+            return false;
+        }
+
+        if (replacements <= 0 || rewritten == original)
+            continue;
+        if (report) {
+            report->changedFiles << relative;
+            report->replacements += replacements;
+        }
+    }
+    if (report)
+        report->changedFiles.removeDuplicates();
+    return true;
+}
+
 } // namespace sc2dh

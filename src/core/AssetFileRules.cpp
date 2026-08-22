@@ -71,19 +71,34 @@ bool isMapPreviewImage(const QFileInfo &info, const QString &relative)
         || normalized.contains(QStringLiteral("/loading/"));
 }
 
+bool isCatalogOrServiceXml(const QString &relative)
+{
+    const QString normalized = QDir::cleanPath(relative).replace('\\', '/').toLower();
+    const QString fileName = QFileInfo(normalized).fileName().toLower();
+    if (!fileName.endsWith(QStringLiteral(".xml")))
+        return false;
+    if (fileName == QStringLiteral("gamedata.xml"))
+        return true;
+    return normalized.startsWith(QStringLiteral("gamedata/"))
+        || normalized.contains(QStringLiteral("/gamedata/"))
+        || normalized.startsWith(QStringLiteral("base.sc2data/gamedata/"))
+        || normalized.contains(QStringLiteral("/base.sc2data/gamedata/"));
+}
+
 bool isAssetFile(const QFileInfo &info, const QString &relative)
 {
     static const QSet<QString> extensions = {
         QStringLiteral("dds"), QStringLiteral("tga"), QStringLiteral("png"), QStringLiteral("jpg"),
-        QStringLiteral("jpeg"), QStringLiteral("bmp"), QStringLiteral("m3"), QStringLiteral("ogg"),
+        QStringLiteral("jpeg"), QStringLiteral("bmp"), QStringLiteral("m3"), QStringLiteral("m3a"),
+        QStringLiteral("m3h"), QStringLiteral("m3skl"), QStringLiteral("ogg"),
         QStringLiteral("wav"), QStringLiteral("mp3"), QStringLiteral("webm"), QStringLiteral("mp4"),
         QStringLiteral("fxa"), QStringLiteral("fxs"), QStringLiteral("fxh"), QStringLiteral("layout"),
-        QStringLiteral("sc2layout"), QStringLiteral("txt")
+        QStringLiteral("sc2layout"), QStringLiteral("xml"), QStringLiteral("txt")
     };
     if (info.exists() && !info.isFile())
         return false;
     if (isBackupOrTrashName(relative) || isLocalizationFile(relative) || isEditorManagedMapFile(relative)
-        || isMapPreviewImage(info, relative))
+        || isMapPreviewImage(info, relative) || isCatalogOrServiceXml(relative))
         return false;
     return extensions.contains(info.suffix().toLower());
 }

@@ -22,6 +22,12 @@ bool rewriteArchiveReferenceFiles(const QString &rootFolder,
                                   ArchiveReferenceRewriteReport *report,
                                   QString *errorMessage);
 
+bool previewArchiveReferenceFileRewrites(const QString &rootFolder,
+                                         const QStringList &relativeFiles,
+                                         const QHash<QString, QString> &renames,
+                                         ArchiveReferenceRewriteReport *report,
+                                         QString *errorMessage);
+
 QHash<QString, QString> unambiguousArchiveReferenceRenames(const AnalysisResult &analysis,
                                                            const QHash<QString, QString> &renames,
                                                            QStringList *skippedIds = nullptr);

@@ -1,5 +1,6 @@
 #include "core/MergeService.h"
 
+#include "core/ArchiveReferenceRewriter.h"
 #include "core/BackupManager.h"
 #include "core/CatalogProtection.h"
 #include "core/FolderAnalyzer.h"
@@ -82,6 +83,30 @@ bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, 
 QString relativePath(const QString &root, const QString &file)
 {
     return QDir(root).relativeFilePath(file);
+}
+
+QStringList nonXmlReferenceFiles(const AnalysisResult &analysis)
+{
+    QStringList files;
+    for (const ScannedFileInfo &info : analysis.scannedFiles) {
+        if (info.isXml)
+            continue;
+        QString relative = QDir(analysis.rootFolder).relativeFilePath(info.filePath);
+        relative = QDir::cleanPath(relative).replace('\\', '/');
+        if (relative.isEmpty() || relative.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(relative))
+            continue;
+        files << relative;
+    }
+    files.removeDuplicates();
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+QHash<QString, QString> archiveSafeRedirects(const AnalysisResult &analysis,
+                                             const QHash<QString, QString> &redirects,
+                                             QStringList *skippedIds)
+{
+    return sc2dh::unambiguousArchiveReferenceRenames(analysis, redirects, skippedIds);
 }
 
 bool loadFile(const QString &path, QByteArray *bytes, QString *error)
@@ -309,6 +334,31 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
         preview.referencesRedirected += stats.references;
         preview.changes += stats.changes;
     }
+
+    QStringList skippedArchiveIds;
+    const QHash<QString, QString> externalRedirects = archiveSafeRedirects(analysis, redirects, &skippedArchiveIds);
+    if (!skippedArchiveIds.isEmpty()) {
+        preview.changes << QStringLiteral("Skipped non-XML reference rewrites for ambiguous catalog IDs: %1.")
+                                .arg(skippedArchiveIds.join(QStringLiteral(", ")));
+    }
+    sc2dh::ArchiveReferenceRewriteReport archiveReport;
+    QString archiveError;
+    if (!sc2dh::previewArchiveReferenceFileRewrites(analysis.rootFolder,
+                                                   nonXmlReferenceFiles(analysis),
+                                                   externalRedirects,
+                                                   &archiveReport,
+                                                   &archiveError)) {
+        preview.warnings << archiveError;
+    } else {
+        for (const QString &file : archiveReport.changedFiles)
+            files.insert(QDir(analysis.rootFolder).absoluteFilePath(file));
+        preview.referencesRedirected += archiveReport.replacements;
+        if (!archiveReport.changedFiles.isEmpty()) {
+            preview.changes << QStringLiteral("Non-XML archive references rewritten in: %1")
+                                   .arg(archiveReport.changedFiles.join(QStringLiteral(", ")));
+        }
+    }
+
     preview.filesChanged = files.values();
     std::sort(preview.filesChanged.begin(), preview.filesChanged.end());
     preview.riskLevel = preview.warnings.isEmpty()
@@ -343,6 +393,12 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
         removals[node.sourceFile].append(&node);
     }
     const QRegularExpression redirectsRegex = redirectExpression(redirects);
+    QStringList skippedArchiveIds;
+    const QHash<QString, QString> externalRedirects = archiveSafeRedirects(analysis, redirects, &skippedArchiveIds);
+    if (!skippedArchiveIds.isEmpty()) {
+        result.warnings << QStringLiteral("Skipped non-XML reference rewrites for ambiguous catalog IDs: %1.")
+                               .arg(skippedArchiveIds.join(QStringLiteral(", ")));
+    }
 
     QHash<QString, QByteArray> staged;
     RewriteStats totals;
@@ -383,8 +439,20 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     }
     if (staged.isEmpty()) { result.error = QStringLiteral("Merge produced no file changes."); return result; }
 
+    sc2dh::ArchiveReferenceRewriteReport externalPreview;
+    if (!sc2dh::previewArchiveReferenceFileRewrites(rootFolder,
+                                                   nonXmlReferenceFiles(analysis),
+                                                   externalRedirects,
+                                                   &externalPreview,
+                                                   &error)) {
+        result.error = error;
+        return result;
+    }
+
     QStringList relativeFiles;
     for (const QString &file : staged.keys()) relativeFiles << relativePath(rootFolder, file);
+    for (const QString &file : externalPreview.changedFiles) relativeFiles << file;
+    relativeFiles.removeDuplicates();
     std::sort(relativeFiles.begin(), relativeFiles.end());
     BackupManager backups;
     if (!backups.createFolderBackup(rootFolder, relativeFiles, analysis.analysisReportText,
@@ -404,6 +472,16 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
             return result;
         }
         committed << relativePath(rootFolder, it.key());
+    }
+    sc2dh::ArchiveReferenceRewriteReport externalRewrite;
+    if (!externalPreview.changedFiles.isEmpty()
+        && !sc2dh::rewriteArchiveReferenceFiles(rootFolder,
+                                                externalPreview.changedFiles,
+                                                externalRedirects,
+                                                &externalRewrite,
+                                                &result.error)) {
+        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
     }
     if (m_failureInjectionStep == QStringLiteral("after-commit")) {
         result.error = QStringLiteral("Injected failure after commit.");
@@ -429,7 +507,7 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     }
     result.success = true;
     result.changedFiles = relativeFiles;
-    result.referencesRedirected = totals.references;
+    result.referencesRedirected = totals.references + externalRewrite.replacements;
     result.nodesDeleted = plan.nodesDeleted;
     return result;
 }
@@ -533,6 +611,12 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
         return result;
     }
     const QRegularExpression redirectsRegex = redirectExpression(redirects);
+    QStringList skippedArchiveIds;
+    const QHash<QString, QString> externalRedirects = archiveSafeRedirects(analysis, redirects, &skippedArchiveIds);
+    if (!skippedArchiveIds.isEmpty()) {
+        result.warnings << QStringLiteral("Skipped non-XML reference rewrites for ambiguous catalog IDs: %1.")
+                               .arg(skippedArchiveIds.join(QStringLiteral(", ")));
+    }
 
     QHash<QString, QByteArray> staged;
     RewriteStats totals;
@@ -595,9 +679,22 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
         return result;
     }
 
+    sc2dh::ArchiveReferenceRewriteReport externalPreview;
+    if (!sc2dh::previewArchiveReferenceFileRewrites(rootFolder,
+                                                   nonXmlReferenceFiles(analysis),
+                                                   externalRedirects,
+                                                   &externalPreview,
+                                                   &error)) {
+        result.error = error;
+        return result;
+    }
+
     QStringList relativeFiles;
     for (const QString &file : staged.keys())
         relativeFiles << relativePath(rootFolder, file);
+    for (const QString &file : externalPreview.changedFiles)
+        relativeFiles << file;
+    relativeFiles.removeDuplicates();
     std::sort(relativeFiles.begin(), relativeFiles.end());
 
     QString reportText = QStringLiteral("Batch Merge Apply\nRemoved objects: %1\nReferences redirected: %2\nFiles changed: %3\nWarnings: %4\n")
@@ -626,6 +723,16 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
         }
         committed << relativePath(rootFolder, it.key());
     }
+    sc2dh::ArchiveReferenceRewriteReport externalRewrite;
+    if (!externalPreview.changedFiles.isEmpty()
+        && !sc2dh::rewriteArchiveReferenceFiles(rootFolder,
+                                                externalPreview.changedFiles,
+                                                externalRedirects,
+                                                &externalRewrite,
+                                                &result.error)) {
+        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
+    }
     if (m_failureInjectionStep == QStringLiteral("after-commit")) {
         result.error = QStringLiteral("Injected failure after commit.");
         restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
@@ -651,7 +758,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
 
     result.success = true;
     result.changedFiles = relativeFiles;
-    result.referencesRedirected = totals.references;
+    result.referencesRedirected = totals.references + externalRewrite.replacements;
     result.nodesDeleted = removedIds.size();
     return result;
 }

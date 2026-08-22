@@ -102,6 +102,10 @@ target_sources(SC2DataHelper PRIVATE
     src/core/AssetOptimizationAnalyzer.cpp
     src/core/TriggerPerformanceAnalyzer.h
     src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/DecorationStreamingPlanner.h
+    src/core/DecorationStreamingPlanner.cpp
+    src/core/DecorationMapCopyService.h
+    src/core/DecorationMapCopyService.cpp
     src/core/XmlCleanupUtils.h
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.h
@@ -238,6 +242,8 @@ add_executable(SC2DataHelperTests
     src/core/AssetReferenceScanner.cpp
     src/core/AssetOptimizationAnalyzer.cpp
     src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/DecorationStreamingPlanner.cpp
+    src/core/DecorationMapCopyService.cpp
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogEnumRepair.cpp
