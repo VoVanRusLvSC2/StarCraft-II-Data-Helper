@@ -196,6 +196,23 @@ void addLinkNodeValues(const pugi::xml_node &node, const QString &selfId, QSet<Q
         addReferenceValue(text, selfId, references);
 }
 
+void addActorEventReferenceValue(const QString &value, const QString &selfId, QSet<QString> *references)
+{
+    addReferenceValue(value, selfId, references);
+
+    const QStringList tokens = value.split(QRegularExpression(QStringLiteral("[\\s,;|:/\\\\]+")), Qt::SkipEmptyParts);
+    static const QRegularExpression scopedSeparator(QStringLiteral("[@.]"));
+    for (const QString &token : tokens) {
+        if (!token.contains(QLatin1Char('@')) && !token.contains(QLatin1Char('.')))
+            continue;
+        const QStringList parts = token.split(scopedSeparator, Qt::SkipEmptyParts);
+        for (const QString &part : parts) {
+            if (part != token)
+                addReferenceValue(part, selfId, references);
+        }
+    }
+}
+
 void traverseSchemaNode(const pugi::xml_node &xmlNode,
                         const QString &schemaType,
                         const QString &selfId,
@@ -209,11 +226,11 @@ void traverseSchemaNode(const pugi::xml_node &xmlNode,
         for (const pugi::xml_attribute attribute : xmlNode.attributes()) {
             if (isMetaAttribute(QString::fromUtf8(attribute.name())))
                 continue;
-            addReferenceValue(QString::fromUtf8(attribute.value()), selfId, references);
+            addActorEventReferenceValue(QString::fromUtf8(attribute.value()), selfId, references);
         }
         const QString text = QString::fromUtf8(xmlNode.child_value()).trimmed();
         if (!text.isEmpty())
-            addReferenceValue(text, selfId, references);
+            addActorEventReferenceValue(text, selfId, references);
     }
 
     for (const pugi::xml_attribute attribute : xmlNode.attributes()) {
@@ -280,11 +297,11 @@ void addActorEventReferences(const pugi::xml_node &xmlNode,
         for (const pugi::xml_attribute attribute : xmlNode.attributes()) {
             if (isMetaAttribute(QString::fromUtf8(attribute.name())))
                 continue;
-            addReferenceValue(QString::fromUtf8(attribute.value()), selfId, references);
+            addActorEventReferenceValue(QString::fromUtf8(attribute.value()), selfId, references);
         }
         const QString text = QString::fromUtf8(xmlNode.child_value()).trimmed();
         if (!text.isEmpty())
-            addReferenceValue(text, selfId, references);
+            addActorEventReferenceValue(text, selfId, references);
     }
 
     for (pugi::xml_node child = xmlNode.first_child(); child; child = child.next_sibling()) {

@@ -2647,10 +2647,12 @@ void CoreTests::unusedReachabilityUsesActorUnitNameWithoutTestRefs()
         "<Catalog>"
         "<CUnit id=\"HeroUnit\"/>"
         "<CActorUnit id=\"HeroActor\" unitName=\"HeroUnit\" Model=\"HeroModel\"><SoundArray value=\"HeroSound\"/>"
-        "<Events><On Terms=\"Effect,NestedEffect,Start\" Send=\"Create\"/></Events></CActorUnit>"
+        "<Events><On Terms=\"Effect,NestedEffect,Start\" Send=\"Create\"/>"
+        "<On Terms=\"Effect.DotEffect.Start\" Send=\"Create\"/></Events></CActorUnit>"
         "<CModel id=\"HeroModel\"/>"
         "<CSound id=\"HeroSound\"/>"
         "<CEffectDamage id=\"NestedEffect\"/>"
+        "<CEffectDamage id=\"DotEffect\"/>"
         "<CUnit id=\"DeadUnit\"/>"
         "<CActorUnit id=\"DeadActor\" unitName=\"DeadUnit\" Model=\"DeadModel\"/>"
         "<CModel id=\"DeadModel\"/>"
@@ -2671,7 +2673,7 @@ void CoreTests::unusedReachabilityUsesActorUnitNameWithoutTestRefs()
     const QStringList usedVisualChain = {
         QStringLiteral("HeroUnit"), QStringLiteral("HeroActor"),
         QStringLiteral("HeroModel"), QStringLiteral("HeroSound"),
-        QStringLiteral("NestedEffect")
+        QStringLiteral("NestedEffect"), QStringLiteral("DotEffect")
     };
     for (const QString &id : usedVisualChain) {
         QVERIFY2(byId.contains(id), qPrintable(id));
@@ -2684,6 +2686,7 @@ void CoreTests::unusedReachabilityUsesActorUnitNameWithoutTestRefs()
     QVERIFY(analysis.nodes.at(indexById.value(QStringLiteral("HeroActor"))).referencedIds.contains(QStringLiteral("HeroModel")));
     QVERIFY(analysis.nodes.at(indexById.value(QStringLiteral("HeroActor"))).referencedIds.contains(QStringLiteral("HeroSound")));
     QVERIFY(analysis.nodes.at(indexById.value(QStringLiteral("HeroActor"))).referencedIds.contains(QStringLiteral("NestedEffect")));
+    QVERIFY(analysis.nodes.at(indexById.value(QStringLiteral("HeroActor"))).referencedIds.contains(QStringLiteral("DotEffect")));
 
     QCOMPARE(byId.value(QStringLiteral("DeadActor")).state, CandidateState::Safe);
     QCOMPARE(byId.value(QStringLiteral("DeadModel")).state, CandidateState::Safe);
