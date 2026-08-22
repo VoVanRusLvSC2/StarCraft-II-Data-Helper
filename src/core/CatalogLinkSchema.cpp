@@ -252,6 +252,47 @@ void traverseSchemaNode(const pugi::xml_node &xmlNode,
     }
 }
 
+bool isActorCatalogElement(const QString &name)
+{
+    return name.startsWith(QStringLiteral("CActor"), Qt::CaseInsensitive);
+}
+
+bool isActorEventElement(const QString &name)
+{
+    return name.compare(QStringLiteral("On"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Remove"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Do"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Event"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Term"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Terms"), Qt::CaseInsensitive) == 0;
+}
+
+void addActorEventReferences(const pugi::xml_node &xmlNode,
+                             const QString &selfId,
+                             QSet<QString> *references,
+                             int depth = 0)
+{
+    if (!xmlNode || depth > 24)
+        return;
+
+    if (xmlNode.type() == pugi::node_element
+        && isActorEventElement(QString::fromUtf8(xmlNode.name()))) {
+        for (const pugi::xml_attribute attribute : xmlNode.attributes()) {
+            if (isMetaAttribute(QString::fromUtf8(attribute.name())))
+                continue;
+            addReferenceValue(QString::fromUtf8(attribute.value()), selfId, references);
+        }
+        const QString text = QString::fromUtf8(xmlNode.child_value()).trimmed();
+        if (!text.isEmpty())
+            addReferenceValue(text, selfId, references);
+    }
+
+    for (pugi::xml_node child = xmlNode.first_child(); child; child = child.next_sibling()) {
+        if (child.type() == pugi::node_element)
+            addActorEventReferences(child, selfId, references, depth + 1);
+    }
+}
+
 } // namespace
 
 namespace sc2dh
@@ -276,6 +317,8 @@ QSet<QString> extractCatalogLinkReferences(const DataNode &node)
         return references;
 
     traverseSchemaNode(root, QString::fromUtf8(root.name()), node.id, &references);
+    if (isActorCatalogElement(QString::fromUtf8(root.name())))
+        addActorEventReferences(root, node.id, &references);
 
     // Unit tests can enable a compact fake field for small fixtures. Production
     // SC2 graphs stay schema-driven and do not scan arbitrary XML attributes.
