@@ -245,6 +245,7 @@ private slots:
     void decorationStreamingParsesZonesAndGeneratesGalaxy();
     void decorationStreamingKeepsExternallyReferencedDoodadsStatic();
     void decorationStreamingSupportsManualAssignmentOverrides();
+    void decorationStreamingSupportsSparseZoneIds();
     void decorationStreamingRejectsInvalidGalaxyOptions();
     void decorationStreamingBuildsOptimizedObjectsArtifacts();
     void decorationStreamingInjectsGalaxyIncludeOnce();
@@ -3666,6 +3667,31 @@ void CoreTests::decorationStreamingSupportsManualAssignmentOverrides()
     const QString zone2Body = galaxy.mid(zone2Start, zone2End - zone2Start);
     QVERIFY(zone2Body.contains(QStringLiteral("\"RockVisual\"")));
     QVERIFY(!galaxy.contains(QStringLiteral("GrassVisual")));
+}
+
+void CoreTests::decorationStreamingSupportsSparseZoneIds()
+{
+    const QByteArray objects = QByteArrayLiteral(
+        "ObjectDoodad { Id = 71 Name = \"SparseLeft\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
+        "ObjectDoodad { Id = 72 Name = \"SparseRight\" Type = \"RockVisual\" Position = (110, 10, 0) }\n");
+    const QVector<sc2dh::decor::DecorZone> zones = {
+        {10, QStringLiteral("Left"), 0.0, 0.0, 50.0, 50.0},
+        {20, QStringLiteral("Right"), 100.0, 0.0, 150.0, 50.0}
+    };
+
+    sc2dh::decor::GalaxyGenerationOptions options;
+    options.functionPrefix = QStringLiteral("NAME_OUT_FUNK");
+    const sc2dh::decor::DecorationStreamingPlanner planner;
+    const sc2dh::decor::DecorationStreamingPlan plan = planner.buildPlan(objects, zones);
+    const QString galaxy = planner.generateGalaxy(plan, options);
+
+    QVERIFY(galaxy.contains(QStringLiteral("const int DecorOpt_ZoneCount = 20;")));
+    QVERIFY(galaxy.contains(QStringLiteral("actor DecorOpt_Actors[21]")));
+    QVERIFY(galaxy.contains(QStringLiteral("void NAME_OUT_FUNK_10()")));
+    QVERIFY(galaxy.contains(QStringLiteral("void NAME_OUT_FUNK_20()")));
+    QVERIFY(galaxy.contains(QStringLiteral("if (zoneId == 20) { DecorOpt_CreateZone_20(); return; }")));
+    QStringList errors;
+    QVERIFY2(planner.validateGeneratedGalaxy(galaxy, &errors), qPrintable(errors.join(QStringLiteral("; "))));
 }
 
 void CoreTests::decorationStreamingRejectsInvalidGalaxyOptions()
