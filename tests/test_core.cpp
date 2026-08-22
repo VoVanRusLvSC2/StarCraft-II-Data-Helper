@@ -3135,6 +3135,7 @@ void CoreTests::deepCleanupRemovesStructurallyInvalidActorEvents()
         "<On index=\"2\"/>"
         "<On index=\"3\" removed=\"1\"/>"
         "<On index=\"4\" Terms=\"UnitBirth.BrokenActor\" Send=\"Create\"/>"
+        "<Events><On index=\"5\" Terms=\"UnitBirth.NestedBroken\"/></Events>"
         "</CActorUnit>"
         "</Catalog>")));
 
@@ -3151,11 +3152,11 @@ void CoreTests::deepCleanupRemovesStructurallyInvalidActorEvents()
             selected.append(candidate.index);
         }
     }
-    QCOMPARE(selected.size(), 3);
+    QCOMPARE(selected.size(), 4);
 
     const DeepCleanupApplyResult applied = DeepCleanupService().apply(analysis, selected, dir.path(), true);
     QVERIFY2(applied.success, qPrintable(applied.error));
-    QCOMPARE(applied.xmlNodesRemoved, 3);
+    QCOMPARE(applied.xmlNodesRemoved, 4);
 
     QFile result(xmlPath);
     QVERIFY(result.open(QIODevice::ReadOnly));
@@ -3163,6 +3164,7 @@ void CoreTests::deepCleanupRemovesStructurallyInvalidActorEvents()
     QVERIFY(!xml.contains("index=\"0\" Terms=\"UnitBirth.BrokenActor\""));
     QVERIFY(!xml.contains("index=\"1\" Send=\"Create\""));
     QVERIFY(!xml.contains("index=\"2\"/>"));
+    QVERIFY(!xml.contains("index=\"5\" Terms=\"UnitBirth.NestedBroken\""));
     QVERIFY(xml.contains("index=\"3\" removed=\"1\""));
     QVERIFY(xml.contains("index=\"4\" Terms=\"UnitBirth.BrokenActor\" Send=\"Create\""));
 }
