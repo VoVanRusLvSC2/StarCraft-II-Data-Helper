@@ -22,6 +22,7 @@ struct DependencyUsageEntry
     QStringList unresolvedExternalIds;
     QStringList possibleImportFiles;
     QHash<QString, int> usedObjectsByType;
+    QHash<QString, int> availableObjectsByType;
 };
 
 struct DependencyUsageReport

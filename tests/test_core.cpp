@@ -3314,8 +3314,20 @@ void CoreTests::dependencyUsageReportExportsRealUsagePaths()
     dependencyBehavior.sourceFile = QStringLiteral("Mods/Void.SC2Mod/Base.SC2Data/GameData/BehaviorData.xml");
     dependencyBehavior.elementName = QStringLiteral("CBehaviorBuff");
     dependencyBehavior.id = QStringLiteral("DepBehavior");
+    dependencyBehavior.referencedIds = {QStringLiteral("DepValidator")};
 
-    analysis.nodes = {localUnit, localEffect, dependencyWeapon, dependencyBehavior};
+    DataNode dependencyValidator;
+    dependencyValidator.sourceFile = QStringLiteral("Mods/Void.SC2Mod/Base.SC2Data/GameData/ValidatorData.xml");
+    dependencyValidator.elementName = QStringLiteral("CValidatorUnitCompare");
+    dependencyValidator.id = QStringLiteral("DepValidator");
+
+    DataNode unusedDependencyRequirement;
+    unusedDependencyRequirement.sourceFile = QStringLiteral("Mods/Void.SC2Mod/Base.SC2Data/GameData/RequirementData.xml");
+    unusedDependencyRequirement.elementName = QStringLiteral("CRequirement");
+    unusedDependencyRequirement.id = QStringLiteral("UnusedRequirement");
+
+    analysis.nodes = {localUnit, localEffect, dependencyWeapon, dependencyBehavior,
+                      dependencyValidator, unusedDependencyRequirement};
 
     const sc2dh::DependencyUsageReportBuilder builder;
     const sc2dh::DependencyUsageReport report = builder.build(analysis);
@@ -3324,8 +3336,12 @@ void CoreTests::dependencyUsageReportExportsRealUsagePaths()
     QCOMPARE(entry.path, QStringLiteral("Mods/Void.SC2Mod"));
     QCOMPARE(entry.usedObjectsByType.value(QStringLiteral("CWeaponLegacy")), 1);
     QCOMPARE(entry.usedObjectsByType.value(QStringLiteral("CBehaviorBuff")), 1);
+    QCOMPARE(entry.usedObjectsByType.value(QStringLiteral("CValidatorUnitCompare")), 1);
+    QCOMPARE(entry.usedObjectsByType.value(QStringLiteral("CRequirement")), 0);
+    QCOMPARE(entry.availableObjectsByType.value(QStringLiteral("CRequirement")), 1);
     QVERIFY(entry.directLocalUsers.join(QStringLiteral("\n")).contains(QStringLiteral("CUnit(LocalUnit) -> CWeaponLegacy(DepWeapon)")));
     QVERIFY(entry.usageChains.join(QStringLiteral("\n")).contains(QStringLiteral("CEffectDamage(LocalEffect) -> CBehaviorBuff(DepBehavior)")));
+    QVERIFY(entry.usageChains.join(QStringLiteral("\n")).contains(QStringLiteral("CEffectDamage(LocalEffect) -> CBehaviorBuff(DepBehavior) -> CValidatorUnitCompare(DepValidator)")));
     QVERIFY(entry.unresolvedExternalIds.contains(QStringLiteral("MissingExternal")));
     QVERIFY(entry.possibleImportFiles.join(QStringLiteral("\n")).contains(QStringLiteral("Mods/Void.SC2Mod/Assets/Textures/Dep.dds")));
     QVERIFY(report.unknownProvenanceIds.contains(QStringLiteral("MissingExternal")));
@@ -3335,6 +3351,8 @@ void CoreTests::dependencyUsageReportExportsRealUsagePaths()
     QCOMPARE(dependencies.size(), 1);
     const QJsonObject dependency = dependencies.first().toObject();
     QCOMPARE(dependency.value(QStringLiteral("path")).toString(), QStringLiteral("Mods/Void.SC2Mod"));
+    QCOMPARE(dependency.value(QStringLiteral("usedObjectsByType")).toObject().value(QStringLiteral("CRequirement")).toInt(), 0);
+    QCOMPARE(dependency.value(QStringLiteral("availableObjectsByType")).toObject().value(QStringLiteral("CRequirement")).toInt(), 1);
     bool jsonHasLocalUnit = false;
     for (const QJsonValue &value : dependency.value(QStringLiteral("directLocalUsers")).toArray())
         jsonHasLocalUnit = jsonHasLocalUnit || value.toString().contains(QStringLiteral("LocalUnit"));

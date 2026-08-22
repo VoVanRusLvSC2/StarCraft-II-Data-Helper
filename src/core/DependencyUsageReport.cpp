@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QQueue>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -155,6 +156,54 @@ void addChainsForDependencyNode(const QVector<DataNode> &nodes,
     }
 }
 
+QHash<int, QStringList> dependencyUsageChains(const QVector<DataNode> &nodes,
+                                              const QVector<int> &dependencyIndexes,
+                                              const QHash<QString, QVector<int>> &localInbound)
+{
+    QHash<QString, int> dependencyIndexById;
+    for (int index : dependencyIndexes) {
+        if (index < 0 || index >= nodes.size())
+            continue;
+        const QString id = nodes.at(index).id;
+        if (!id.isEmpty() && !dependencyIndexById.contains(id))
+            dependencyIndexById.insert(id, index);
+    }
+
+    QHash<int, QStringList> chainsByIndex;
+    QQueue<int> queue;
+    for (int dependencyIndex : dependencyIndexes) {
+        if (dependencyIndex < 0 || dependencyIndex >= nodes.size())
+            continue;
+        const DataNode &dependencyNode = nodes.at(dependencyIndex);
+        for (int localIndex : localInbound.value(dependencyNode.id)) {
+            const QString chain = chainFromLocalToDependency(nodes, localIndex, dependencyIndex);
+            appendUnique(&chainsByIndex[dependencyIndex], chain);
+        }
+        if (!chainsByIndex.value(dependencyIndex).isEmpty())
+            queue.enqueue(dependencyIndex);
+    }
+
+    while (!queue.isEmpty()) {
+        const int sourceIndex = queue.dequeue();
+        if (sourceIndex < 0 || sourceIndex >= nodes.size())
+            continue;
+        const QStringList sourceChains = chainsByIndex.value(sourceIndex);
+        for (const QString &reference : nodes.at(sourceIndex).referencedIds) {
+            const int targetIndex = dependencyIndexById.value(reference, -1);
+            if (targetIndex < 0 || targetIndex >= nodes.size() || targetIndex == sourceIndex)
+                continue;
+            const int before = chainsByIndex.value(targetIndex).size();
+            for (const QString &sourceChain : sourceChains) {
+                appendUnique(&chainsByIndex[targetIndex],
+                             sourceChain + QStringLiteral(" -> ") + nodeLabel(nodes.at(targetIndex)));
+            }
+            if (chainsByIndex.value(targetIndex).size() > before)
+                queue.enqueue(targetIndex);
+        }
+    }
+    return chainsByIndex;
+}
+
 QStringList metadataDependencyFiles(const AnalysisResult &analysis)
 {
     QStringList files;
@@ -227,11 +276,18 @@ DependencyUsageReport DependencyUsageReportBuilder::build(const AnalysisResult &
     const QHash<QString, QVector<int>> localInbound = buildLocalInbound(analysis.nodes);
     for (auto it = dependencyNodeIndexesByRoot.cbegin(); it != dependencyNodeIndexesByRoot.cend(); ++it) {
         DependencyUsageEntry &entry = report.dependencies[indexByRoot.value(it.key())];
+        const QHash<int, QStringList> reachableChains =
+            dependencyUsageChains(analysis.nodes, it.value(), localInbound);
         for (int nodeIndex : it.value()) {
             const DataNode &node = analysis.nodes.at(nodeIndex);
-            entry.usedObjectsByType[node.elementName.isEmpty() ? QStringLiteral("Unknown") : node.elementName] += 1;
+            const QString type = node.elementName.isEmpty() ? QStringLiteral("Unknown") : node.elementName;
+            entry.availableObjectsByType[type] += 1;
+            if (!reachableChains.value(nodeIndex).isEmpty())
+                entry.usedObjectsByType[type] += 1;
             addChainsForDependencyNode(analysis.nodes, localInbound, nodeIndex,
                                        &entry.directLocalUsers, &entry.usageChains);
+            for (const QString &chain : reachableChains.value(nodeIndex))
+                appendUnique(&entry.usageChains, chain);
         }
     }
 
@@ -307,6 +363,7 @@ QJsonObject DependencyUsageReportBuilder::toJson(const DependencyUsageReport &re
             {QStringLiteral("usageChains"), stringArray(entry.usageChains)},
             {QStringLiteral("unresolvedExternalIds"), stringArray(entry.unresolvedExternalIds)},
             {QStringLiteral("usedObjectsByType"), countsObject(entry.usedObjectsByType)},
+            {QStringLiteral("availableObjectsByType"), countsObject(entry.availableObjectsByType)},
             {QStringLiteral("possibleImportFiles"), stringArray(entry.possibleImportFiles)}
         });
     }
@@ -341,6 +398,17 @@ QString DependencyUsageReportBuilder::toText(const DependencyUsageReport &report
         } else {
             for (const QString &type : typeKeys)
                 stream << "  - " << type << ": " << entry.usedObjectsByType.value(type) << '\n';
+        }
+        stream << "Available dependency objects by type:\n";
+        QStringList availableTypeKeys;
+        for (auto it = entry.availableObjectsByType.cbegin(); it != entry.availableObjectsByType.cend(); ++it)
+            availableTypeKeys << it.key();
+        availableTypeKeys = uniqueSorted(availableTypeKeys);
+        if (availableTypeKeys.isEmpty()) {
+            stream << "  - none proven\n";
+        } else {
+            for (const QString &type : availableTypeKeys)
+                stream << "  - " << type << ": " << entry.availableObjectsByType.value(type) << '\n';
         }
         stream << "Direct local users:\n";
         for (const QString &user : uniqueSorted(entry.directLocalUsers))
