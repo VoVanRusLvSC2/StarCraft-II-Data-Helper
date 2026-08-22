@@ -1046,12 +1046,15 @@ void MapPerformancePage::updateDecorPreview()
                           .arg(options.batchLimit);
     if (!m_decorPreview.warnings.isEmpty())
         summary += QStringLiteral(" Warnings: %1").arg(m_decorPreview.warnings.join(QStringLiteral(" | ")));
+    if (m_decorZones.size() < 2)
+        summary += QStringLiteral(" Create at least two decoration zones before creating an optimized map copy.");
     if (sourceArchivePath().isEmpty())
         summary += QStringLiteral(" Create-copy UI currently requires a .SC2Map/.SC2Mod archive source; components folders can still be inspected.");
     summary += QStringLiteral(" Archive creation re-scans scripts/triggers and may keep more doodads static if referenced.");
     m_decorSummaryLabel->setText(summary);
     m_galaxyPreview->setPlainText(m_decorPreview.galaxySource);
     m_createCopyButton->setEnabled(!sourceArchivePath().isEmpty()
+                                   && m_decorZones.size() >= 2
                                    && dynamicAssigned > 0
                                    && m_decorPreview.warnings.isEmpty());
 }
@@ -1085,10 +1088,10 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
     }
 
     const QVector<sc2dh::decor::DecorZone> zones = zonesFromModel();
-    if (zones.isEmpty()) {
+    if (zones.size() < 2) {
         QMessageBox::warning(this,
                              QStringLiteral("Create Decor-Optimized Map Copy"),
-                             QStringLiteral("Create at least one decoration zone first."));
+                             QStringLiteral("Create at least two decoration zones first."));
         return;
     }
 
