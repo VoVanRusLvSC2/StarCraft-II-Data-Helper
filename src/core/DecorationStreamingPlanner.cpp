@@ -137,6 +137,27 @@ QStringList externalReferenceFiles(const sc2dh::decor::DoodadPlacement &doodad,
     return files;
 }
 
+bool injectMapInitCall(QString *script, QString *errorMessage)
+{
+    if (!script)
+        return false;
+    static const QRegularExpression initMapExpression(
+        QStringLiteral("\\bvoid\\s+InitMap\\s*\\([^)]*\\)\\s*\\{"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (script->contains(QRegularExpression(QStringLiteral("\\bDecorOpt_Init\\s*\\("))))
+        return true;
+
+    const QRegularExpressionMatch match = initMapExpression.match(*script);
+    if (!match.hasMatch()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("MapScript.galaxy does not contain a recognizable InitMap() function; decoration runtime was not connected.");
+        return false;
+    }
+
+    script->insert(match.capturedEnd(), QStringLiteral("\n    DecorOpt_Init();"));
+    return true;
+}
+
 } // namespace
 
 namespace sc2dh::decor
@@ -357,6 +378,16 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("int DecorOpt_ActorCount[%1];\n").arg(zoneCount + 1);
     out += QStringLiteral("bool DecorOpt_Loaded[%1];\n\n").arg(zoneCount + 1);
 
+    out += QStringLiteral("void DecorOpt_Init() {\n");
+    out += QStringLiteral("    int zoneId;\n");
+    out += QStringLiteral("    zoneId = 1;\n");
+    out += QStringLiteral("    while (zoneId <= DecorOpt_ZoneCount) {\n");
+    out += QStringLiteral("        DecorOpt_ActorCount[zoneId] = 0;\n");
+    out += QStringLiteral("        DecorOpt_Loaded[zoneId] = false;\n");
+    out += QStringLiteral("        zoneId += 1;\n");
+    out += QStringLiteral("    }\n");
+    out += QStringLiteral("}\n\n");
+
     out += QStringLiteral("void DecorOpt_ClearZone(int zoneId) {\n");
     out += QStringLiteral("    int i;\n");
     out += QStringLiteral("    if (zoneId < 1 || zoneId > DecorOpt_ZoneCount) { return; }\n");
@@ -479,6 +510,7 @@ bool DecorationStreamingPlanner::validateGeneratedGalaxy(const QString &galaxySo
         addError(QStringLiteral("Generated Galaxy has unbalanced parentheses."));
 
     static const QStringList required = {
+        QStringLiteral("void DecorOpt_Init()"),
         QStringLiteral("void DecorOpt_CreateZone(int zoneId)"),
         QStringLiteral("void DecorOpt_ClearZone(int zoneId)"),
         QStringLiteral("void DecorOpt_ClearAll()"),
@@ -517,10 +549,6 @@ bool DecorationStreamingPlanner::injectGalaxyInclude(const QByteArray &mapScript
                                                  .arg(QRegularExpression::escape(normalizedEntry)),
                                              QRegularExpression::CaseInsensitiveOption
                                                  | QRegularExpression::MultilineOption);
-    if (existingInclude.match(script).hasMatch()) {
-        *rewrittenMapScriptBytes = mapScriptBytes;
-        return true;
-    }
 
     QString prefix;
     if (script.startsWith(QChar(0xFEFF))) {
@@ -528,10 +556,17 @@ bool DecorationStreamingPlanner::injectGalaxyInclude(const QByteArray &mapScript
         script.remove(0, 1);
     }
 
-    QString rewritten = prefix % includeLine % QStringLiteral("\n");
-    if (!script.isEmpty() && !script.startsWith(QLatin1Char('\n')) && !script.startsWith(QLatin1Char('\r')))
-        rewritten += QLatin1Char('\n');
-    rewritten += script;
+    QString rewritten = script;
+    if (!existingInclude.match(rewritten).hasMatch()) {
+        QString withInclude = includeLine % QStringLiteral("\n");
+        if (!rewritten.isEmpty() && !rewritten.startsWith(QLatin1Char('\n')) && !rewritten.startsWith(QLatin1Char('\r')))
+            withInclude += QLatin1Char('\n');
+        withInclude += rewritten;
+        rewritten = withInclude;
+    }
+    if (!injectMapInitCall(&rewritten, errorMessage))
+        return false;
+    rewritten = prefix + rewritten;
     *rewrittenMapScriptBytes = rewritten.toUtf8();
     return true;
 }

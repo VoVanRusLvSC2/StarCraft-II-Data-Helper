@@ -3357,6 +3357,7 @@ void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
     options.functionPrefix = QStringLiteral("NAME_OUT_FUNK");
     options.batchLimit = 8;
     const QString galaxy = planner.generateGalaxy(plan, options);
+    QVERIFY(galaxy.contains(QStringLiteral("void DecorOpt_Init()")));
     QVERIFY(galaxy.contains(QStringLiteral("void DecorOpt_CreateZone(int zoneId)")));
     QVERIFY(galaxy.contains(QStringLiteral("void DecorOpt_ClearZone(int zoneId)")));
     QVERIFY(galaxy.contains(QStringLiteral("bool DecorOpt_IsZoneLoaded(int zoneId)")));
@@ -3534,7 +3535,10 @@ void CoreTests::decorationStreamingInjectsGalaxyIncludeOnce()
     QString text = QString::fromUtf8(rewritten);
     QVERIFY(text.startsWith(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")));
     QCOMPARE(text.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QCOMPARE(text.count(QStringLiteral("DecorOpt_Init();")), 1);
     QVERIFY(text.contains(QStringLiteral("include \"TriggerLibs/NativeLib\"")));
+    QVERIFY(!text.contains(QStringLiteral("DecorOpt_CreateZone(1);")));
+    QVERIFY(!text.contains(QStringLiteral("NAME_OUT_FUNK_1();")));
 
     QByteArray twice;
     QVERIFY2(planner.injectGalaxyInclude(rewritten,
@@ -3544,8 +3548,14 @@ void CoreTests::decorationStreamingInjectsGalaxyIncludeOnce()
              qPrintable(error));
     text = QString::fromUtf8(twice);
     QCOMPARE(text.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QCOMPARE(text.count(QStringLiteral("DecorOpt_Init();")), 1);
 
     QVERIFY(!planner.injectGalaxyInclude(mapScript, QStringLiteral("scripts/not_galaxy.txt"), &rewritten, &error));
+    QVERIFY(!planner.injectGalaxyInclude(QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\n"),
+                                         QStringLiteral("scripts/sc2dh_decor_opt.galaxy"),
+                                         &rewritten,
+                                         &error));
+    QVERIFY(error.contains(QStringLiteral("InitMap")));
 }
 
 void CoreTests::decorationStreamingPreparesArchivePatch()
@@ -3553,7 +3563,10 @@ void CoreTests::decorationStreamingPreparesArchivePatch()
     const QByteArray objects = QByteArrayLiteral(
         "ObjectDoodad { Id = 21 Name = \"VisualA\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
         "ObjectDoodad { Id = 22 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) }\n");
-    const QByteArray mapScript = QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\n");
+    const QByteArray mapScript = QByteArrayLiteral(
+        "include \"TriggerLibs/NativeLib\"\n"
+        "void InitMap() {\n"
+        "}\n");
     const QVector<sc2dh::decor::DecorZone> zones = {
         {1, QStringLiteral("ZoneA"), 0.0, 0.0, 50.0, 50.0}
     };
@@ -3572,6 +3585,7 @@ void CoreTests::decorationStreamingPreparesArchivePatch()
 
     const QString rewrittenMapScript = QString::fromUtf8(patch.replacementEntries.value(QStringLiteral("MapScript.galaxy")));
     QCOMPARE(rewrittenMapScript.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QCOMPARE(rewrittenMapScript.count(QStringLiteral("DecorOpt_Init();")), 1);
     QVERIFY(rewrittenMapScript.contains(QStringLiteral("include \"TriggerLibs/NativeLib\"")));
 
     const QString runtime = QString::fromUtf8(patch.replacementEntries.value(QStringLiteral("scripts/sc2dh_decor_opt.galaxy")));
@@ -3659,7 +3673,9 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY2(optimized.readEntry(QStringLiteral("MapScript.galaxy"), &optimizedMapScript, &error), qPrintable(error));
     const QString mapScriptText = QString::fromUtf8(optimizedMapScript);
     QCOMPARE(mapScriptText.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QCOMPARE(mapScriptText.count(QStringLiteral("DecorOpt_Init();")), 1);
     QVERIFY(mapScriptText.contains(QStringLiteral("include \"TriggerLibs/NativeLib\"")));
+    QVERIFY(!mapScriptText.contains(QStringLiteral("DecorOpt_CreateZone(1);")));
 
     QByteArray runtime;
     QVERIFY2(optimized.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error), qPrintable(error));
@@ -3694,7 +3710,7 @@ void CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
     QVERIFY2(createTestMpqArchive(sourcePath,
                                   {
                                       {QStringLiteral("Objects"), objects},
-                                      {QStringLiteral("MapScript.galaxy"), QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\n")},
+                                      {QStringLiteral("MapScript.galaxy"), QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\nvoid InitMap() {\n}\n")},
                                       {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog/>")}
                                   },
                                   &error),
@@ -3746,6 +3762,13 @@ void CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
     QVERIFY(!optimizedObjectsText.contains(QStringLiteral("LeftFree")));
     QVERIFY(!optimizedObjectsText.contains(QStringLiteral("RightFree")));
     QVERIFY(optimizedObjectsText.contains(QStringLiteral("StaticBlock")));
+
+    QByteArray optimizedMapScript;
+    QVERIFY2(optimized.readEntry(QStringLiteral("MapScript.galaxy"), &optimizedMapScript, &error), qPrintable(error));
+    const QString mapScriptText = QString::fromUtf8(optimizedMapScript);
+    QCOMPARE(mapScriptText.count(QStringLiteral("DecorOpt_Init();")), 1);
+    QVERIFY(!mapScriptText.contains(QStringLiteral("DecorOpt_CreateZone(1);")));
+    QVERIFY(!mapScriptText.contains(QStringLiteral("NAME_OUT_FUNK_1();")));
 
     QByteArray runtime;
     QVERIFY2(optimized.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error), qPrintable(error));
