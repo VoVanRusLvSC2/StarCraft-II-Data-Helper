@@ -258,6 +258,8 @@ private slots:
     void catalogEnumRepairFixesLegacyRenameDamage();
     void reservedCatalogFilterTokensAreNotReferences();
     void referenceRenamePreviewAndApply();
+    void referenceRenameRewritesSafeTextReferences();
+    void referenceRenameBlocksBinaryReferences();
     void referenceRenameDoesNotRewriteFilterFields();
     void referenceRenameDoesNotRewriteUntypedEnumValues();
     void referenceRenameDoesNotRewriteParentFields();
@@ -1667,6 +1669,118 @@ void CoreTests::referenceRenamePreviewAndApply()
     QCOMPARE(output.count(QStringLiteral("id=\"Vessel\"")), 2);
     QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel\"")));
     QVERIFY(output.contains(QStringLiteral("Unit,Vessel Vessel ActorVasselExtra")));
+}
+
+void CoreTests::referenceRenameRewritesSafeTextReferences()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/UnitData.xml"));
+    const QString scriptPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("MapScript.galaxy"));
+    const QString objectsPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Objects"));
+    QVERIFY(writeTextFile(xmlPath, QByteArrayLiteral("<Catalog><CUnit id=\"OldUnit\"/></Catalog>")));
+    QVERIFY(writeTextFile(scriptPath, QByteArrayLiteral("void Init(){ string a = \"OldUnit\"; string b = \"OldUnitExtra\"; }\n")));
+    QVERIFY(writeTextFile(objectsPath, QByteArrayLiteral("ObjectUnit { Type=\"OldUnit\" Position={0,0,0} }\n")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int unitIndex = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].elementName == QStringLiteral("CUnit") && analysis.nodes[i].id == QStringLiteral("OldUnit"))
+            unitIndex = i;
+    }
+    QVERIFY(unitIndex >= 0);
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem item;
+    item.nodeIndex = unitIndex;
+    item.oldId = QStringLiteral("OldUnit");
+    item.newId = QStringLiteral("NewUnit");
+    item.role = UnitFamilyRole::Unit;
+    item.selected = true;
+    plan.items << item;
+
+    const RenamePreviewReport preview = ReferenceRenamer().preview(analysis, plan);
+    QVERIFY2(preview.valid, qPrintable(preview.conflicts.join(QStringLiteral("; "))));
+    QVERIFY(preview.referencesUpdated >= 2);
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QVERIFY(applied.changedFiles.contains(QStringLiteral("MapScript.galaxy")));
+    QVERIFY(applied.changedFiles.contains(QStringLiteral("Objects")));
+
+    QFile rewrittenScript(scriptPath);
+    QVERIFY(rewrittenScript.open(QIODevice::ReadOnly));
+    const QString script = QString::fromUtf8(rewrittenScript.readAll());
+    QVERIFY(script.contains(QStringLiteral("\"NewUnit\"")));
+    QVERIFY(script.contains(QStringLiteral("\"OldUnitExtra\"")));
+    QVERIFY(!script.contains(QStringLiteral("\"OldUnit\"")));
+
+    QFile rewrittenObjects(objectsPath);
+    QVERIFY(rewrittenObjects.open(QIODevice::ReadOnly));
+    const QString objects = QString::fromUtf8(rewrittenObjects.readAll());
+    QVERIFY(objects.contains(QStringLiteral("Type=\"NewUnit\"")));
+
+    QFile rewrittenXml(xmlPath);
+    QVERIFY(rewrittenXml.open(QIODevice::ReadOnly));
+    QVERIFY(QString::fromUtf8(rewrittenXml.readAll()).contains(QStringLiteral("id=\"NewUnit\"")));
+}
+
+void CoreTests::referenceRenameBlocksBinaryReferences()
+{
+    QTemporaryDir dir;
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    const QString xmlPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/UnitData.xml"));
+    const QString binaryPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Model.m3"));
+    const QByteArray originalXml = QByteArrayLiteral("<Catalog><CUnit id=\"BinaryUnit\"/></Catalog>");
+    QVERIFY(writeTextFile(xmlPath, originalXml));
+    QByteArray modelBytes;
+    modelBytes.append('\0');
+    modelBytes.append("BinaryUnit");
+    modelBytes.append('\0');
+    QVERIFY(writeTextFile(binaryPath, modelBytes));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int unitIndex = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].elementName == QStringLiteral("CUnit") && analysis.nodes[i].id == QStringLiteral("BinaryUnit"))
+            unitIndex = i;
+    }
+    QVERIFY(unitIndex >= 0);
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem item;
+    item.nodeIndex = unitIndex;
+    item.oldId = QStringLiteral("BinaryUnit");
+    item.newId = QStringLiteral("RenamedUnit");
+    item.role = UnitFamilyRole::Unit;
+    item.selected = true;
+    plan.items << item;
+
+    const RenamePreviewReport preview = ReferenceRenamer().preview(analysis, plan);
+    QVERIFY(!preview.valid);
+    const QString previewNotes = (preview.warnings + preview.conflicts).join(QStringLiteral(" "));
+    QVERIFY(previewNotes.contains(QStringLiteral("non-rewritable strong references")));
+    QVERIFY(previewNotes.contains(QStringLiteral("binary-unconfirmed")));
+    QVERIFY(previewNotes.contains(QStringLiteral("Model.m3")));
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY(!applied.success);
+    QVERIFY(applied.warnings.join(QStringLiteral(" ")).contains(QStringLiteral("Model.m3")));
+
+    QFile unchanged(xmlPath);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), originalXml);
 }
 
 void CoreTests::referenceRenameDoesNotRewriteFilterFields()

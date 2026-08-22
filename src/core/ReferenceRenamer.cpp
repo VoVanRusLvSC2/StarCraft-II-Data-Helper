@@ -4,6 +4,7 @@
 #include "core/CatalogProtection.h"
 #include "core/FolderAnalyzer.h"
 #include "core/MergeService.h"
+#include "core/UnifiedReferenceIndex.h"
 
 #include <QDir>
 #include <QFile>
@@ -39,6 +40,13 @@ bool readFile(const QString &path, QByteArray *bytes, QString *error)
     return true;
 }
 
+QString relativeAnalysisPath(const AnalysisResult &analysis, const QString &path)
+{
+    QString relative = QDir(analysis.rootFolder).relativeFilePath(path);
+    relative = QDir::cleanPath(relative).replace('\\', '/');
+    return relative;
+}
+
 QString fastLookupKey(const QString &left, const QString &right)
 {
     return left + QChar(0x1f) + right;
@@ -62,6 +70,19 @@ const QRegularExpression &renameTokenExpression()
 {
     static const QRegularExpression expression(QStringLiteral("(?<![A-Za-z0-9_@])([A-Za-z0-9_@]+)(?![A-Za-z0-9_@])"));
     return expression;
+}
+
+bool isPlacementObjectsPath(const QString &relativePath)
+{
+    return relativePath.compare(QStringLiteral("Objects"), Qt::CaseInsensitive) == 0
+        || relativePath.endsWith(QStringLiteral("/Objects"), Qt::CaseInsensitive);
+}
+
+bool shouldRewriteSafeTextReferenceFile(const ScannedFileInfo &file, const QString &relativePath)
+{
+    if (file.isXml)
+        return false;
+    return file.isSc2DataLike || isPlacementObjectsPath(relativePath);
 }
 
 struct RenameTarget
@@ -177,6 +198,138 @@ int simultaneousReplace(QString *value, const RenameTargetMap &renames, const QS
         *value = output;
     }
     return replacements;
+}
+
+bool looksLikeUtf8Text(const QByteArray &bytes)
+{
+    if (bytes.isEmpty())
+        return false;
+    const qsizetype sampleSize = std::min<qsizetype>(bytes.size(), 8192);
+    int printable = 0;
+    int zeros = 0;
+    for (qsizetype i = 0; i < sampleSize; ++i) {
+        const uchar value = uchar(bytes.at(i));
+        if (value == 0)
+            ++zeros;
+        if (value == '\r' || value == '\n' || value == '\t' || (value >= 32 && value < 127) || value >= 128)
+            ++printable;
+    }
+    return zeros == 0 && printable >= (sampleSize * 85) / 100;
+}
+
+bool looksLikeUtf16LeText(const QByteArray &bytes)
+{
+    if (bytes.size() < 4 || bytes.size() % 2 != 0)
+        return false;
+    const qsizetype pairs = std::min<qsizetype>(bytes.size() / 2, 4096);
+    int textPairs = 0;
+    int zeroHigh = 0;
+    for (qsizetype i = 0; i < pairs; ++i) {
+        const uchar low = uchar(bytes.at(i * 2));
+        const uchar high = uchar(bytes.at(i * 2 + 1));
+        if (high == 0)
+            ++zeroHigh;
+        if (high == 0 && (low == '\r' || low == '\n' || low == '\t' || (low >= 32 && low < 127)))
+            ++textPairs;
+    }
+    return zeroHigh >= (pairs * 70) / 100 && textPairs >= (pairs * 60) / 100;
+}
+
+bool containsRenameTokenText(const QString &text, const RenameTargetMap &renames)
+{
+    auto matches = renameTokenExpression().globalMatch(text);
+    while (matches.hasNext()) {
+        if (renames.contains(matches.next().captured(1)))
+            return true;
+    }
+    return false;
+}
+
+bool containsRenameTokenBytes(const QByteArray &bytes, const RenameTargetMap &renames)
+{
+    if (looksLikeUtf8Text(bytes) && containsRenameTokenText(QString::fromUtf8(bytes), renames))
+        return true;
+    if (looksLikeUtf16LeText(bytes)) {
+        const auto *data = reinterpret_cast<const char16_t *>(bytes.constData());
+        if (containsRenameTokenText(QString::fromUtf16(data, bytes.size() / 2), renames))
+            return true;
+    }
+
+    const auto isIdChar = [](uchar value) {
+        return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z')
+            || (value >= '0' && value <= '9') || value == '_' || value == '@';
+    };
+    for (qsizetype start = 0; start < bytes.size();) {
+        while (start < bytes.size() && !isIdChar(uchar(bytes[start])))
+            ++start;
+        qsizetype end = start;
+        while (end < bytes.size() && isIdChar(uchar(bytes[end])))
+            ++end;
+        if (end > start && renames.contains(QString::fromLatin1(bytes.constData() + start, end - start)))
+            return true;
+        start = std::max(end, start + 1);
+    }
+    for (qsizetype start = 0; start + 1 < bytes.size();) {
+        while (start + 1 < bytes.size()
+               && (!isIdChar(uchar(bytes[start])) || bytes[start + 1] != '\0'))
+            ++start;
+        qsizetype end = start;
+        QByteArray tokenBytes;
+        while (end + 1 < bytes.size()
+               && isIdChar(uchar(bytes[end])) && bytes[end + 1] == '\0') {
+            tokenBytes.append(bytes[end]);
+            end += 2;
+        }
+        if (!tokenBytes.isEmpty() && renames.contains(QString::fromLatin1(tokenBytes)))
+            return true;
+        start = std::max(end, start + 1);
+    }
+    return false;
+}
+
+bool rewriteSafeTextBytes(const QByteArray &original, const RenameTargetMap &renames,
+                          QByteArray *rewritten, int *replacementCount)
+{
+    if (looksLikeUtf8Text(original)) {
+        QString text = QString::fromUtf8(original);
+        const int replacements = simultaneousReplace(&text, renames);
+        if (replacementCount)
+            *replacementCount = replacements;
+        if (rewritten)
+            *rewritten = replacements > 0 ? text.toUtf8() : original;
+        return true;
+    }
+    if (looksLikeUtf16LeText(original)) {
+        const auto *data = reinterpret_cast<const char16_t *>(original.constData());
+        QString text = QString::fromUtf16(data, original.size() / 2);
+        const int replacements = simultaneousReplace(&text, renames);
+        if (replacementCount)
+            *replacementCount = replacements;
+        if (rewritten)
+            *rewritten = replacements > 0
+                ? QByteArray(reinterpret_cast<const char *>(text.utf16()), text.size() * 2)
+                : original;
+        return true;
+    }
+    return false;
+}
+
+QString blockingReferenceSummary(const sc2dh::refs::UnifiedReferenceIndex &index, const QString &id)
+{
+    QStringList sources;
+    for (const sc2dh::refs::ReferenceRecord &record : index.strongReferencesToId(id)) {
+        if (record.rewritable)
+            continue;
+        QString source = record.sourceFile.isEmpty() ? QStringLiteral("<unknown>") : record.sourceFile;
+        if (record.lineNumber > 0)
+            source += QStringLiteral(":%1").arg(record.lineNumber);
+        sources << QStringLiteral("%1 in %2").arg(sc2dh::refs::referenceKindName(record.kind), source);
+    }
+    sources.removeDuplicates();
+    std::sort(sources.begin(), sources.end());
+    if (sources.size() > 6)
+        sources = sources.mid(0, 6) << QStringLiteral("...");
+    return sources.join(QStringLiteral(", "));
 }
 
 bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, const QString &value)
@@ -416,6 +569,9 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
 {
     QHash<QString, QVector<PendingRename>> pendingByFile;
     QStringList unsafeIds;
+    QStringList blockedReferenceIds;
+    sc2dh::refs::UnifiedReferenceIndex referenceIndex;
+    referenceIndex.build(analysis);
     QSet<QString> explicitIdentityKeys;
     struct LinkedCollectionCandidate {
         QString oldId;
@@ -432,6 +588,11 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         const DataNode &node = analysis.nodes[item.nodeIndex];
         if (sc2dh::isProtectedCatalogNode(node)) {
             unsafeIds << item.oldId;
+            continue;
+        }
+        if (referenceIndex.hasNonRewritableStrongReferenceToId(item.oldId)) {
+            const QString summary = blockingReferenceSummary(referenceIndex, item.oldId);
+            blockedReferenceIds << QStringLiteral("%1 (%2)").arg(item.oldId, summary);
             continue;
         }
         PendingRename pending;
@@ -476,6 +637,14 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
                          .arg(unsafeIds.size())
                          .arg(unsafeIds.mid(0, 12).join(QStringLiteral(", "))
                               + (unsafeIds.size() > 12 ? QStringLiteral(", ...") : QString()));
+    }
+    if (!blockedReferenceIds.isEmpty() && warnings) {
+        blockedReferenceIds.removeDuplicates();
+        std::sort(blockedReferenceIds.begin(), blockedReferenceIds.end());
+        *warnings << QStringLiteral("Skipped %1 rename item(s) because non-rewritable strong references still point at the old ID: %2")
+                         .arg(blockedReferenceIds.size())
+                         .arg(blockedReferenceIds.mid(0, 12).join(QStringLiteral("; "))
+                              + (blockedReferenceIds.size() > 12 ? QStringLiteral("; ...") : QString()));
     }
     if (pendingByFile.isEmpty()) {
         *error = QStringLiteral("No selected rename items are available.");
@@ -593,6 +762,32 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
             totals->changes += fileResult.changes;
         }
     }
+    for (const ScannedFileInfo &info : analysis.scannedFiles) {
+        const QString relative = relativeAnalysisPath(analysis, info.filePath);
+        if (!shouldRewriteSafeTextReferenceFile(info, relative))
+            continue;
+        QByteArray original;
+        if (!readFile(info.filePath, &original, error))
+            return false;
+        if (!containsRenameTokenBytes(original, renames))
+            continue;
+        QByteArray rewritten;
+        int replacements = 0;
+        if (!rewriteSafeTextBytes(original, renames, &rewritten, &replacements)) {
+            *error = QStringLiteral("Reference file contains renamed IDs but is not safe text: %1").arg(relative);
+            return false;
+        }
+        if (replacements <= 0 || rewritten == original)
+            continue;
+        staged->insert(info.filePath, rewritten);
+        if (!files->contains(info.filePath))
+            files->append(info.filePath);
+        totals->references += replacements;
+        if (collectChanges)
+            totals->changes << QStringLiteral("%1: %2 token-aware text reference replacement(s)")
+                                    .arg(info.filePath)
+                                    .arg(replacements);
+    }
     int expectedIdentities = 0;
     for (auto it = identities.cbegin(); it != identities.cend(); ++it)
         expectedIdentities += it.value().size();
@@ -673,7 +868,10 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
     QStringList warnings;
     QHash<QString, QString> appliedRenames;
     if (!prepare(analysis, plan, &staged, &rewriteResult, &absoluteFiles,
-                 &warnings, &result.error, false, progress, &appliedRenames)) return result;
+                 &warnings, &result.error, false, progress, &appliedRenames)) {
+        result.warnings = warnings;
+        return result;
+    }
     result.warnings = warnings;
     result.appliedRenames = appliedRenames;
     if (rewriteResult.identities <= 0) {
