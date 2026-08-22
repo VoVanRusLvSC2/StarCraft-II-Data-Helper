@@ -89,17 +89,46 @@ QString safetyKey(QString value)
     return value.trimmed().toCaseFolded();
 }
 
+QStringList doodadKeys(const sc2dh::decor::DoodadPlacement &doodad)
+{
+    QStringList keys;
+    const auto append = [&](const QString &value) {
+        const QString key = safetyKey(value);
+        if (!key.isEmpty())
+            keys << key;
+    };
+    append(doodad.id);
+    append(doodad.name);
+    return keys;
+}
+
+bool isDoodadExcluded(const sc2dh::decor::DoodadPlacement &doodad,
+                      const sc2dh::decor::DecorationSafetyContext &context)
+{
+    for (const QString &key : doodadKeys(doodad)) {
+        if (context.excludedDoodadKeys.contains(key))
+            return true;
+    }
+    return false;
+}
+
+int forcedZoneIdFor(const sc2dh::decor::DoodadPlacement &doodad,
+                    const sc2dh::decor::DecorationSafetyContext &context)
+{
+    for (const QString &key : doodadKeys(doodad)) {
+        const auto it = context.forcedZoneByDoodadKey.constFind(key);
+        if (it != context.forcedZoneByDoodadKey.cend())
+            return it.value();
+    }
+    return 0;
+}
+
 QStringList externalReferenceFiles(const sc2dh::decor::DoodadPlacement &doodad,
                                    const sc2dh::decor::DecorationSafetyContext &context)
 {
     QStringList files;
-    const auto appendForKey = [&](const QString &value) {
-        const QString key = safetyKey(value);
-        if (!key.isEmpty())
-            files += context.referenceFilesByDoodadKey.value(key);
-    };
-    appendForKey(doodad.id);
-    appendForKey(doodad.name);
+    for (const QString &key : doodadKeys(doodad))
+        files += context.referenceFilesByDoodadKey.value(key);
     files.removeAll(QString());
     files.removeDuplicates();
     std::sort(files.begin(), files.end(), [](const QString &left, const QString &right) {
@@ -234,14 +263,25 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
         plan.zones << ZoneAssignment{zone.id, {}};
     }
     QSet<int> zoneIds;
-    for (const DecorZone &zone : zones) {
+    QHash<int, int> zoneIndexById;
+    for (int zoneIndex = 0; zoneIndex < zones.size(); ++zoneIndex) {
+        const DecorZone &zone = zones.at(zoneIndex);
         if (zoneIds.contains(zone.id))
             plan.warnings << QStringLiteral("Decoration zone id is duplicated: %1.").arg(zone.id);
         zoneIds.insert(zone.id);
+        if (zone.id > 0 && !zoneIndexById.contains(zone.id))
+            zoneIndexById.insert(zone.id, zoneIndex);
     }
 
     for (int i = 0; i < plan.doodads.size(); ++i) {
         DoodadPlacement &doodad = plan.doodads[i];
+        const QString label = doodad.name.isEmpty() ? (doodad.id.isEmpty() ? doodad.type : doodad.id) : doodad.name;
+        doodad.userExcluded = isDoodadExcluded(doodad, safetyContext);
+        doodad.forcedZoneId = forcedZoneIdFor(doodad, safetyContext);
+        if (doodad.userExcluded && doodad.dynamicCandidate) {
+            doodad.dynamicCandidate = false;
+            doodad.staticOnlyReason = QStringLiteral("Static-only: excluded by user.");
+        }
         if (doodad.dynamicCandidate) {
             doodad.safetyReferenceFiles = externalReferenceFiles(doodad, safetyContext);
             if (!doodad.safetyReferenceFiles.isEmpty()) {
@@ -251,22 +291,38 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
             }
         }
         if (!doodad.dynamicCandidate) {
+            if (doodad.forcedZoneId > 0)
+                plan.warnings << QStringLiteral("Doodad %1 has a forced decoration zone %2, but it is static-only: %3")
+                                     .arg(label)
+                                     .arg(doodad.forcedZoneId)
+                                     .arg(doodad.staticOnlyReason);
             plan.staticOnlyDoodads << i;
             continue;
         }
 
-        int assignedZone = -1;
-        for (int z = 0; z < zones.size(); ++z) {
-            if (!inZone(doodad, zones.at(z)))
+        int assignedZoneIndex = -1;
+        if (doodad.forcedZoneId > 0) {
+            assignedZoneIndex = zoneIndexById.value(doodad.forcedZoneId, -1);
+            if (assignedZoneIndex < 0) {
+                plan.warnings << QStringLiteral("Doodad %1 is forced to missing decoration zone %2; leaving it unassigned.")
+                                     .arg(label)
+                                     .arg(doodad.forcedZoneId);
+                plan.unassignedDoodads << i;
                 continue;
-            assignedZone = z;
-            break;
+            }
+        } else {
+            for (int z = 0; z < zones.size(); ++z) {
+                if (!inZone(doodad, zones.at(z)))
+                    continue;
+                assignedZoneIndex = z;
+                break;
+            }
         }
-        if (assignedZone < 0) {
+        if (assignedZoneIndex < 0) {
             plan.unassignedDoodads << i;
             continue;
         }
-        plan.zones[assignedZone].doodadIndices << i;
+        plan.zones[assignedZoneIndex].doodadIndices << i;
     }
 
     if (warnings)

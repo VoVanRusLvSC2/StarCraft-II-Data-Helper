@@ -40,6 +40,16 @@ namespace
 
 constexpr qint64 MaxObjectsBytes = 64ll * 1024ll * 1024ll;
 
+enum DecorDoodadColumns {
+    DecorDoodadExcludeColumn = 0,
+    DecorDoodadForcedZoneColumn,
+    DecorDoodadNameColumn,
+    DecorDoodadIdColumn,
+    DecorDoodadTypeColumn,
+    DecorDoodadPositionColumn,
+    DecorDoodadStateColumn
+};
+
 class NumericItem : public QStandardItem
 {
 public:
@@ -78,6 +88,37 @@ QString boundsLabel(const sc2dh::perf::MapPerformanceCell &cell)
         .arg(cell.xMax, 0, 'f', 1)
         .arg(cell.yMin, 0, 'f', 1)
         .arg(cell.yMax, 0, 'f', 1);
+}
+
+QString doodadOverrideKey(QString value)
+{
+    return value.trimmed().toCaseFolded();
+}
+
+void addDoodadOverrideKeys(sc2dh::decor::DecorationSafetyContext *context,
+                           const QString &id,
+                           const QString &name,
+                           bool excluded,
+                           int forcedZone)
+{
+    if (!context)
+        return;
+    const QString idKey = doodadOverrideKey(id);
+    const QString nameKey = doodadOverrideKey(name);
+    const auto addExcluded = [&](const QString &key) {
+        if (!key.isEmpty())
+            context->excludedDoodadKeys.insert(key);
+    };
+    const auto addForced = [&](const QString &key) {
+        if (!key.isEmpty() && forcedZone > 0)
+            context->forcedZoneByDoodadKey.insert(key, forcedZone);
+    };
+    if (excluded) {
+        addExcluded(idKey);
+        addExcluded(nameKey);
+    }
+    addForced(idKey);
+    addForced(nameKey);
 }
 
 QColor riskColor(double score)
@@ -438,6 +479,32 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     m_zoneTable->setMinimumHeight(120);
     decorLayout->addWidget(m_zoneTable);
 
+    auto *doodadLabel = new QLabel(QStringLiteral("Doodad assignments: check Exclude to keep a doodad static, or enter a Zone Id to move it to that dynamic zone."), decorGroup);
+    doodadLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
+    doodadLabel->setWordWrap(true);
+    decorLayout->addWidget(doodadLabel);
+
+    m_doodadModel = new QStandardItemModel(this);
+    m_doodadModel->setHorizontalHeaderLabels({
+        QStringLiteral("Exclude"),
+        QStringLiteral("Forced Zone"),
+        QStringLiteral("Name"),
+        QStringLiteral("Id"),
+        QStringLiteral("Type"),
+        QStringLiteral("Position"),
+        QStringLiteral("State")
+    });
+    m_doodadTable = new QTableView(decorGroup);
+    m_doodadTable->setObjectName(QStringLiteral("decorDoodadAssignmentTable"));
+    m_doodadTable->setModel(m_doodadModel);
+    m_doodadTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_doodadTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_doodadTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_doodadTable->horizontalHeader()->setStretchLastSection(true);
+    m_doodadTable->verticalHeader()->setVisible(false);
+    m_doodadTable->setMinimumHeight(130);
+    decorLayout->addWidget(m_doodadTable);
+
     m_galaxyPreview = new QPlainTextEdit(decorGroup);
     m_galaxyPreview->setObjectName(QStringLiteral("decorGalaxyPreview"));
     m_galaxyPreview->setReadOnly(true);
@@ -453,6 +520,7 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     connect(m_prefixEdit, &QLineEdit::textChanged, this, &MapPerformancePage::updateDecorPreview);
     connect(m_batchSpin, &QSpinBox::valueChanged, this, &MapPerformancePage::updateDecorPreview);
     connect(m_zoneModel, &QStandardItemModel::itemChanged, this, &MapPerformancePage::updateDecorPreview);
+    connect(m_doodadModel, &QStandardItemModel::itemChanged, this, &MapPerformancePage::updateDecorPreview);
 
     layout->addWidget(decorGroup, 2);
 
@@ -516,6 +584,7 @@ void MapPerformancePage::rebuild()
         static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorZones({});
         m_model->removeRows(0, m_model->rowCount());
         populateZoneTable({});
+        populateDoodadTable({});
         m_summaryLabel->setText(QStringLiteral("Objects placement file was not found or is larger than %1. Open a SC2Map/extracted map with an Objects entry.").arg(formatBytes(MaxObjectsBytes)));
         m_warningLabel->setText(QStringLiteral("Estimated Static Risk is unavailable until the map placement data can be read."));
         m_decorSummaryLabel->setText(QStringLiteral("Decoration Streaming requires a readable Objects entry."));
@@ -550,6 +619,8 @@ void MapPerformancePage::rebuild()
         warning += QStringLiteral(" Warnings: %1").arg(m_report.warnings.join(QStringLiteral(" | ")));
     m_warningLabel->setText(warning);
     populateZoneTable(m_decorZones);
+    sc2dh::decor::DecorationStreamingPlanner decorPlanner;
+    populateDoodadTable(decorPlanner.parseObjects(m_objectsBytes));
     updateDecorPreview();
     updateDetails();
 }
@@ -658,6 +729,95 @@ void MapPerformancePage::populateZoneTable(const QVector<sc2dh::decor::DecorZone
     }
     m_zoneTable->resizeColumnsToContents();
     static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorZones(m_decorZones);
+}
+
+sc2dh::decor::DecorationSafetyContext MapPerformancePage::decorationSafetyContextFromDoodadTable() const
+{
+    sc2dh::decor::DecorationSafetyContext context;
+    if (!m_doodadModel)
+        return context;
+
+    for (int row = 0; row < m_doodadModel->rowCount(); ++row) {
+        const QStandardItem *excludeItem = m_doodadModel->item(row, DecorDoodadExcludeColumn);
+        const QStandardItem *forcedItem = m_doodadModel->item(row, DecorDoodadForcedZoneColumn);
+        const QStandardItem *nameItem = m_doodadModel->item(row, DecorDoodadNameColumn);
+        const QStandardItem *idItem = m_doodadModel->item(row, DecorDoodadIdColumn);
+        if (!excludeItem || !forcedItem)
+            continue;
+        const bool excluded = excludeItem->checkState() == Qt::Checked;
+        bool ok = false;
+        const int forcedZone = forcedItem->text().trimmed().toInt(&ok);
+        addDoodadOverrideKeys(&context,
+                              idItem ? idItem->text() : QString(),
+                              nameItem ? nameItem->text() : QString(),
+                              excluded,
+                              ok ? forcedZone : 0);
+    }
+    return context;
+}
+
+void MapPerformancePage::populateDoodadTable(const QVector<sc2dh::decor::DoodadPlacement> &doodads)
+{
+    if (!m_doodadModel)
+        return;
+    const QSignalBlocker blocker(m_doodadModel);
+    m_doodadModel->removeRows(0, m_doodadModel->rowCount());
+
+    for (const sc2dh::decor::DoodadPlacement &doodad : doodads) {
+        auto *exclude = new QStandardItem();
+        exclude->setCheckable(true);
+        exclude->setCheckState(Qt::Unchecked);
+        exclude->setEditable(false);
+
+        auto *forcedZone = new QStandardItem();
+        forcedZone->setEditable(true);
+        forcedZone->setToolTip(QStringLiteral("Optional numeric Zone Id. Empty means automatic coordinate assignment."));
+
+        auto *name = new QStandardItem(doodad.name);
+        auto *id = new QStandardItem(doodad.id);
+        auto *type = new QStandardItem(doodad.type);
+        auto *position = new QStandardItem(doodad.hasPosition
+                                               ? QStringLiteral("%1, %2, %3").arg(doodad.x, 0, 'f', 2).arg(doodad.y, 0, 'f', 2).arg(doodad.z, 0, 'f', 2)
+                                               : QStringLiteral("missing"));
+        auto *state = new QStandardItem(doodad.dynamicCandidate ? QStringLiteral("Dynamic candidate")
+                                                                : doodad.staticOnlyReason);
+
+        for (QStandardItem *item : {name, id, type, position, state})
+            item->setEditable(false);
+
+        m_doodadModel->appendRow({exclude, forcedZone, name, id, type, position, state});
+    }
+    m_doodadTable->resizeColumnsToContents();
+}
+
+void MapPerformancePage::updateDoodadTableState(const sc2dh::decor::DecorationStreamingPlan &plan)
+{
+    if (!m_doodadModel)
+        return;
+    const QSignalBlocker blocker(m_doodadModel);
+
+    QHash<int, int> zoneByDoodadIndex;
+    for (const sc2dh::decor::ZoneAssignment &assignment : plan.zones) {
+        for (int doodadIndex : assignment.doodadIndices)
+            zoneByDoodadIndex.insert(doodadIndex, assignment.zoneId);
+    }
+    QSet<int> unassigned = QSet<int>(plan.unassignedDoodads.cbegin(), plan.unassignedDoodads.cend());
+
+    const int rows = std::min(m_doodadModel->rowCount(), int(plan.doodads.size()));
+    for (int row = 0; row < rows; ++row) {
+        QStandardItem *state = m_doodadModel->item(row, DecorDoodadStateColumn);
+        if (!state)
+            continue;
+        if (zoneByDoodadIndex.contains(row)) {
+            state->setText(QStringLiteral("Dynamic zone %1").arg(zoneByDoodadIndex.value(row)));
+        } else if (unassigned.contains(row)) {
+            state->setText(QStringLiteral("Unassigned dynamic doodad"));
+        } else {
+            const QString reason = plan.doodads.at(row).staticOnlyReason;
+            state->setText(reason.isEmpty() ? QStringLiteral("Static-only") : reason);
+        }
+    }
+    m_doodadTable->resizeColumnsToContents();
 }
 
 void MapPerformancePage::buildAutoDecorZones()
@@ -801,10 +961,13 @@ void MapPerformancePage::updateDecorPreview()
         : m_prefixEdit->text().trimmed();
     options.batchLimit = m_batchSpin->value();
 
+    const sc2dh::decor::DecorationSafetyContext safetyContext = decorationSafetyContextFromDoodadTable();
     m_decorPreview = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(m_objectsBytes,
                                                                                          m_decorZones,
+                                                                                         safetyContext,
                                                                                          options);
     const sc2dh::decor::DecorationStreamingPlan &plan = m_decorPreview.plan;
+    updateDoodadTableState(plan);
     int dynamicAssigned = 0;
     for (const sc2dh::decor::ZoneAssignment &assignment : plan.zones)
         dynamicAssigned += assignment.doodadIndices.size();
@@ -892,6 +1055,7 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
         ? QStringLiteral("NAME_OUT_FUNK")
         : m_prefixEdit->text().trimmed();
     request.galaxyOptions.batchLimit = m_batchSpin->value();
+    request.safetyContext = decorationSafetyContextFromDoodadTable();
     request.overwriteExisting = overwrite;
 
     const sc2dh::decor::DecorOptimizedMapResult result =

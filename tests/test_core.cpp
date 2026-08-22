@@ -243,6 +243,7 @@ private slots:
     void mapPerformanceAnalyzerBuildsEstimatedStaticRiskHeatmap();
     void decorationStreamingParsesZonesAndGeneratesGalaxy();
     void decorationStreamingKeepsExternallyReferencedDoodadsStatic();
+    void decorationStreamingSupportsManualAssignmentOverrides();
     void decorationStreamingRejectsInvalidGalaxyOptions();
     void decorationStreamingBuildsOptimizedObjectsArtifacts();
     void decorationStreamingInjectsGalaxyIncludeOnce();
@@ -3401,6 +3402,58 @@ void CoreTests::decorationStreamingKeepsExternallyReferencedDoodadsStatic()
     QCOMPARE(referenced.safetyReferenceFiles, QStringList{QStringLiteral("MapScript.galaxy")});
 }
 
+void CoreTests::decorationStreamingSupportsManualAssignmentOverrides()
+{
+    const QByteArray objects = QByteArrayLiteral(
+        "ObjectDoodad { Id = 61 Name = \"AutoLeft\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
+        "ObjectDoodad { Id = 62 Name = \"ManualRight\" Type = \"RockVisual\" Position = (15, 10, 0) }\n"
+        "ObjectDoodad { Id = 63 Name = \"KeepStatic\" Type = \"GrassVisual\" Position = (110, 10, 0) }\n");
+    const QVector<sc2dh::decor::DecorZone> zones = {
+        {1, QStringLiteral("Left"), 0.0, 0.0, 50.0, 50.0},
+        {2, QStringLiteral("Right"), 100.0, 0.0, 150.0, 50.0}
+    };
+
+    sc2dh::decor::DecorationSafetyContext safety;
+    safety.forcedZoneByDoodadKey.insert(QStringLiteral("manualright"), 2);
+    safety.excludedDoodadKeys.insert(QStringLiteral("keepstatic"));
+
+    sc2dh::decor::DecorationStreamingPlanner planner;
+    const sc2dh::decor::DecorationOptimizedArtifacts artifacts =
+        planner.createOptimizedArtifacts(objects, zones, safety);
+
+    QVERIFY2(artifacts.valid, qPrintable(artifacts.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(artifacts.plan.zones.size(), 2);
+    QCOMPARE(artifacts.plan.zones.at(0).doodadIndices.size(), 1);
+    QCOMPARE(artifacts.plan.zones.at(1).doodadIndices.size(), 1);
+    QCOMPARE(artifacts.plan.doodads.at(artifacts.plan.zones.at(0).doodadIndices.first()).name,
+             QStringLiteral("AutoLeft"));
+    const int manualIndex = artifacts.plan.zones.at(1).doodadIndices.first();
+    QCOMPARE(artifacts.plan.doodads.at(manualIndex).name, QStringLiteral("ManualRight"));
+    QCOMPARE(artifacts.plan.doodads.at(manualIndex).forcedZoneId, 2);
+
+    QCOMPARE(artifacts.plan.staticOnlyDoodads.size(), 1);
+    const sc2dh::decor::DoodadPlacement &excluded =
+        artifacts.plan.doodads.at(artifacts.plan.staticOnlyDoodads.first());
+    QCOMPARE(excluded.name, QStringLiteral("KeepStatic"));
+    QVERIFY(excluded.userExcluded);
+    QVERIFY(excluded.staticOnlyReason.contains(QStringLiteral("excluded by user")));
+
+    const QString optimizedObjects = QString::fromUtf8(artifacts.optimizedObjectsBytes);
+    QVERIFY(!optimizedObjects.contains(QStringLiteral("AutoLeft")));
+    QVERIFY(!optimizedObjects.contains(QStringLiteral("ManualRight")));
+    QVERIFY(optimizedObjects.contains(QStringLiteral("KeepStatic")));
+    QCOMPARE(artifacts.removedDoodadIndices.size(), 2);
+
+    const QString galaxy = artifacts.galaxySource;
+    const qsizetype zone2Start = galaxy.indexOf(QStringLiteral("static void DecorOpt_CreateZone_2()"));
+    QVERIFY(zone2Start >= 0);
+    const qsizetype zone2End = galaxy.indexOf(QStringLiteral("void DecorOpt_CreateZone(int zoneId)"), zone2Start);
+    QVERIFY(zone2End > zone2Start);
+    const QString zone2Body = galaxy.mid(zone2Start, zone2End - zone2Start);
+    QVERIFY(zone2Body.contains(QStringLiteral("\"RockVisual\"")));
+    QVERIFY(!galaxy.contains(QStringLiteral("GrassVisual")));
+}
+
 void CoreTests::decorationStreamingRejectsInvalidGalaxyOptions()
 {
     const QByteArray objects = QByteArrayLiteral(
@@ -3540,7 +3593,9 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     const QByteArray objects = QByteArrayLiteral(
         "ObjectDoodad { Id = 31 Name = \"ReferencedVisual\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
         "ObjectDoodad { Id = 32 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) }\n"
-        "ObjectDoodad { Id = 33 Name = \"FreeVisual\" Type = \"RockVisual\" Position = (12, 12, 0) }\n");
+        "ObjectDoodad { Id = 33 Name = \"FreeVisual\" Type = \"RockVisual\" Position = (12, 12, 0) }\n"
+        "ObjectDoodad { Id = 34 Name = \"ManualRight\" Type = \"CrystalVisual\" Position = (13, 12, 0) }\n"
+        "ObjectDoodad { Id = 35 Name = \"KeepStatic\" Type = \"GrassVisual\" Position = (14, 12, 0) }\n");
     const QByteArray mapScript = QByteArrayLiteral(
         "include \"TriggerLibs/NativeLib\"\n"
         "void InitMap() { TriggerDebugOutput(1, StringToText(\"ReferencedVisual\"), true); }\n");
@@ -3558,7 +3613,12 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     sc2dh::decor::DecorOptimizedMapRequest request;
     request.sourceArchivePath = sourcePath;
     request.outputArchivePath = outputPath;
-    request.zones = {{1, QStringLiteral("ZoneA"), 0.0, 0.0, 50.0, 50.0}};
+    request.zones = {
+        {1, QStringLiteral("ZoneA"), 0.0, 0.0, 50.0, 50.0},
+        {2, QStringLiteral("ZoneB"), 100.0, 0.0, 150.0, 50.0}
+    };
+    request.safetyContext.forcedZoneByDoodadKey.insert(QStringLiteral("manualright"), 2);
+    request.safetyContext.excludedDoodadKeys.insert(QStringLiteral("keepstatic"));
     request.galaxyOptions.functionPrefix = QStringLiteral("NAME_OUT_FUNK");
     request.galaxyOptions.batchLimit = 4;
 
@@ -3566,7 +3626,7 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
         sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
     QVERIFY2(result.success, qPrintable(result.error + QStringLiteral(" ") + result.warnings.join(QStringLiteral("; "))));
     QCOMPARE(result.outputArchivePath, outputPath);
-    QCOMPARE(result.removedDoodads, 1);
+    QCOMPARE(result.removedDoodads, 2);
     QVERIFY(QFileInfo::exists(sourcePath));
     QVERIFY(QFileInfo::exists(outputPath));
 
@@ -3577,6 +3637,8 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("ReferencedVisual")));
     QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("FreeVisual")));
     QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("StaticBlock")));
+    QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("ManualRight")));
+    QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("KeepStatic")));
 
     Sc2Archive optimized;
     QVERIFY2(optimized.load(outputPath, &error), qPrintable(error));
@@ -3586,6 +3648,8 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY(optimizedObjectsText.contains(QStringLiteral("ReferencedVisual")));
     QVERIFY(!optimizedObjectsText.contains(QStringLiteral("FreeVisual")));
     QVERIFY(optimizedObjectsText.contains(QStringLiteral("StaticBlock")));
+    QVERIFY(!optimizedObjectsText.contains(QStringLiteral("ManualRight")));
+    QVERIFY(optimizedObjectsText.contains(QStringLiteral("KeepStatic")));
 
     QByteArray optimizedMapScript;
     QVERIFY2(optimized.readEntry(QStringLiteral("MapScript.galaxy"), &optimizedMapScript, &error), qPrintable(error));
@@ -3597,10 +3661,13 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY2(optimized.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error), qPrintable(error));
     const QString runtimeText = QString::fromUtf8(runtime);
     QVERIFY(runtimeText.contains(QStringLiteral("void NAME_OUT_FUNK_1()")));
+    QVERIFY(runtimeText.contains(QStringLiteral("void NAME_OUT_FUNK_2()")));
     QVERIFY(runtimeText.contains(QStringLiteral("DecorOpt_CreateZone")));
     QVERIFY(runtimeText.contains(QStringLiteral("RockVisual")));
+    QVERIFY(runtimeText.contains(QStringLiteral("CrystalVisual")));
     QVERIFY(!runtimeText.contains(QStringLiteral("ReferencedVisual")));
     QVERIFY(!runtimeText.contains(QStringLiteral("StaticBlock")));
+    QVERIFY(!runtimeText.contains(QStringLiteral("GrassVisual")));
 #endif
 }
 

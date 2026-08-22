@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QSet>
 #include <QVector>
 #include <QString>
 #include <QStringList>
@@ -30,6 +31,8 @@ struct DoodadPlacement
     QStringList safetyReferenceFiles;
     bool hasPosition = false;
     bool dynamicCandidate = false;
+    bool userExcluded = false;
+    int forcedZoneId = 0;
     QString staticOnlyReason;
     qsizetype sourceStart = -1;
     qsizetype sourceEnd = -1;
@@ -63,6 +66,8 @@ struct DecorationStreamingPlan
 struct DecorationSafetyContext
 {
     QHash<QString, QStringList> referenceFilesByDoodadKey;
+    QSet<QString> excludedDoodadKeys;
+    QHash<QString, int> forcedZoneByDoodadKey;
 };
 
 struct GalaxyGenerationOptions

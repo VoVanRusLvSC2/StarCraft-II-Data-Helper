@@ -12,6 +12,7 @@ struct DecorOptimizedMapRequest
     QString sourceArchivePath;
     QString outputArchivePath;
     QVector<DecorZone> zones;
+    DecorationSafetyContext safetyContext;
     GalaxyGenerationOptions galaxyOptions;
     QString objectsEntry = QStringLiteral("Objects");
     QString mapScriptEntry = QStringLiteral("MapScript.galaxy");

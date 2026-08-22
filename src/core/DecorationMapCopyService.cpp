@@ -172,7 +172,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
                                                                 QStringList *warnings,
                                                                 QString *error)
 {
-    sc2dh::decor::DecorationSafetyContext context;
+    sc2dh::decor::DecorationSafetyContext context = request.safetyContext;
     sc2dh::decor::DecorationStreamingPlanner planner;
     const QVector<sc2dh::decor::DoodadPlacement> doodads = planner.parseObjects(objectsBytes);
 

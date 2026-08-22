@@ -38,7 +38,10 @@ private:
     QString sourceArchivePath() const;
     QString defaultDecorOutputPath() const;
     QVector<sc2dh::decor::DecorZone> zonesFromModel() const;
+    sc2dh::decor::DecorationSafetyContext decorationSafetyContextFromDoodadTable() const;
     void populateZoneTable(const QVector<sc2dh::decor::DecorZone> &zones);
+    void populateDoodadTable(const QVector<sc2dh::decor::DoodadPlacement> &doodads);
+    void updateDoodadTableState(const sc2dh::decor::DecorationStreamingPlan &plan);
     QString detailTextForCell(const sc2dh::perf::MapPerformanceCell &cell) const;
 
     AnalysisResult m_result;
@@ -62,6 +65,8 @@ private:
     QSpinBox *m_batchSpin = nullptr;
     QStandardItemModel *m_zoneModel = nullptr;
     QTableView *m_zoneTable = nullptr;
+    QStandardItemModel *m_doodadModel = nullptr;
+    QTableView *m_doodadTable = nullptr;
     QPlainTextEdit *m_galaxyPreview = nullptr;
     QPushButton *m_createCopyButton = nullptr;
 };
