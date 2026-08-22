@@ -159,7 +159,11 @@ namespace
     bool actorEventLike(const pugi::xml_node &node)
     {
         const QString name = QString::fromUtf8(node.name()).toLower();
-        return name.contains(QStringLiteral("event")) || name == QStringLiteral("on") || name.contains(QStringLiteral("term"));
+        return name == QStringLiteral("on")
+            || name == QStringLiteral("remove")
+            || name == QStringLiteral("do")
+            || name == QStringLiteral("event")
+            || name.contains(QStringLiteral("term"));
     }
 
     bool isTrueAttribute(const pugi::xml_node &node, const char *name)
@@ -193,6 +197,73 @@ namespace
         return {};
     }
 
+    void appendActorEventNodeCandidates(const pugi::xml_node &eventNode,
+                                        const QString &filePath,
+                                        const DataNode &actorNode,
+                                        const QSet<QString> &ids,
+                                        QVector<DeepCleanupCandidate> *candidates)
+    {
+        if (!eventNode || eventNode.type() != pugi::node_element || !candidates)
+            return;
+        if (actorEventLike(eventNode))
+        {
+            const QString xml = serializeNode(eventNode);
+            const QString structuralReason = brokenActorEventReason(eventNode);
+            if (!structuralReason.isEmpty())
+            {
+                DeepCleanupCandidate candidate;
+                candidate.index = candidates->size();
+                candidate.kind = DeepCleanupKind::BrokenActorEvent;
+                candidate.action = DeepCleanupAction::RemoveXmlNode;
+                candidate.state = CandidateState::Safe;
+                candidate.recommended = true;
+                candidate.filePath = filePath;
+                candidate.label = QStringLiteral("%1 event in %2").arg(QString::fromUtf8(eventNode.name()), actorNode.id);
+                candidate.xmlLocation = buildPathFromNode(eventNode);
+                candidate.reason = structuralReason;
+                candidate.detail = xml.left(600);
+                candidates->append(candidate);
+                return;
+            }
+            const QStringList refs = typedReferences(xml);
+            if (!refs.isEmpty())
+            {
+                int existing = 0;
+                for (const QString &ref : refs)
+                    if (ids.contains(ref))
+                        ++existing;
+                DeepCleanupCandidate candidate;
+                candidate.kind = DeepCleanupKind::BrokenActorEvent;
+                candidate.index = candidates->size();
+                candidate.filePath = filePath;
+                candidate.label = QStringLiteral("%1 event in %2").arg(QString::fromUtf8(eventNode.name()), actorNode.id);
+                candidate.xmlLocation = buildPathFromNode(eventNode);
+                candidate.detail = xml.left(600);
+                if (existing == 0)
+                {
+                    candidate.action = DeepCleanupAction::RemoveXmlNode;
+                    candidate.state = CandidateState::Safe;
+                    candidate.recommended = true;
+                    candidate.reason = QStringLiteral("Actor event references only missing typed IDs: %1").arg(refs.join(QStringLiteral(", ")));
+                    candidates->append(candidate);
+                    return;
+                }
+                if (existing < refs.size())
+                {
+                    candidate.action = DeepCleanupAction::ReportOnly;
+                    candidate.state = CandidateState::Risky;
+                    candidate.recommended = false;
+                    candidate.reason = QStringLiteral("Actor event has mixed existing and missing typed IDs: %1").arg(refs.join(QStringLiteral(", ")));
+                    candidates->append(candidate);
+                }
+            }
+        }
+
+        for (pugi::xml_node child = eventNode.first_child(); child; child = child.next_sibling())
+            if (child.type() == pugi::node_element)
+                appendActorEventNodeCandidates(child, filePath, actorNode, ids, candidates);
+    }
+
     void appendActorEventCandidates(const AnalysisResult &analysis,
                                     const QSet<QString> &ids,
                                     QVector<DeepCleanupCandidate> *candidates)
@@ -212,59 +283,9 @@ namespace
                     continue;
                 for (pugi::xml_node child = actor.first_child(); child; child = child.next_sibling())
                 {
-                    if (child.type() != pugi::node_element || !actorEventLike(child))
+                    if (child.type() != pugi::node_element)
                         continue;
-                    const QString xml = serializeNode(child);
-                    const QString structuralReason = brokenActorEventReason(child);
-                    if (!structuralReason.isEmpty())
-                    {
-                        DeepCleanupCandidate candidate;
-                        candidate.index = candidates->size();
-                        candidate.kind = DeepCleanupKind::BrokenActorEvent;
-                        candidate.action = DeepCleanupAction::RemoveXmlNode;
-                        candidate.state = CandidateState::Safe;
-                        candidate.recommended = true;
-                        candidate.filePath = it.key();
-                        candidate.label = QStringLiteral("%1 event in %2").arg(QString::fromUtf8(child.name()), node.id);
-                        candidate.xmlLocation = buildPathFromNode(child);
-                        candidate.reason = structuralReason;
-                        candidate.detail = xml.left(600);
-                        candidates->append(candidate);
-                        continue;
-                    }
-                    const QStringList refs = typedReferences(xml);
-                    if (refs.isEmpty())
-                        continue;
-                    int existing = 0;
-                    for (const QString &ref : refs)
-                        if (ids.contains(ref))
-                            ++existing;
-                    DeepCleanupCandidate candidate;
-                    candidate.kind = DeepCleanupKind::BrokenActorEvent;
-                    candidate.index = candidates->size();
-                    candidate.filePath = it.key();
-                    candidate.label = QStringLiteral("%1 event in %2").arg(QString::fromUtf8(child.name()), node.id);
-                    candidate.xmlLocation = buildPathFromNode(child);
-                    candidate.detail = xml.left(600);
-                    if (existing == 0)
-                    {
-                        candidate.action = DeepCleanupAction::RemoveXmlNode;
-                        candidate.state = CandidateState::Safe;
-                        candidate.recommended = true;
-                        candidate.reason = QStringLiteral("Actor event references only missing typed IDs: %1").arg(refs.join(QStringLiteral(", ")));
-                    }
-                    else if (existing < refs.size())
-                    {
-                        candidate.action = DeepCleanupAction::ReportOnly;
-                        candidate.state = CandidateState::Risky;
-                        candidate.recommended = false;
-                        candidate.reason = QStringLiteral("Actor event has mixed existing and missing typed IDs: %1").arg(refs.join(QStringLiteral(", ")));
-                    }
-                    else
-                    {
-                        continue;
-                    }
-                    candidates->append(candidate);
+                    appendActorEventNodeCandidates(child, it.key(), node, ids, candidates);
                 }
             }
         }
