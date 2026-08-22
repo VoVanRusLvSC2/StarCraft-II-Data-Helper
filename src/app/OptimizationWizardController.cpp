@@ -901,6 +901,7 @@ void OptimizationWizardController::applyPlan()
         QHash<QString, UnitFamily> collectionFamilyByRoot;
         for (const UnitFamily &family : collectionFamilies)
             collectionFamilyByRoot.insert(family.rootId, family);
+        bool collectionChanged = false;
         const int collectionCount = selection.collection.size();
         for (int collectionIndex = 0; collectionIndex < collectionCount; ++collectionIndex)
         {
@@ -949,7 +950,11 @@ void OptimizationWizardController::applyPlan()
             }
             collectionAdded += result.recordsAdded;
             collectionReorganized += result.recordsRemoved;
+            collectionChanged = true;
         }
+
+        if (failure.isEmpty() && collectionChanged && !reloadWorkingAnalysis(window->m_rootFolder, &current, &error))
+            failure = error;
 
         if (failure.isEmpty())
         {
