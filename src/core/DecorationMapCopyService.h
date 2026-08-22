@@ -26,6 +26,10 @@ struct DecorOptimizedMapResult
     QString outputArchivePath;
     DecorationArchivePatch patch;
     int removedDoodads = 0;
+    bool fullAnalysisVerified = false;
+    int verifiedScannedFiles = 0;
+    int verifiedDataNodes = 0;
+    QStringList verificationParseErrors;
     QStringList warnings;
     QString error;
 };

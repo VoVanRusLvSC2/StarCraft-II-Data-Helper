@@ -3605,7 +3605,7 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
                                   {
                                       {QStringLiteral("Objects"), objects},
                                       {QStringLiteral("MapScript.galaxy"), mapScript},
-                                      {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog/>")}
+                                      {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog><CUnit id=\"VerificationUnit\"/></Catalog>")}
                                   },
                                   &error),
              qPrintable(error));
@@ -3627,6 +3627,10 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY2(result.success, qPrintable(result.error + QStringLiteral(" ") + result.warnings.join(QStringLiteral("; "))));
     QCOMPARE(result.outputArchivePath, outputPath);
     QCOMPARE(result.removedDoodads, 2);
+    QVERIFY(result.fullAnalysisVerified);
+    QVERIFY(result.verifiedScannedFiles >= 3);
+    QVERIFY(result.verifiedDataNodes >= 1);
+    QVERIFY(result.verificationParseErrors.isEmpty());
     QVERIFY(QFileInfo::exists(sourcePath));
     QVERIFY(QFileInfo::exists(outputPath));
 

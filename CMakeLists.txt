@@ -489,13 +489,29 @@ endif()
 
 add_executable(SC2DecorOptimizeMap
     src/tools/DecorOptimizeMap.cpp
+    src/core/AnalysisModels.cpp
+    src/core/AnalysisIndex.cpp
+    src/core/ScannedFileReader.cpp
+    src/core/AssetFileRules.cpp
+    src/core/AssetReferenceScanner.cpp
+    src/core/UnifiedReferenceIndex.cpp
+    src/core/AssetOptimizationAnalyzer.cpp
+    src/core/TriggerPerformanceAnalyzer.cpp
     src/core/DecorationStreamingPlanner.cpp
     src/core/DecorationMapCopyService.cpp
+    src/core/XmlCleanupUtils.cpp
+    src/core/SemanticDuplicateAnalyzer.cpp
+    src/core/CatalogLinkSchema.cpp
+    src/core/FolderAnalyzer.cpp
+    src/core/BackupManager.cpp
     src/core/Sc2Archive.cpp
+    src/core/XmlLoader.cpp
+    src/core/DeepCleanupService.cpp
 )
 target_include_directories(SC2DecorOptimizeMap PRIVATE src)
 target_link_libraries(SC2DecorOptimizeMap PRIVATE
     Qt6::Core
+    pugixml
     StormLib::storm
     nlohmann_json::nlohmann_json
 )

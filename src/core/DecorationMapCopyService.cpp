@@ -1,12 +1,15 @@
 #include "core/DecorationMapCopyService.h"
 
+#include "core/FolderAnalyzer.h"
 #include "core/Sc2Archive.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QSet>
+#include <QTemporaryDir>
 
 #include <algorithm>
 
@@ -24,6 +27,121 @@ QString defaultOutputPath(const QString &sourceArchivePath)
 bool samePath(const QString &left, const QString &right)
 {
     return QFileInfo(left).absoluteFilePath().compare(QFileInfo(right).absoluteFilePath(), Qt::CaseInsensitive) == 0;
+}
+
+bool normalizedExtractEntry(const QString &entryName, QString *relative, QString *error)
+{
+    QString normalized = QDir::cleanPath(entryName).replace('\\', '/');
+    while (normalized.startsWith(QLatin1Char('/')))
+        normalized.remove(0, 1);
+    if (normalized.isEmpty() || normalized == QStringLiteral("."))
+        return false;
+    if (QDir::isAbsolutePath(normalized)
+        || normalized == QStringLiteral("..")
+        || normalized.startsWith(QStringLiteral("../"))
+        || normalized.contains(QStringLiteral("/../"))
+        || normalized.contains(QLatin1Char(':'))) {
+        if (error)
+            *error = QStringLiteral("Unsafe archive entry path: %1").arg(entryName);
+        return false;
+    }
+    if (relative)
+        *relative = normalized;
+    return true;
+}
+
+bool extractArchiveForAnalysis(const Sc2Archive &archive,
+                               const QString &targetFolder,
+                               QString *error)
+{
+    QDir root(targetFolder);
+    const QString rootPath = QDir::cleanPath(QFileInfo(targetFolder).absoluteFilePath()).replace('\\', '/');
+
+    for (const QString &entry : archive.allEntries()) {
+        QString relative;
+        QString pathError;
+        if (!normalizedExtractEntry(entry, &relative, &pathError)) {
+            if (!pathError.isEmpty()) {
+                if (error)
+                    *error = pathError;
+                return false;
+            }
+            continue;
+        }
+        if (relative.endsWith(QLatin1Char('/')))
+            continue;
+
+        QByteArray bytes;
+        if (!archive.readEntry(entry, &bytes, error))
+            return false;
+
+        const QString outputPath = root.absoluteFilePath(relative);
+        const QString outputAbs = QDir::cleanPath(QFileInfo(outputPath).absoluteFilePath()).replace('\\', '/');
+        if (outputAbs != rootPath && !outputAbs.startsWith(rootPath + QLatin1Char('/'), Qt::CaseInsensitive)) {
+            if (error)
+                *error = QStringLiteral("Refused to extract archive entry outside verification folder: %1").arg(entry);
+            return false;
+        }
+        const QFileInfo outputInfo(outputPath);
+        if (!root.mkpath(root.relativeFilePath(outputInfo.absolutePath()))) {
+            if (error)
+                *error = QStringLiteral("Unable to create verification folder for archive entry: %1").arg(entry);
+            return false;
+        }
+
+        QSaveFile file(outputPath);
+        if (!file.open(QIODevice::WriteOnly)
+            || file.write(bytes) != bytes.size()
+            || !file.commit()) {
+            if (error)
+                *error = QStringLiteral("Unable to write verification copy of archive entry: %1").arg(entry);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool verifyArchiveWithFolderAnalysis(const Sc2Archive &archive,
+                                     sc2dh::decor::DecorOptimizedMapResult *result,
+                                     QString *error)
+{
+    if (!result) {
+        if (error)
+            *error = QStringLiteral("Internal error: missing decoration result for analysis verification.");
+        return false;
+    }
+    QTemporaryDir extracted;
+    if (!extracted.isValid()) {
+        if (error)
+            *error = QStringLiteral("Unable to create temporary folder for optimized map analysis.");
+        return false;
+    }
+    if (!extractArchiveForAnalysis(archive, extracted.path(), error))
+        return false;
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    if (!analyzer.analyzeFolder(extracted.path(), {}, &analysis, error))
+        return false;
+
+    result->verifiedScannedFiles = analysis.scannedFiles.size();
+    result->verifiedDataNodes = analysis.nodes.size();
+    result->verificationParseErrors.clear();
+    for (const ParseErrorInfo &parseError : analysis.parseErrors) {
+        result->verificationParseErrors << QStringLiteral("%1: %2")
+                                               .arg(QDir(extracted.path()).relativeFilePath(parseError.filePath),
+                                                    parseError.message);
+    }
+    if (!result->verificationParseErrors.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("Optimized map full analysis reported parse error(s): %1")
+                         .arg(result->verificationParseErrors.join(QStringLiteral("; ")));
+        return false;
+    }
+
+    result->fullAnalysisVerified = true;
+    return true;
 }
 
 QString normalizedEntry(QString entry)
@@ -317,6 +435,12 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
             result.error = QStringLiteral("Decoration optimized copy verification failed for %1.").arg(it.key());
             return result;
         }
+    }
+
+    if (!verifyArchiveWithFolderAnalysis(verification, &result, &error)) {
+        QFile::remove(result.outputArchivePath);
+        result.error = QStringLiteral("Decoration optimized copy full analysis failed: %1").arg(error);
+        return result;
     }
 
     result.removedDoodads = result.patch.artifacts.removedDoodadIndices.size();

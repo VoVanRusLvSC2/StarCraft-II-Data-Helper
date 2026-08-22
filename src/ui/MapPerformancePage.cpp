@@ -1068,9 +1068,11 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
         return;
     }
 
-    QString message = QStringLiteral("Created structural-verified copy:\n%1\n\nRemoved dynamic visual doodads: %2")
+    QString message = QStringLiteral("Created structural-verified copy:\n%1\n\nRemoved dynamic visual doodads: %2\nFull re-analysis: %3 file(s), %4 data node(s).")
                           .arg(QDir::toNativeSeparators(result.outputArchivePath))
-                          .arg(result.removedDoodads);
+                          .arg(result.removedDoodads)
+                          .arg(result.verifiedScannedFiles)
+                          .arg(result.verifiedDataNodes);
     if (!result.warnings.isEmpty())
         message += QStringLiteral("\n\nWarnings:\n%1").arg(result.warnings.join(QStringLiteral("\n")));
     QMessageBox::information(this,
