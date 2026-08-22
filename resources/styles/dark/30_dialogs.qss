@@ -15,10 +15,13 @@ QDialog#settingsDialog {
 }
 
 QFrame#settingsTitleBar {
-    background: transparent;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 rgba(0, 42, 35, 245),
+                                stop:0.46 rgba(0, 20, 22, 238),
+                                stop:1 rgba(1, 8, 14, 246));
     border: 5px solid transparent;
     border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largeup_ONE_UPSCALE_APS.png) 26 40 26 40 stretch stretch;
-    min-height: 34px;
+    min-height: 46px;
 }
 
 QFrame#settingsTitleBar:hover {
@@ -26,24 +29,57 @@ QFrame#settingsTitleBar:hover {
 }
 
 QLabel#settingsWindowTitle {
-    color: #eafff6;
-    font-size: 10pt;
+    color: #f0fff9;
+    font-size: 11pt;
+    font-weight: 800;
+    background: transparent;
+}
+
+QLabel#settingsWindowContext {
+    color: rgba(112, 255, 231, 225);
+    font-size: 7pt;
     font-weight: 700;
     background: transparent;
 }
 
 QDialog#settingsDialog QLabel#panelTitle {
-    color: #f5fffc;
-    font-size: 14px;
+    color: #effff9;
+    font-size: 15px;
     font-weight: 800;
     background: transparent;
 }
 
 QDialog#settingsDialog QLabel#inspectorSubtitle {
-    color: #9fffdc;
+    color: #b8ffe8;
     font-size: 11pt;
     font-weight: 600;
     background: transparent;
+}
+
+QPushButton#settingsCancelButton,
+QPushButton#settingsSaveButton {
+    min-width: 112px;
+    min-height: 34px;
+    font-weight: 800;
+    color: #eafff7;
+}
+
+QPushButton#settingsCancelButton {
+    border-image: url(:/textures/ui_battlenet_glues_redbuttons_alternate_largeup_ONE_UPSCALE_APS.png) 26 40 26 40 stretch stretch;
+}
+
+QPushButton#settingsCancelButton:hover {
+    border-image: url(:/textures/ui_battlenet_glues_redbuttons_alternate_largeover_ONE_UPSCALE_APS.png) 26 40 26 40 stretch stretch;
+    color: #ffffff;
+}
+
+QPushButton#settingsSaveButton {
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largeup_ONE_UPSCALE_APS.png) 26 40 26 40 stretch stretch;
+}
+
+QPushButton#settingsSaveButton:hover {
+    border-image: url(:/textures/ui_battlenet_glues_greenbuttons_alternate_largeover_ONE_UPSCALE_APS.png) 26 40 26 40 stretch stretch;
+    color: #ffffff;
 }
 
 QListWidget#settingsNavigation {
@@ -85,7 +121,8 @@ QFrame#settingsPage {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                                 stop:0 rgba(1, 20, 16, 220),
                                 stop:0.56 rgba(0, 13, 12, 232),
-                                stop:1 rgba(0, 8, 8, 244));
+                                stop:0.82 rgba(0, 8, 11, 240),
+                                stop:1 rgba(1, 4, 9, 248));
     border: 5px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
 }
@@ -381,6 +418,38 @@ QPushButton#sc2OpenFileParentButton {
     padding: 1px 11px;
     font-size: 12pt;
     font-weight: 800;
+}
+
+QFrame#sc2OpenFileCommandBar {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 rgba(0, 28, 24, 244),
+                                stop:0.48 rgba(0, 13, 16, 246),
+                                stop:1 rgba(2, 7, 13, 250));
+    border: 6px solid transparent;
+    border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 10 10 10 10 stretch stretch;
+    min-height: 44px;
+}
+
+QLabel#sc2OpenFileSearchTag {
+    color: #69ffe0;
+    background: transparent;
+    font-size: 9pt;
+    font-weight: 800;
+    padding: 0 2px 0 8px;
+}
+
+QLineEdit#sc2OpenFileSearch {
+    background-color: rgba(0, 7, 10, 210);
+    border: 5px solid transparent;
+    border-image: url(:/textures/ui_nova_global_tooltip.png) 10 10 10 10 stretch stretch;
+    color: #dffff7;
+    padding: 1px 10px;
+}
+
+QLineEdit#sc2OpenFileSearch:focus {
+    background-color: rgba(2, 18, 20, 238);
+    border-image: url(:/textures/ui_nova_global_tooltip_orange.png) 10 10 10 10 stretch stretch;
+    color: #ffffff;
 }
 
 QPushButton#sc2OpenFileParentButton:hover {

@@ -17,6 +17,7 @@
 #include "ui/FormatterPage.h"
 #include "ui/GraphPage.h"
 #include "ui/LogPanel.h"
+#include "ui/MapPerformancePage.h"
 #include "ui/OverviewPage.h"
 #include "ui/PropertiesPage.h"
 #include "ui/RenameIdsPage.h"
@@ -478,9 +479,10 @@ void MainWindow::updateFullscreenActionText()
     {
         return;
     }
-    m_fullscreenAction->setText(isFullScreen() ? QStringLiteral("Windowed")
-                                               : QStringLiteral("Fullscreen"));
-    m_fullscreenAction->setToolTip(QStringLiteral("Toggle fullscreen mode (F11)"));
+    m_fullscreenAction->setText(isFullScreen()
+                                    ? QCoreApplication::translate("MainWindow", "Windowed")
+                                    : QCoreApplication::translate("MainWindow", "Fullscreen"));
+    m_fullscreenAction->setToolTip(QCoreApplication::translate("MainWindow", "Toggle fullscreen mode (F11)"));
 }
 
 void MainWindow::showSettingsDialog()
@@ -2216,6 +2218,7 @@ void MainWindow::refreshPages()
     m_analysisPage->setAnalysisResult(m_result);
     m_dependenciesPage->setAnalysisResult(m_result);
     m_graphPage->setAnalysisResult(m_result);
+    m_mapPerformancePage->setAnalysisResult(m_result);
     m_propertiesPage->setAnalysisResult(m_result);
     m_xmlSourcePage->setAnalysisResult(m_result);
     m_dryRunPage->setAnalysisResult(m_result);

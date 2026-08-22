@@ -23,6 +23,7 @@ class QTabWidget;
 class OverviewPage;
 class DependenciesPage;
 class GraphPage;
+class MapPerformancePage;
 class PropertiesPage;
 class DataCollectionPage;
 class RenameIdsPage;
@@ -155,6 +156,7 @@ private:
     OverviewPage *m_analysisPage = nullptr;
     DependenciesPage *m_dependenciesPage = nullptr;
     GraphPage *m_graphPage = nullptr;
+    MapPerformancePage *m_mapPerformancePage = nullptr;
     PropertiesPage *m_propertiesPage = nullptr;
     DataCollectionPage *m_dataCollectionPage = nullptr;
     RenameIdsPage *m_renameIdsPage = nullptr;

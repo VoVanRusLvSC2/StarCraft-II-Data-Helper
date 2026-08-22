@@ -10,7 +10,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Test Concurrent Network)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Test Concurrent Network LinguistTools)
 
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -67,6 +67,8 @@ target_sources(SC2DataHelper PRIVATE
     src/app/SourceSelectionController.cpp
     src/app/AudioManager.h
     src/app/AudioManager.cpp
+    src/app/AppSettings.h
+    src/app/AppSettings.cpp
     src/app/ThemeManager.h
     src/app/ThemeManager.cpp
     src/core/Sc2Archive.h
@@ -98,8 +100,14 @@ target_sources(SC2DataHelper PRIVATE
     src/core/AssetFileRules.cpp
     src/core/AssetReferenceScanner.h
     src/core/AssetReferenceScanner.cpp
+    src/core/UnifiedReferenceIndex.h
+    src/core/UnifiedReferenceIndex.cpp
     src/core/AssetOptimizationAnalyzer.h
     src/core/AssetOptimizationAnalyzer.cpp
+    src/core/DependencyUsageReport.h
+    src/core/DependencyUsageReport.cpp
+    src/core/MapPerformanceAnalyzer.h
+    src/core/MapPerformanceAnalyzer.cpp
     src/core/TriggerPerformanceAnalyzer.h
     src/core/TriggerPerformanceAnalyzer.cpp
     src/core/DecorationStreamingPlanner.h
@@ -153,6 +161,8 @@ target_sources(SC2DataHelper PRIVATE
     src/ui/DependenciesPage.cpp
     src/ui/GraphPage.h
     src/ui/GraphPage.cpp
+    src/ui/MapPerformancePage.h
+    src/ui/MapPerformancePage.cpp
     src/ui/PropertiesPage.h
     src/ui/PropertiesPage.cpp
     src/ui/DataCollectionPage.h
@@ -176,6 +186,30 @@ target_sources(SC2DataHelper PRIVATE
     src/ui/ObjectFilterProxyModel.h
     src/ui/ObjectFilterProxyModel.cpp
     resources/resources.qrc
+)
+
+qt_add_lrelease(SC2DataHelper
+    TS_FILES
+        translations/SC2DataHelper_ru_RU.ts
+        translations/SC2DataHelper_de_DE.ts
+        translations/SC2DataHelper_es_MX.ts
+        translations/SC2DataHelper_es_ES.ts
+        translations/SC2DataHelper_fr_FR.ts
+        translations/SC2DataHelper_it_IT.ts
+        translations/SC2DataHelper_pl_PL.ts
+        translations/SC2DataHelper_pt_BR.ts
+        translations/SC2DataHelper_ko_KR.ts
+        translations/SC2DataHelper_zh_CN.ts
+        translations/SC2DataHelper_zh_TW.ts
+    QM_FILES_OUTPUT_VARIABLE SC2DH_QM_FILES
+)
+foreach(SC2DH_QM_FILE IN LISTS SC2DH_QM_FILES)
+    get_filename_component(SC2DH_QM_NAME "${SC2DH_QM_FILE}" NAME)
+    set_source_files_properties("${SC2DH_QM_FILE}" PROPERTIES QT_RESOURCE_ALIAS "${SC2DH_QM_NAME}")
+endforeach()
+qt_add_resources(SC2DataHelper "app_translations"
+    PREFIX "/i18n"
+    FILES ${SC2DH_QM_FILES}
 )
 
 if (WIN32)
@@ -240,7 +274,10 @@ add_executable(SC2DataHelperTests
     src/core/ScannedFileReader.cpp
     src/core/AssetFileRules.cpp
     src/core/AssetReferenceScanner.cpp
+    src/core/UnifiedReferenceIndex.cpp
     src/core/AssetOptimizationAnalyzer.cpp
+    src/core/DependencyUsageReport.cpp
+    src/core/MapPerformanceAnalyzer.cpp
     src/core/TriggerPerformanceAnalyzer.cpp
     src/core/DecorationStreamingPlanner.cpp
     src/core/DecorationMapCopyService.cpp
@@ -449,3 +486,30 @@ if (SC2DH_HAVE_LIBZIP)
         target_include_directories(SC2RepairMapEnums PRIVATE ${LIBZIP_INCLUDE_DIR})
     endif()
 endif()
+
+add_executable(SC2DecorOptimizeMap
+    src/tools/DecorOptimizeMap.cpp
+    src/core/DecorationStreamingPlanner.cpp
+    src/core/DecorationMapCopyService.cpp
+    src/core/Sc2Archive.cpp
+)
+target_include_directories(SC2DecorOptimizeMap PRIVATE src)
+target_link_libraries(SC2DecorOptimizeMap PRIVATE
+    Qt6::Core
+    StormLib::storm
+    nlohmann_json::nlohmann_json
+)
+target_compile_definitions(SC2DecorOptimizeMap PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
+
+if (SC2DH_HAVE_LIBZIP)
+    target_compile_definitions(SC2DecorOptimizeMap PRIVATE SC2DH_USE_LIBZIP=1)
+    if (TARGET libzip::zip)
+        target_link_libraries(SC2DecorOptimizeMap PRIVATE libzip::zip)
+    else()
+        target_link_libraries(SC2DecorOptimizeMap PRIVATE ${LIBZIP_LIBRARY})
+        target_include_directories(SC2DecorOptimizeMap PRIVATE ${LIBZIP_INCLUDE_DIR})
+    endif()
+endif()
+
+add_test(NAME SC2DecorOptimizeMapHelp COMMAND SC2DecorOptimizeMap --help)
+add_dependencies(SC2DataHelperTests SC2DecorOptimizeMap)

@@ -5,6 +5,7 @@
 #include "core/StandardNamePlanner.h"
 #include "core/ScannedFileReader.h"
 #include "ui/M3PreviewWidget.h"
+#include "app/AppSettings.h"
 #include "core/UnitFamilyDetector.h"
 #include <QFont>
 #include <QAbstractItemView>
@@ -61,6 +62,7 @@ void addRow(QTableWidget *target, const OptimizationPlanRow &row) {
             }
             item->setData(Qt::UserRole, row.primary); item->setData(Qt::UserRole + 1, row.secondary);
             item->setData(Qt::UserRole + 2, row.selectable);
+            item->setData(Qt::UserRole + 3, row.checked);
         }
         target->setItem(index, column, item);
     }
@@ -164,13 +166,22 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
                 incomingReferenceCount[reference] += 1;
     if (duplicateMergeEnabled) for (const DuplicateContentGroup &group : result.duplicateContentGroups) if (group.nodeIndices.size() > 1) {
         const int keep = group.nodeIndices.front();
+        if (!group.autoRecommended) {
+            plan.duplicates.append({{QStringLiteral("Compare"),
+                                     QStringLiteral("Manual merge review"),
+                                     result.nodes[keep].id,
+                                     QStringLiteral("%1 identical objects; not selected automatically").arg(group.nodeIndices.size()),
+                                     QString()},
+                                    false, false, keep, -1});
+            continue;
+        }
         for (int position = 1; position < group.nodeIndices.size(); ++position) {
             const int remove = group.nodeIndices[position];
             const int references = incomingReferenceCount.value(result.nodes[remove].id);
             plan.duplicates.append({{group.mergeCandidate ? QString() : QStringLiteral("Compare"),
                                      group.mergeCandidate ? group.commonIdMask : QStringLiteral("Unrelated IDs - allowed"),
                                      result.nodes[keep].id, result.nodes[remove].id, QString::number(references)},
-                                    group.mergeCandidate, group.mergeCandidate, keep, remove});
+                                    group.autoRecommended, group.mergeCandidate, keep, remove});
         }
     }
     for (const DeepCleanupCandidate &candidate : result.deepCleanupCandidates) {
@@ -504,7 +515,8 @@ void FormatterPage::setRecommendedSelection(bool selected)
     for (int row = 0; row < table->rowCount(); ++row) {
         QTableWidgetItem *item = table->item(row, 0);
         if (item && (item->flags() & Qt::ItemIsUserCheckable))
-            item->setCheckState(selected ? Qt::Checked : Qt::Unchecked);
+            item->setCheckState(selected && item->data(Qt::UserRole + 3).toBool()
+                                    ? Qt::Checked : Qt::Unchecked);
     }
     updateSummary();
     updateDetails();
@@ -517,7 +529,8 @@ void FormatterPage::selectRecommendedItems()
         for (int row = 0; row < table->rowCount(); ++row) {
             QTableWidgetItem *item = table->item(row, 0);
             if (item && (item->flags() & Qt::ItemIsUserCheckable))
-                item->setCheckState(Qt::Checked);
+                item->setCheckState(item->data(Qt::UserRole + 3).toBool()
+                                        ? Qt::Checked : Qt::Unchecked);
         }
     }
     m_planConfirmed = false;
@@ -616,20 +629,44 @@ void FormatterPage::updateAssetPreview(const QString &filePath)
     if (scanned == m_result.scannedFiles.cend())
         return;
 
+    const QString suffix = QFileInfo(filePath).suffix().toLower();
+    static const QSet<QString> imageSuffixes = {
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("bmp"), QStringLiteral("tga"), QStringLiteral("dds")
+    };
+    static const QSet<QString> modelSuffixes = {
+        QStringLiteral("m3"), QStringLiteral("m3a"), QStringLiteral("m3h"), QStringLiteral("m3skl")
+    };
+    if ((imageSuffixes.contains(suffix) && !sc2dh::app::AppSettings::previewImages())
+        || (modelSuffixes.contains(suffix) && !sc2dh::app::AppSettings::previewModels())) {
+        m_assetPreview->setPixmap({});
+        m_assetPreview->setText(QStringLiteral("Preview disabled in Settings"));
+        m_assetPreview->show();
+        if (m_modelPreview)
+            m_modelPreview->clearModel();
+        return;
+    }
+
+    const qint64 previewLimit = qint64(sc2dh::app::AppSettings::previewLimitMiB()) * 1024 * 1024;
+    if (scanned->size > previewLimit) {
+        m_assetPreview->setPixmap({});
+        m_assetPreview->setText(QStringLiteral("Preview skipped\nFile exceeds the %1 MiB preview limit.")
+                                    .arg(sc2dh::app::AppSettings::previewLimitMiB()));
+        m_assetPreview->show();
+        if (m_modelPreview)
+            m_modelPreview->clearModel();
+        return;
+    }
+
     ScannedFileReader reader(m_result);
     QByteArray bytes;
-    if (!reader.readBytes(*scanned, 64 * 1024 * 1024, &bytes)) {
+    if (!reader.readBytes(*scanned, previewLimit, &bytes)) {
         m_assetPreview->setText(QStringLiteral("Preview unavailable\nThe asset could not be read from the map archive."));
         m_assetPreview->setPixmap({});
         m_assetPreview->show();
         return;
     }
 
-    const QString suffix = QFileInfo(filePath).suffix().toLower();
-    static const QSet<QString> imageSuffixes = {
-        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
-        QStringLiteral("bmp"), QStringLiteral("tga"), QStringLiteral("dds")
-    };
     const auto showPixmap = [&](const QByteArray &imageBytes, const QString &caption) {
         QPixmap pixmap;
         if (!pixmap.loadFromData(imageBytes))
@@ -651,9 +688,6 @@ void FormatterPage::updateAssetPreview(const QString &filePath)
         return;
     }
 
-    static const QSet<QString> modelSuffixes = {
-        QStringLiteral("m3"), QStringLiteral("m3a"), QStringLiteral("m3h"), QStringLiteral("m3skl")
-    };
     if (!modelSuffixes.contains(suffix))
         return;
 
@@ -678,19 +712,22 @@ void FormatterPage::updateAssetPreview(const QString &filePath)
         if (!textureNames.contains(texture, Qt::CaseInsensitive))
             textureNames << texture;
     }
-    for (const QString &texture : std::as_const(textureNames)) {
-        const auto textureFile = std::find_if(m_result.scannedFiles.cbegin(), m_result.scannedFiles.cend(),
-                                              [&](const ScannedFileInfo &file) {
-            QString normalized = file.filePath;
-            normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
-            return normalized.endsWith(texture, Qt::CaseInsensitive)
-                || QFileInfo(normalized).fileName().compare(QFileInfo(texture).fileName(), Qt::CaseInsensitive) == 0;
-        });
-        QByteArray textureBytes;
-        if (textureFile != m_result.scannedFiles.cend()
-            && reader.readBytes(*textureFile, 64 * 1024 * 1024, &textureBytes)
-            && showPixmap(textureBytes, QStringLiteral("Texture used by %1: %2").arg(filePath, texture))) {
-            return;
+    if (sc2dh::app::AppSettings::previewImages()) {
+        for (const QString &texture : std::as_const(textureNames)) {
+            const auto textureFile = std::find_if(m_result.scannedFiles.cbegin(), m_result.scannedFiles.cend(),
+                                                  [&](const ScannedFileInfo &file) {
+                QString normalized = file.filePath;
+                normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+                return normalized.endsWith(texture, Qt::CaseInsensitive)
+                    || QFileInfo(normalized).fileName().compare(QFileInfo(texture).fileName(), Qt::CaseInsensitive) == 0;
+            });
+            QByteArray textureBytes;
+            if (textureFile != m_result.scannedFiles.cend()
+                && textureFile->size <= previewLimit
+                && reader.readBytes(*textureFile, previewLimit, &textureBytes)
+                && showPixmap(textureBytes, QStringLiteral("Texture used by %1: %2").arg(filePath, texture))) {
+                return;
+            }
         }
     }
 

@@ -1,14 +1,18 @@
 #include "app/MainWindowSettings.h"
 
 #include "app/AudioManager.h"
+#include "app/AppSettings.h"
 #include "app/MainWindow.h"
 #include "app/ModalBackdrop.h"
 
 #include <QCheckBox>
+#include <QComboBox>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEasingCurve>
 #include <QFrame>
+#include <QGraphicsDropShadowEffect>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -25,6 +29,7 @@
 #include <QSettings>
 #include <QShowEvent>
 #include <QSlider>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTimer>
@@ -32,6 +37,56 @@
 
 namespace
 {
+[[maybe_unused]] const char *const settingsTranslationSources[] = {
+    QT_TRANSLATE_NOOP("Settings", "SC2 Data Helper Settings"),
+    QT_TRANSLATE_NOOP("Settings", "Button sounds"),
+    QT_TRANSLATE_NOOP("Settings", "Button animations"),
+    QT_TRANSLATE_NOOP("Settings", "Blue background glow effects"),
+    QT_TRANSLATE_NOOP("Settings", "Decorative interface textures"),
+    QT_TRANSLATE_NOOP("Settings", "SC2 custom cursor"),
+    QT_TRANSLATE_NOOP("Settings", "Background music"),
+    QT_TRANSLATE_NOOP("Settings", "Start in full screen"),
+    QT_TRANSLATE_NOOP("Settings", "Interface language"),
+    QT_TRANSLATE_NOOP("Settings", "System language"),
+    QT_TRANSLATE_NOOP("Settings", "Graphics profile"),
+    QT_TRANSLATE_NOOP("Settings", "Full"),
+    QT_TRANSLATE_NOOP("Settings", "Balanced"),
+    QT_TRANSLATE_NOOP("Settings", "Minimal"),
+    QT_TRANSLATE_NOOP("Settings", "Custom"),
+    QT_TRANSLATE_NOOP("Settings", "Rendering mode (restart required)"),
+    QT_TRANSLATE_NOOP("Settings", "Automatic (recommended)"),
+    QT_TRANSLATE_NOOP("Settings", "Desktop OpenGL"),
+    QT_TRANSLATE_NOOP("Settings", "Software rendering (compatibility)"),
+    QT_TRANSLATE_NOOP("Settings", "Preview images and textures"),
+    QT_TRANSLATE_NOOP("Settings", "Preview M3 models"),
+    QT_TRANSLATE_NOOP("Settings", "M3 geometry antialiasing"),
+    QT_TRANSLATE_NOOP("Settings", "Maximum preview file size (MiB)"),
+    QT_TRANSLATE_NOOP("Settings", "Interface"),
+    QT_TRANSLATE_NOOP("Settings", "Graphics & previews"),
+    QT_TRANSLATE_NOOP("Settings", "Optimization"),
+    QT_TRANSLATE_NOOP("Settings", "INTERFACE SETTINGS"),
+    QT_TRANSLATE_NOOP("Settings", "GRAPHICS AND PREVIEW SETTINGS"),
+    QT_TRANSLATE_NOOP("Settings", "OPTIMIZATION SETTINGS"),
+    QT_TRANSLATE_NOOP("Settings", "Restart required"),
+    QT_TRANSLATE_NOOP("Settings", "Language, rendering mode and cursor changes will be fully applied after restarting SC2 Data Helper.")
+};
+
+QString settingsText(const char *source)
+{
+    return QCoreApplication::translate("Settings", source);
+}
+
+void addTextGlow(QLabel *label, const QColor &color, qreal blurRadius)
+{
+    if (!label)
+        return;
+    auto *glow = new QGraphicsDropShadowEffect(label);
+    glow->setOffset(0, 0);
+    glow->setBlurRadius(blurRadius);
+    glow->setColor(color);
+    label->setGraphicsEffect(glow);
+}
+
 void drawHorizontalTexture(QPainter &painter, const QRect &target, const QPixmap &source, int cap)
 {
     if (target.isEmpty() || source.isNull())
@@ -134,6 +189,47 @@ protected:
     void paintEvent(QPaintEvent *event) override
     {
         QDialog::paintEvent(event);
+
+        if (sc2dh::app::AppSettings::decorativeTextures())
+        {
+            static const QPixmap grid(QStringLiteral(":/textures/ui_nova_storymode_bggrid_shimmer_sideways.png"));
+            static const QPixmap scanlines(QStringLiteral(":/textures/ui_nova_archives_backgroundframe_scanlines.png"));
+            static const QPixmap sideLights(QStringLiteral(":/textures/ui_nova_archives_backgroundframe_lights_side.png"));
+            QPainter hudPainter(this);
+            hudPainter.setClipRect(rect().adjusted(18, 58, -18, -18));
+            if (!grid.isNull()) {
+                hudPainter.setOpacity(0.045);
+                hudPainter.drawTiledPixmap(rect(), grid);
+            }
+            if (!scanlines.isNull()) {
+                hudPainter.setOpacity(0.035);
+                hudPainter.drawTiledPixmap(rect(), scanlines);
+            }
+            hudPainter.setOpacity(0.72);
+            if (!sideLights.isNull()) {
+                const int sideWidth = 54;
+                hudPainter.drawPixmap(QRect(3, 82, sideWidth, qMax(1, height() - 156)), sideLights, sideLights.rect());
+                const QPixmap mirrored = sideLights.transformed(QTransform().scale(-1.0, 1.0));
+                hudPainter.drawPixmap(QRect(width() - sideWidth - 3, 82, sideWidth, qMax(1, height() - 156)),
+                                      mirrored, mirrored.rect());
+            }
+            hudPainter.setOpacity(0.9);
+            hudPainter.setPen(QPen(QColor(42, 255, 203, 145), 1));
+            const int left = 22;
+            const int right = width() - 23;
+            const int top = 64;
+            const int bottom = height() - 23;
+            constexpr int arm = 34;
+            hudPainter.drawLine(left, top, left + arm, top);
+            hudPainter.drawLine(left, top, left, top + arm);
+            hudPainter.drawLine(right - arm, top, right, top);
+            hudPainter.drawLine(right, top, right, top + arm);
+            hudPainter.drawLine(left, bottom, left + arm, bottom);
+            hudPainter.drawLine(left, bottom - arm, left, bottom);
+            hudPainter.drawLine(right - arm, bottom, right, bottom);
+            hudPainter.drawLine(right, bottom - arm, right, bottom);
+        }
+
         if (m_highlightPhase <= 0)
             return;
 
@@ -144,6 +240,10 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         painter.setClipRegion(event ? event->region().intersected(frameRegion()) : frameRegion());
+        // The highlight asset contains dark pixels intended for its original
+        // background. Screen composition makes it a light-only overlay, so
+        // the bright frame line never turns into a dark rectangular patch.
+        painter.setCompositionMode(QPainter::CompositionMode_Screen);
 
         QPixmap frame(rect().size());
         frame.fill(Qt::transparent);
@@ -313,7 +413,7 @@ void MainWindowSettings::show()
 {
     SettingsDialog dialog(&m_window);
     dialog.setObjectName(QStringLiteral("settingsDialog"));
-    dialog.setWindowTitle(QStringLiteral("SC2 Data Helper Settings"));
+    dialog.setWindowTitle(settingsText("SC2 Data Helper Settings"));
     dialog.setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
     dialog.setWindowFlags((dialog.windowFlags() | Qt::FramelessWindowHint) & ~Qt::WindowContextHelpButtonHint);
     dialog.setAttribute(Qt::WA_TranslucentBackground, true);
@@ -329,19 +429,31 @@ void MainWindowSettings::show()
     titleBarLayout->setContentsMargins(10, 4, 4, 4);
     titleBarLayout->setSpacing(8);
     auto *appIcon = new QLabel(titleBar);
-    appIcon->setPixmap(QPixmap(QStringLiteral(":/icons/Icon.png")).scaled(18, 18, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    auto *windowTitle = new QLabel(QStringLiteral("SC2 Data Helper Settings"), titleBar);
+    appIcon->setPixmap(QPixmap(QStringLiteral(":/icons/Icon.png")).scaled(30, 30, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    appIcon->setFixedSize(34, 34);
+    appIcon->setAlignment(Qt::AlignCenter);
+    auto *windowTitle = new QLabel(settingsText("SC2 Data Helper Settings"), titleBar);
     windowTitle->setObjectName(QStringLiteral("settingsWindowTitle"));
+    addTextGlow(windowTitle, QColor(74, 255, 205, 220), 13.0);
+    auto *titleTextLayout = new QVBoxLayout;
+    titleTextLayout->setContentsMargins(0, 0, 0, 0);
+    titleTextLayout->setSpacing(0);
+    titleTextLayout->addWidget(windowTitle);
+    auto *windowContext = new QLabel(QStringLiteral("OPTIONS // SYSTEM CONFIGURATION"), titleBar);
+    windowContext->setObjectName(QStringLiteral("settingsWindowContext"));
+    addTextGlow(windowContext, QColor(22, 215, 255, 190), 9.0);
+    titleTextLayout->addWidget(windowContext);
     auto *closeButton = new QPushButton(QStringLiteral("X"), titleBar);
     closeButton->setObjectName(QStringLiteral("settingsCloseButton"));
     closeButton->setFixedSize(38, 32);
     closeButton->setFocusPolicy(Qt::NoFocus);
     titleBarLayout->addWidget(appIcon);
-    titleBarLayout->addWidget(windowTitle, 1);
+    titleBarLayout->addLayout(titleTextLayout, 1);
     titleBarLayout->addWidget(closeButton);
     layout->addWidget(titleBar);
 
     QSettings settings;
+    const bool savedCustomCursor = AppSettings::customCursor();
     const auto checkBoxRow = [&dialog](const QString &text, bool checked, const QString &toolTip = QString())
     {
         auto *row = new QCheckBox(text, &dialog);
@@ -352,15 +464,21 @@ void MainWindowSettings::show()
             row->setToolTip(toolTip);
         return row;
     };
-    auto *soundCheck = checkBoxRow(QStringLiteral("Button sounds"),
+    auto *soundCheck = checkBoxRow(settingsText("Button sounds"),
                                    settings.value(QStringLiteral("ui/buttonSounds"), true).toBool());
-    auto *animationCheck = checkBoxRow(QStringLiteral("Button animations"),
+    auto *animationCheck = checkBoxRow(settingsText("Button animations"),
                                        settings.value(QStringLiteral("ui/buttonAnimations"), true).toBool());
     auto *backgroundGlowCheck = checkBoxRow(
-        QStringLiteral("Blue background glow effects"),
+        settingsText("Blue background glow effects"),
         settings.value(QStringLiteral("ui/backgroundGlows"), true).toBool(),
         QStringLiteral("Shows animated soft blue background glows behind the main interface."));
-    auto *musicCheck = checkBoxRow(QStringLiteral("Background music"), AudioManager::isMusicEnabled());
+    auto *decorativeTexturesCheck = checkBoxRow(
+        settingsText("Decorative interface textures"),
+        settings.value(QStringLiteral("ui/decorativeTextures"), true).toBool(),
+        QStringLiteral("Draws SC2 frames, scanlines and background texture layers. This never disables map texture analysis."));
+    auto *customCursorCheck = checkBoxRow(settingsText("SC2 custom cursor"),
+                                          settings.value(QStringLiteral("ui/customCursor"), true).toBool());
+    auto *musicCheck = checkBoxRow(settingsText("Background music"), AudioManager::isMusicEnabled());
     auto *musicValue = new QLabel(&dialog);
     musicValue->setObjectName(QStringLiteral("inspectorSubtitle"));
     auto *musicSlider = new MusicVolumeSlider(&dialog);
@@ -389,8 +507,47 @@ void MainWindowSettings::show()
         &dialog);
     closedProjectWarning->setObjectName(QStringLiteral("inspectorSubtitle"));
     closedProjectWarning->setWordWrap(true);
-    auto *startFullscreenCheck = checkBoxRow(QStringLiteral("Start in full screen"),
+    auto *startFullscreenCheck = checkBoxRow(settingsText("Start in full screen"),
                                              settings.value(QStringLiteral("ui/startFullscreen"), true).toBool());
+
+    auto *languageLabel = new QLabel(settingsText("Interface language"), &dialog);
+    languageLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
+    auto *languageCombo = new QComboBox(&dialog);
+    const QString selectedLanguage = AppSettings::selectedLanguage();
+    for (const LanguageOption &language : AppSettings::supportedLanguages()) {
+        languageCombo->addItem(language.code == QStringLiteral("system")
+                                   ? settingsText("System language") : language.nativeName,
+                               language.code);
+        if (language.code == selectedLanguage)
+            languageCombo->setCurrentIndex(languageCombo->count() - 1);
+    }
+
+    auto *presetLabel = new QLabel(settingsText("Graphics profile"), &dialog);
+    presetLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
+    auto *presetCombo = new QComboBox(&dialog);
+    presetCombo->addItem(settingsText("Full"), QStringLiteral("full"));
+    presetCombo->addItem(settingsText("Balanced"), QStringLiteral("balanced"));
+    presetCombo->addItem(settingsText("Minimal"), QStringLiteral("minimal"));
+    presetCombo->addItem(settingsText("Custom"), QStringLiteral("custom"));
+    presetCombo->setCurrentIndex(qMax(0, presetCombo->findData(AppSettings::graphicsPreset())));
+
+    auto *rendererLabel = new QLabel(settingsText("Rendering mode (restart required)"), &dialog);
+    rendererLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
+    auto *rendererCombo = new QComboBox(&dialog);
+    rendererCombo->addItem(settingsText("Automatic (recommended)"), QStringLiteral("auto"));
+    rendererCombo->addItem(settingsText("Desktop OpenGL"), QStringLiteral("desktop"));
+    rendererCombo->addItem(settingsText("Software rendering (compatibility)"), QStringLiteral("software"));
+    rendererCombo->setCurrentIndex(qMax(0, rendererCombo->findData(AppSettings::renderer())));
+
+    auto *imagePreviewCheck = checkBoxRow(settingsText("Preview images and textures"), AppSettings::previewImages());
+    auto *modelPreviewCheck = checkBoxRow(settingsText("Preview M3 models"), AppSettings::previewModels());
+    auto *modelAntialiasingCheck = checkBoxRow(settingsText("M3 geometry antialiasing"), AppSettings::modelAntialiasing());
+    auto *previewLimitLabel = new QLabel(settingsText("Maximum preview file size (MiB)"), &dialog);
+    previewLimitLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
+    auto *previewLimitSpin = new QSpinBox(&dialog);
+    previewLimitSpin->setRange(1, 512);
+    previewLimitSpin->setValue(AppSettings::previewLimitMiB());
+    previewLimitSpin->setSuffix(QStringLiteral(" MiB"));
     auto *body = new QHBoxLayout;
     body->setContentsMargins(0, 0, 0, 0);
     body->setSpacing(12);
@@ -399,8 +556,9 @@ void MainWindowSettings::show()
     navigation->setObjectName(QStringLiteral("settingsNavigation"));
     navigation->setFixedWidth(230);
     navigation->setFocusPolicy(Qt::NoFocus);
-    navigation->addItem(QStringLiteral("Interface"));
-    navigation->addItem(QStringLiteral("Optimization"));
+    navigation->addItem(settingsText("Interface"));
+    navigation->addItem(settingsText("Graphics & previews"));
+    navigation->addItem(settingsText("Optimization"));
     body->addWidget(navigation);
 
     auto *pages = new QStackedWidget(&dialog);
@@ -416,22 +574,39 @@ void MainWindowSettings::show()
         pageLayout->setSpacing(10);
         auto *title = new QLabel(titleText, page);
         title->setObjectName(QStringLiteral("panelTitle"));
+        addTextGlow(title, QColor(80, 255, 210, 210), 14.0);
         pageLayout->addWidget(title);
         pages->addWidget(page);
         return pageLayout;
     };
 
-    auto *interfacePage = makePage(QStringLiteral("INTERFACE SETTINGS"));
+    auto *interfacePage = makePage(settingsText("INTERFACE SETTINGS"));
+    interfacePage->addWidget(languageLabel);
+    interfacePage->addWidget(languageCombo);
     interfacePage->addWidget(soundCheck);
     interfacePage->addWidget(animationCheck);
     interfacePage->addWidget(backgroundGlowCheck);
+    interfacePage->addWidget(decorativeTexturesCheck);
+    interfacePage->addWidget(customCursorCheck);
     interfacePage->addWidget(musicCheck);
     interfacePage->addWidget(musicValue);
     interfacePage->addWidget(musicSlider);
     interfacePage->addWidget(startFullscreenCheck);
     interfacePage->addStretch(1);
 
-    auto *optimizationPage = makePage(QStringLiteral("OPTIMIZATION SETTINGS"));
+    auto *graphicsPage = makePage(settingsText("GRAPHICS AND PREVIEW SETTINGS"));
+    graphicsPage->addWidget(presetLabel);
+    graphicsPage->addWidget(presetCombo);
+    graphicsPage->addWidget(rendererLabel);
+    graphicsPage->addWidget(rendererCombo);
+    graphicsPage->addWidget(imagePreviewCheck);
+    graphicsPage->addWidget(modelPreviewCheck);
+    graphicsPage->addWidget(modelAntialiasingCheck);
+    graphicsPage->addWidget(previewLimitLabel);
+    graphicsPage->addWidget(previewLimitSpin);
+    graphicsPage->addStretch(1);
+
+    auto *optimizationPage = makePage(settingsText("OPTIMIZATION SETTINGS"));
     optimizationPage->addWidget(duplicatesCheck);
     optimizationPage->addWidget(backupCheck);
     optimizationPage->addWidget(closedProjectCheck);
@@ -439,11 +614,45 @@ void MainWindowSettings::show()
     optimizationPage->addStretch(1);
 
     navigation->setCurrentRow(0);
+
+    bool applyingPreset = false;
+    const auto applyPresetToControls = [=, &applyingPreset](const QString &preset) {
+        if (preset == QStringLiteral("custom"))
+            return;
+        applyingPreset = true;
+        const bool full = preset == QStringLiteral("full");
+        const bool balanced = preset == QStringLiteral("balanced");
+        animationCheck->setChecked(full || balanced);
+        backgroundGlowCheck->setChecked(full);
+        decorativeTexturesCheck->setChecked(full || balanced);
+        customCursorCheck->setChecked(full || balanced);
+        imagePreviewCheck->setChecked(true);
+        modelPreviewCheck->setChecked(full || balanced);
+        modelAntialiasingCheck->setChecked(full);
+        applyingPreset = false;
+    };
+    QObject::connect(presetCombo, &QComboBox::currentIndexChanged, &dialog, [=](int) {
+        applyPresetToControls(presetCombo->currentData().toString());
+    });
+    const auto markCustom = [=, &applyingPreset](bool) {
+        if (applyingPreset)
+            return;
+        if (presetCombo->currentData().toString() != QStringLiteral("custom"))
+            presetCombo->setCurrentIndex(presetCombo->findData(QStringLiteral("custom")));
+    };
+    for (QCheckBox *control : {animationCheck, backgroundGlowCheck, decorativeTexturesCheck, customCursorCheck,
+                               imagePreviewCheck, modelPreviewCheck, modelAntialiasingCheck})
+        QObject::connect(control, &QCheckBox::toggled, &dialog, markCustom);
     QObject::connect(navigation, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
     layout->addLayout(body, 1);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    auto *buttons = new QDialogButtonBox(&dialog);
+    auto *saveSettingsButton = buttons->addButton(QDialogButtonBox::Save);
+    auto *cancelSettingsButton = buttons->addButton(QDialogButtonBox::Cancel);
+    saveSettingsButton->setObjectName(QStringLiteral("settingsSaveButton"));
+    cancelSettingsButton->setObjectName(QStringLiteral("settingsCancelButton"));
     bool reanalyzeAfterSave = false;
+    bool restartRequired = false;
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]()
             {
         if (!savedClosedProjectMode && closedProjectCheck->isChecked()
@@ -456,6 +665,19 @@ void MainWindowSettings::show()
         settings.setValue(QStringLiteral("ui/buttonSounds"), soundCheck->isChecked());
         settings.setValue(QStringLiteral("ui/buttonAnimations"), animationCheck->isChecked());
         settings.setValue(QStringLiteral("ui/backgroundGlows"), backgroundGlowCheck->isChecked());
+        settings.setValue(QStringLiteral("ui/decorativeTextures"), decorativeTexturesCheck->isChecked());
+        settings.setValue(QStringLiteral("ui/customCursor"), customCursorCheck->isChecked());
+        settings.setValue(QStringLiteral("graphics/preset"), presetCombo->currentData().toString());
+        settings.setValue(QStringLiteral("preview/images"), imagePreviewCheck->isChecked());
+        settings.setValue(QStringLiteral("preview/models"), modelPreviewCheck->isChecked());
+        settings.setValue(QStringLiteral("preview/modelAntialiasing"), modelAntialiasingCheck->isChecked());
+        settings.setValue(QStringLiteral("preview/maxFileMiB"), previewLimitSpin->value());
+        const QString newLanguage = languageCombo->currentData().toString();
+        const QString newRenderer = rendererCombo->currentData().toString();
+        restartRequired = newLanguage != selectedLanguage || newRenderer != AppSettings::renderer()
+            || customCursorCheck->isChecked() != savedCustomCursor;
+        settings.setValue(QStringLiteral("ui/language"), newLanguage);
+        settings.setValue(QStringLiteral("graphics/renderer"), newRenderer);
         settings.setValue(QStringLiteral("optimization/duplicateMergeEnabled"), duplicatesCheck->isChecked());
         settings.setValue(QStringLiteral("optimization/closedProjectMode"), closedProjectCheck->isChecked());
         settings.setValue(QStringLiteral("backup/enabled"), backupCheck->isChecked());
@@ -471,11 +693,19 @@ void MainWindowSettings::show()
         dialog.accept(); });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     QObject::connect(closeButton, &QPushButton::clicked, &dialog, &QDialog::reject);
-    layout->addWidget(buttons);
+    auto *buttonRow = new QHBoxLayout;
+    buttonRow->setContentsMargins(0, 0, 26, 2);
+    buttonRow->setSpacing(8);
+    buttonRow->addStretch(1);
+    buttonRow->addWidget(buttons, 0, Qt::AlignRight);
+    layout->addLayout(buttonRow);
     titleBar->installEventFilter(new DialogDragFilter(&dialog));
     ScopedModalBackdrop backdrop(&m_window);
     animateModalOpen(&dialog);
     dialog.exec();
+    if (restartRequired)
+        QMessageBox::information(&m_window, settingsText("Restart required"),
+                                 settingsText("Language, rendering mode and cursor changes will be fully applied after restarting SC2 Data Helper."));
     if (reanalyzeAfterSave)
         m_window.loadPathAndAnalyze(m_window.m_currentSourcePath);
 }

@@ -205,6 +205,17 @@ void traverseSchemaNode(const pugi::xml_node &xmlNode,
     if (!xmlNode || schemaType.isEmpty() || depth > 16)
         return;
 
+    if (schemaType.compare(QStringLiteral("SActorEvent"), Qt::CaseInsensitive) == 0) {
+        for (const pugi::xml_attribute attribute : xmlNode.attributes()) {
+            if (isMetaAttribute(QString::fromUtf8(attribute.name())))
+                continue;
+            addReferenceValue(QString::fromUtf8(attribute.value()), selfId, references);
+        }
+        const QString text = QString::fromUtf8(xmlNode.child_value()).trimmed();
+        if (!text.isEmpty())
+            addReferenceValue(text, selfId, references);
+    }
+
     for (const pugi::xml_attribute attribute : xmlNode.attributes()) {
         const QString field = QString::fromUtf8(attribute.name());
         if (isPlacedUnitField(schemaType, field)) {

@@ -1,6 +1,7 @@
 #include "ui/DataCollectionPage.h"
 
 #include "core/UnitFamilyDetector.h"
+#include "app/AppSettings.h"
 
 #include <QAbstractItemView>
 #include <QAbstractAnimation>
@@ -41,6 +42,8 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override
     {
         if (event->type() == QEvent::Show) {
+            if (!sc2dh::app::AppSettings::buttonAnimations())
+                return QObject::eventFilter(watched, event);
             auto *widget = qobject_cast<QWidget *>(watched);
             if (widget) {
                 auto *effect = qobject_cast<QGraphicsOpacityEffect *>(widget->graphicsEffect());

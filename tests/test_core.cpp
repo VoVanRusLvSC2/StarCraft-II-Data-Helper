@@ -14,18 +14,26 @@
 #include "core/DataCollectionPreservation.h"
 #include "core/DataCollectionUnitBuilder.h"
 #include "core/DeepCleanupService.h"
+#include "core/DependencyUsageReport.h"
+#include "core/DecorationMapCopyService.h"
 #include "core/DecorationStreamingPlanner.h"
+#include "core/MapPerformanceAnalyzer.h"
 #include "core/Sc2Archive.h"
+#include "core/UnifiedReferenceIndex.h"
 #include "core/XmlLoader.h"
 #include "ui/ObjectFilterProxyModel.h"
 #include "ui/ObjectTableModel.h"
 
 #include <QDir>
+#include <QCoreApplication>
 #include <QFile>
 #include <QFileDevice>
 #include <QFileInfo>
 #include <QIODevice>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QSet>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QStringList>
@@ -33,6 +41,10 @@
 #include <algorithm>
 #include <optional>
 #include <pugixml.hpp>
+
+#ifdef SC2DH_USE_STORMLIB
+#include <StormLib.h>
+#endif
 
 namespace {
 
@@ -48,6 +60,70 @@ bool writeTextFile(const QString &path, const QByteArray &content)
     file.close();
     return true;
 }
+
+#ifdef SC2DH_USE_STORMLIB
+bool createTestMpqArchive(const QString &archivePath,
+                          const QHash<QString, QByteArray> &entries,
+                          QString *errorMessage)
+{
+    QFile::remove(archivePath);
+    HANDLE archive = nullptr;
+    const DWORD createFlags = MPQ_CREATE_ARCHIVE_V1 | MPQ_CREATE_LISTFILE;
+    if (!SFileCreateArchive(reinterpret_cast<const TCHAR *>(archivePath.utf16()),
+                            createFlags,
+                            DWORD(std::max(16, int(entries.size()) + 8)),
+                            &archive)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("SFileCreateArchive failed: %1").arg(GetLastError());
+        return false;
+    }
+
+    QTemporaryDir sourceDir;
+    if (!sourceDir.isValid()) {
+        SFileCloseArchive(archive);
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Unable to create temporary MPQ source directory.");
+        return false;
+    }
+
+    int index = 0;
+    for (auto it = entries.cbegin(); it != entries.cend(); ++it) {
+        const QString sourcePath = QDir(sourceDir.path()).absoluteFilePath(QStringLiteral("entry_%1.bin").arg(index++));
+        if (!writeTextFile(sourcePath, it.value())) {
+            SFileCloseArchive(archive);
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to stage MPQ entry %1.").arg(it.key());
+            return false;
+        }
+        const QByteArray archiveName = QDir::cleanPath(it.key()).replace('/', '\\').toUtf8();
+        const DWORD flags = MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS | MPQ_FILE_SINGLE_UNIT;
+        if (!SFileAddFileEx(archive,
+                            reinterpret_cast<const TCHAR *>(sourcePath.utf16()),
+                            archiveName.constData(),
+                            flags,
+                            MPQ_COMPRESSION_ZLIB,
+                            MPQ_COMPRESSION_NEXT_SAME)) {
+            SFileCloseArchive(archive);
+            if (errorMessage)
+                *errorMessage = QStringLiteral("SFileAddFileEx failed for %1: %2").arg(it.key()).arg(GetLastError());
+            return false;
+        }
+    }
+
+    if (!SFileFlushArchive(archive)) {
+        SFileCloseArchive(archive);
+        if (errorMessage)
+            *errorMessage = QStringLiteral("SFileFlushArchive failed: %1").arg(GetLastError());
+        return false;
+    }
+    if (!SFileCloseArchive(archive)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("SFileCloseArchive failed: %1").arg(GetLastError());
+        return false;
+    }
+    return true;
+}
+#endif
 
 QString sampleRootXmlA()
 {
@@ -136,17 +212,21 @@ private slots:
     void archiveAnalysis();
     void archiveRewriteRoundTrip();
     void archiveDataCollectionCreatesFileAndListfile();
+    void archiveSaveCopyRemovesEntriesAndUpdatesListfile();
     void objectFileFilterUsesFullSourcePath();
     void normalizedDuplicateIgnoresOnlyRootIdentity();
     void tokenAwareReplacementVariants();
     void numericOnlyIdsAreNotRewritten();
+    void unifiedReferenceIndexClassifiesStrongWeakAssetAndBinaryReferences();
     void mergePreviewAndApplyRedirectBeforeDelete();
+    void mergeAllowsManualUnrelatedExactDuplicateAndActorEvents();
     void mergeRewritesNonXmlReferenceFiles();
     void mergeDoesNotRewriteSurvivingCatalogIdentityIds();
     void mergeAllowsResidualOldIdWarning();
     void mergeRollbackOnFailure();
     void unusedSafetyClassification();
     void unusedReachabilityDistinguishesStatesAndPaths();
+    void unusedObjectChainsCoverFullCatalogGraphAndPlacementRoots();
     void unusedDeletionRemovesWholeUnusedChain();
     void unusedDeletionSkipsPartialChainWithoutFailingBatch();
     void unusedDeletionPreservesDataCollectionLinks();
@@ -159,10 +239,16 @@ private slots:
     void deepCleanupRemovesRedundantInheritedXmlNodes();
     void deepCleanupReportsAssetAndTriggerOptimization();
     void deepCleanupReportsSemanticDuplicateReview();
+    void dependencyUsageReportExportsRealUsagePaths();
+    void mapPerformanceAnalyzerBuildsEstimatedStaticRiskHeatmap();
     void decorationStreamingParsesZonesAndGeneratesGalaxy();
+    void decorationStreamingKeepsExternallyReferencedDoodadsStatic();
+    void decorationStreamingRejectsInvalidGalaxyOptions();
     void decorationStreamingBuildsOptimizedObjectsArtifacts();
     void decorationStreamingInjectsGalaxyIncludeOnce();
     void decorationStreamingPreparesArchivePatch();
+    void decorationMapCopyServiceCreatesOptimizedArchive();
+    void decorationCliCreatesOptimizedArchiveAndReport();
     void unitFamilyDetectionAndStandardPlanning();
     void renamePlannerStandardizesOwnedCustomCatalogTypes();
     void renamePlannerBlocksConflicts();
@@ -198,6 +284,7 @@ private slots:
     void zombieWorldUpdate3Audit();
     void dataCollectionUpdatePreservesAndSorts();
     void dataCollectionRollback();
+    void autoCollectionSurvivesOptimizationBatch();
     void folderAnalysisStoresFullXmlSource();
     void folderAnalysisCanBeCancelled();
     void unrelatedIdenticalBodiesAreAllowed();
@@ -256,9 +343,10 @@ void CoreTests::unrelatedIdenticalBodiesAreAllowed()
     QVERIFY(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error));
     QCOMPARE(analysis.duplicateContentGroups.size(), 1);
     const DuplicateContentGroup &group = analysis.duplicateContentGroups.front();
-    QVERIFY(!group.mergeCandidate);
+    QVERIFY(group.mergeCandidate);
+    QVERIFY(!group.autoRecommended);
     QCOMPARE(group.commonIdMask, QStringLiteral("unrelated IDs"));
-    for (const DataNode &node : analysis.nodes) QVERIFY(!node.duplicateContent);
+    for (const DataNode &node : analysis.nodes) QVERIFY(node.duplicateContent);
 }
 
 void CoreTests::folderAnalysisStoresFullXmlSource()
@@ -1800,6 +1888,117 @@ void CoreTests::numericOnlyIdsAreNotRewritten()
     QVERIFY(unchanged.contains("id=\"1\""));
 }
 
+void CoreTests::unifiedReferenceIndexClassifiesStrongWeakAssetAndBinaryReferences()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QDir root(dir.path());
+    QVERIFY(root.mkpath(QStringLiteral("GameData")));
+    QVERIFY(root.mkpath(QStringLiteral("scripts")));
+    QVERIFY(root.mkpath(QStringLiteral("Assets")));
+
+    const QString objectsPath = root.absoluteFilePath(QStringLiteral("Objects"));
+    const QString scriptPath = root.absoluteFilePath(QStringLiteral("scripts/MapScript.galaxy"));
+    const QString mapInfoPath = root.absoluteFilePath(QStringLiteral("MapInfo.txt"));
+    const QString treeAssetPath = root.absoluteFilePath(QStringLiteral("Assets/Tree.m3"));
+    const QString binaryAssetPath = root.absoluteFilePath(QStringLiteral("Assets/BinaryBlob.m3"));
+
+    QVERIFY(writeTextFile(objectsPath, QByteArrayLiteral(
+        "ObjectUnit { Id = 1 Unit = \"Marine\" Position = (10, 10, 0) }\n"
+        "ObjectDoodad { Id = 2 Type = \"TreeDoodad\" Position = (20, 20, 0) }\n")));
+    QVERIFY(writeTextFile(scriptPath, QByteArrayLiteral(
+        "void InitMap() { TriggerDebugOutput(1, StringToText(\"DamageEffect\"), true); }\n")));
+    QVERIFY(writeTextFile(mapInfoPath, QByteArrayLiteral("Preview=Assets/Tree.m3\n")));
+    QVERIFY(writeTextFile(treeAssetPath, QByteArrayLiteral("binary model payload")));
+    QVERIFY(writeTextFile(binaryAssetPath, QByteArrayLiteral("opaque Marine token in binary payload")));
+
+    AnalysisResult analysis;
+    analysis.rootFolder = dir.path();
+    const auto scanned = [](const QString &path, bool xml = false, bool data = false) {
+        ScannedFileInfo file;
+        file.filePath = path;
+        file.isXml = xml;
+        file.isSc2DataLike = data;
+        file.size = QFileInfo(path).size();
+        return file;
+    };
+    analysis.scannedFiles = {
+        scanned(objectsPath),
+        scanned(scriptPath),
+        scanned(mapInfoPath),
+        scanned(treeAssetPath),
+        scanned(binaryAssetPath)
+    };
+
+    DataNode marine;
+    marine.sourceFile = QStringLiteral("GameData/UnitData.xml");
+    marine.elementName = QStringLiteral("CUnit");
+    marine.id = QStringLiteral("Marine");
+    marine.referencedIds = {QStringLiteral("MarineActor")};
+    marine.lineNumber = 3;
+
+    DataNode actor;
+    actor.sourceFile = QStringLiteral("GameData/ActorData.xml");
+    actor.elementName = QStringLiteral("CActorUnit");
+    actor.id = QStringLiteral("MarineActor");
+
+    DataNode doodad;
+    doodad.sourceFile = QStringLiteral("GameData/DoodadData.xml");
+    doodad.elementName = QStringLiteral("CDoodad");
+    doodad.id = QStringLiteral("TreeDoodad");
+
+    DataNode effect;
+    effect.sourceFile = QStringLiteral("GameData/EffectData.xml");
+    effect.elementName = QStringLiteral("CEffectDamage");
+    effect.id = QStringLiteral("DamageEffect");
+
+    analysis.nodes = {marine, actor, doodad, effect};
+
+    sc2dh::refs::UnifiedReferenceIndex index;
+    index.build(analysis);
+
+    const QVector<sc2dh::refs::ReferenceRecord> actorRefs =
+        index.referencesToId(QStringLiteral("MarineActor"));
+    QVERIFY(std::any_of(actorRefs.cbegin(), actorRefs.cend(), [](const sc2dh::refs::ReferenceRecord &record) {
+        return record.kind == sc2dh::refs::ReferenceKind::TypedXml
+            && record.strength == sc2dh::refs::ReferenceStrength::Strong
+            && record.sourceId == QStringLiteral("Marine")
+            && record.rewritable;
+    }));
+
+    const QVector<sc2dh::refs::ReferenceRecord> marineRefs =
+        index.referencesToId(QStringLiteral("Marine"));
+    QVERIFY(std::any_of(marineRefs.cbegin(), marineRefs.cend(), [](const sc2dh::refs::ReferenceRecord &record) {
+        return record.kind == sc2dh::refs::ReferenceKind::PlacementRoot
+            && record.strength == sc2dh::refs::ReferenceStrength::Strong
+            && record.sourceFile == QStringLiteral("Objects");
+    }));
+    QVERIFY(std::any_of(marineRefs.cbegin(), marineRefs.cend(), [](const sc2dh::refs::ReferenceRecord &record) {
+        return record.kind == sc2dh::refs::ReferenceKind::BinaryUnconfirmed
+            && record.strength == sc2dh::refs::ReferenceStrength::Blocking
+            && !record.rewritable;
+    }));
+    QVERIFY(index.hasNonRewritableStrongReferenceToId(QStringLiteral("Marine")));
+
+    const QVector<sc2dh::refs::ReferenceRecord> effectRefs =
+        index.referencesToId(QStringLiteral("DamageEffect"));
+    QVERIFY(std::any_of(effectRefs.cbegin(), effectRefs.cend(), [](const sc2dh::refs::ReferenceRecord &record) {
+        return record.kind == sc2dh::refs::ReferenceKind::ScriptText
+            && record.strength == sc2dh::refs::ReferenceStrength::Strong
+            && record.sourceFile == QStringLiteral("scripts/MapScript.galaxy")
+            && record.lineNumber == 1;
+    }));
+    QVERIFY(!index.hasNonRewritableStrongReferenceToId(QStringLiteral("DamageEffect")));
+
+    const QVector<sc2dh::refs::ReferenceRecord> assetRefs =
+        index.referencesToAsset(QStringLiteral("Assets/Tree.m3"));
+    QVERIFY(std::any_of(assetRefs.cbegin(), assetRefs.cend(), [](const sc2dh::refs::ReferenceRecord &record) {
+        return record.kind == sc2dh::refs::ReferenceKind::AssetText
+            && record.strength == sc2dh::refs::ReferenceStrength::Strong
+            && record.sourceFile == QStringLiteral("MapInfo.txt");
+    }));
+}
+
 void CoreTests::mergePreviewAndApplyRedirectBeforeDelete()
 {
     QTemporaryDir dir;
@@ -1835,6 +2034,64 @@ void CoreTests::mergePreviewAndApplyRedirectBeforeDelete()
     QVERIFY(output.contains(QStringLiteral("Effect,BossDamage01")));
     QVERIFY(output.contains(QStringLiteral(">BossDamage01 Other<")));
     QVERIFY(output.contains(QStringLiteral("<Ref id=\"BossDamage01\"")));
+}
+
+void CoreTests::mergeAllowsManualUnrelatedExactDuplicateAndActorEvents()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString file = QDir(dir.path()).absoluteFilePath(QStringLiteral("Effects.xml"));
+    QVERIFY(writeTextFile(file, QByteArrayLiteral(
+        "<Catalog>"
+        "<CEffectDamage id=\"AlphaEffect\"><Amount value=\"5\"/></CEffectDamage>"
+        "<CEffectDamage id=\"BetaEffect\"><Amount value=\"5\"/></CEffectDamage>"
+        "<CActorUnit id=\"Actor\"><On Terms=\"Effect,BetaEffect,Start\" Send=\"Create BetaEffect\"/>"
+        "<EventText>BetaEffect BetaEffectExtra</EventText></CActorUnit>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int keep = -1;
+    int remove = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].elementName == QStringLiteral("CEffectDamage")
+            && analysis.nodes[i].id == QStringLiteral("AlphaEffect"))
+            keep = i;
+        if (analysis.nodes[i].elementName == QStringLiteral("CEffectDamage")
+            && analysis.nodes[i].id == QStringLiteral("BetaEffect"))
+            remove = i;
+    }
+    QVERIFY(keep >= 0);
+    QVERIFY(remove >= 0);
+
+    const auto duplicateGroup = std::find_if(analysis.duplicateContentGroups.cbegin(),
+                                             analysis.duplicateContentGroups.cend(),
+                                             [&](const DuplicateContentGroup &group) {
+                                                 return group.nodeIndices.contains(keep)
+                                                     && group.nodeIndices.contains(remove);
+                                             });
+    QVERIFY(duplicateGroup != analysis.duplicateContentGroups.cend());
+    QVERIFY(duplicateGroup->mergeCandidate);
+    QVERIFY(!duplicateGroup->autoRecommended);
+    QCOMPARE(duplicateGroup->commonIdMask, QStringLiteral("unrelated IDs"));
+
+    const MergePreview preview = MergeService().preview(analysis, MergeRequest{keep, {remove}});
+    QVERIFY2(preview.valid, qPrintable(preview.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(preview.keptId, QStringLiteral("AlphaEffect"));
+
+    const MergeApplyResult applied = MergeService().apply(analysis, MergeRequest{keep, {remove}}, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QFile rewritten(file);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    QVERIFY(!output.contains(QStringLiteral("<CEffectDamage id=\"BetaEffect\"")));
+    QVERIFY(output.contains(QStringLiteral("Terms=\"Effect,AlphaEffect,Start\"")));
+    QVERIFY(output.contains(QStringLiteral("Send=\"Create AlphaEffect\"")));
+    QVERIFY(output.contains(QStringLiteral(">AlphaEffect BetaEffectExtra<")));
+    QVERIFY(output.contains(QStringLiteral("<CEffectDamage id=\"AlphaEffect\"")));
 }
 
 void CoreTests::mergeRewritesNonXmlReferenceFiles()
@@ -2078,6 +2335,130 @@ void CoreTests::unusedReachabilityDistinguishesStatesAndPaths()
     QVERIFY(analysis.possibleUnusedNodeIndices.contains(byId[QStringLiteral("DisconnectedUnit")].nodeIndex));
     QCOMPARE(byId[QStringLiteral("CollectionOnly")].usageState, UsageState::Disconnected);
     QCOMPARE(byId[QStringLiteral("CollectionOnly")].dataCollectionReferences, 1);
+}
+
+void CoreTests::unusedObjectChainsCoverFullCatalogGraphAndPlacementRoots()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dataPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("FullChain.xml"));
+    const QString objectsPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Objects"));
+    const QString scriptPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("MapScript.galaxy"));
+    QVERIFY(writeTextFile(objectsPath, QByteArrayLiteral(
+        "ObjectUnit { Id = 1 Unit = \"UsedUnit\" Position = (10, 10, 0) }\n")));
+    QVERIFY(writeTextFile(scriptPath, QByteArrayLiteral(
+        "void InitMap() { TriggerDebugOutput(1, StringToText(\"GalaxyRootEffect\"), true); }\n")));
+    QVERIFY(writeTextFile(dataPath, QByteArrayLiteral(
+        "<Catalog>"
+        "<CUnit id=\"UsedUnit\" refs=\"UsedActor UsedWeapon\"/>"
+        "<CActorUnit id=\"UsedActor\" refs=\"UsedModel UsedSound\"><On Terms=\"Effect,UsedEffect,Start\" Send=\"Create\"/></CActorUnit>"
+        "<CModel id=\"UsedModel\" refs=\"UsedSound\"/>"
+        "<CSound id=\"UsedSound\"/>"
+        "<CWeaponLegacy id=\"UsedWeapon\" refs=\"UsedEffect\"/>"
+        "<CEffectApplyBehavior id=\"UsedEffect\" refs=\"UsedBehavior UsedValidator\"/>"
+        "<CBehaviorBuff id=\"UsedBehavior\" refs=\"UsedValidator UsedButton\"/>"
+        "<CValidatorCondition id=\"UsedValidator\" refs=\"UsedRequirement\"/>"
+        "<CRequirementAllowUnit id=\"UsedRequirement\" refs=\"UsedButton\"/>"
+        "<CButton id=\"UsedButton\"/>"
+
+        "<CUnit id=\"DeadUnit\" refs=\"DeadActor DeadWeapon\"/>"
+        "<CActorUnit id=\"DeadActor\" refs=\"DeadModel DeadSound\"/>"
+        "<CModel id=\"DeadModel\" refs=\"DeadSound\"/>"
+        "<CSound id=\"DeadSound\"/>"
+        "<CWeaponLegacy id=\"DeadWeapon\" refs=\"DeadEffect\"/>"
+        "<CEffectApplyBehavior id=\"DeadEffect\" refs=\"DeadBehavior DeadValidator\"/>"
+        "<CBehaviorBuff id=\"DeadBehavior\" refs=\"DeadValidator DeadButton\"/>"
+        "<CValidatorCondition id=\"DeadValidator\" refs=\"DeadRequirement\"/>"
+        "<CRequirementAllowUnit id=\"DeadRequirement\" refs=\"DeadButton\"/>"
+        "<CButton id=\"DeadButton\"/>"
+
+        "<CWeaponLegacy id=\"PartialWeapon\" refs=\"PartialEffect\"/>"
+        "<CEffectDamage id=\"PartialEffect\"/>"
+
+        "<CEffectApplyBehavior id=\"GalaxyRootEffect\" refs=\"GalaxyBehavior\"/>"
+        "<CBehaviorBuff id=\"GalaxyBehavior\"/>"
+
+        "<CDataCollectionUnit id=\"ExistingCollection\"><DataRecord Entry=\"Unit,DeadUnit\"/></CDataCollectionUnit>"
+        "</Catalog>")));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    QHash<QString, int> indexById;
+    QHash<QString, UnusedCandidateInfo> byId;
+    for (int i = 0; i < analysis.nodes.size(); ++i)
+        indexById.insert(analysis.nodes[i].id, i);
+    for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates)
+        byId.insert(analysis.nodes[candidate.nodeIndex].id, candidate);
+
+    const QStringList usedChain = {
+        QStringLiteral("UsedUnit"), QStringLiteral("UsedActor"), QStringLiteral("UsedModel"),
+        QStringLiteral("UsedSound"), QStringLiteral("UsedWeapon"), QStringLiteral("UsedEffect"),
+        QStringLiteral("UsedBehavior"), QStringLiteral("UsedValidator"), QStringLiteral("UsedRequirement"),
+        QStringLiteral("UsedButton")
+    };
+    for (const QString &id : usedChain) {
+        QVERIFY2(byId.contains(id), qPrintable(id));
+        QVERIFY2(byId.value(id).usageState == UsageState::Used
+                     || byId.value(id).usageState == UsageState::Blocked,
+                 qPrintable(id));
+        QVERIFY2(!analysis.possibleUnusedNodeIndices.contains(indexById.value(id)), qPrintable(id));
+    }
+    QVERIFY(byId.value(QStringLiteral("UsedUnit")).externalReferenceSources.join(QStringLiteral("\n")).contains(QStringLiteral("Objects")));
+    QVERIFY(analysis.nodes[indexById.value(QStringLiteral("UsedActor"))].referencedIds.contains(QStringLiteral("UsedEffect")));
+
+    const QStringList deadChain = {
+        QStringLiteral("DeadUnit"), QStringLiteral("DeadActor"), QStringLiteral("DeadModel"),
+        QStringLiteral("DeadSound"), QStringLiteral("DeadWeapon"), QStringLiteral("DeadEffect"),
+        QStringLiteral("DeadBehavior"), QStringLiteral("DeadValidator"), QStringLiteral("DeadRequirement"),
+        QStringLiteral("DeadButton")
+    };
+    QVector<int> rowsToDelete;
+    for (const QString &id : deadChain) {
+        QVERIFY2(byId.contains(id), qPrintable(id));
+        QCOMPARE(byId.value(id).state, CandidateState::Safe);
+        QCOMPARE(byId.value(id).usageState, UsageState::UnusedSubgraph);
+        rowsToDelete << indexById.value(id);
+    }
+    QCOMPARE(byId.value(QStringLiteral("DeadUnit")).dataCollectionReferences, 1);
+
+    QCOMPARE(byId.value(QStringLiteral("PartialEffect")).state, CandidateState::Safe);
+    QCOMPARE(byId.value(QStringLiteral("PartialEffect")).usageState, UsageState::UnusedSubgraph);
+    rowsToDelete << indexById.value(QStringLiteral("PartialEffect"));
+
+    QCOMPARE(byId.value(QStringLiteral("GalaxyRootEffect")).usageState, UsageState::Blocked);
+    QVERIFY(byId.value(QStringLiteral("GalaxyRootEffect")).scriptReferences > 0);
+    QCOMPARE(byId.value(QStringLiteral("GalaxyBehavior")).usageState, UsageState::Used);
+
+    QString backup;
+    QStringList changed;
+    int removed = 0;
+    int skipped = 0;
+    QVERIFY2(analyzer.applySelectedChanges(analysis,
+                                           rowsToDelete,
+                                           dir.path(),
+                                           {},
+                                           &backup,
+                                           &error,
+                                           &changed,
+                                           &removed,
+                                           &skipped),
+             qPrintable(error));
+
+    QFile rewritten(dataPath);
+    QVERIFY(rewritten.open(QIODevice::ReadOnly));
+    const QString output = QString::fromUtf8(rewritten.readAll());
+    for (const QString &id : deadChain)
+        QVERIFY2(!output.contains(QStringLiteral("id=\"%1\"").arg(id)), qPrintable(id));
+    QVERIFY(output.contains(QStringLiteral("id=\"PartialEffect\"")));
+    QVERIFY(output.contains(QStringLiteral("id=\"PartialWeapon\"")));
+    QVERIFY(output.contains(QStringLiteral("id=\"UsedUnit\"")));
+    QVERIFY(output.contains(QStringLiteral("id=\"GalaxyRootEffect\"")));
+    QVERIFY(output.contains(QStringLiteral("DataRecord Entry=\"Unit,DeadUnit\"")));
+    QCOMPARE(removed, deadChain.size());
+    QCOMPARE(skipped, 1);
 }
 
 void CoreTests::unusedDeletionRemovesWholeUnusedChain()
@@ -2535,19 +2916,19 @@ void CoreTests::standaloneModExternalConsumersAreProtected()
 
 void CoreTests::largeDataCollectionPlansRequireExplicitReview()
 {
-    UnitFamily small;
-    small.rootId = QStringLiteral("Small");
-    small.objects.resize(10);
-    QVERIFY(assessDataCollectionScale({small}).automaticBatchAllowed);
+    UnitFamily smallFamily;
+    smallFamily.rootId = QStringLiteral("Small");
+    smallFamily.objects.resize(10);
+    QVERIFY(assessDataCollectionScale({smallFamily}).automaticBatchAllowed);
 
-    UnitFamily large;
-    large.rootId = QStringLiteral("Large");
-    large.objects.resize(20001);
-    const DataCollectionScaleAssessment assessment = assessDataCollectionScale({large});
+    UnitFamily largeFamily;
+    largeFamily.rootId = QStringLiteral("Large");
+    largeFamily.objects.resize(20001);
+    const DataCollectionScaleAssessment assessment = assessDataCollectionScale({largeFamily});
     QVERIFY(!assessment.automaticBatchAllowed);
     QCOMPARE(assessment.totalMemberships, qsizetype(20001));
     QVERIFY(assessment.reason.contains(QStringLiteral("explicit review")));
-    QVERIFY(assessDataCollectionScale({large}, true).automaticBatchAllowed);
+    QVERIFY(assessDataCollectionScale({largeFamily}, true).automaticBatchAllowed);
 }
 
 void CoreTests::deepCleanupRemovesRedundantInheritedXmlNodes()
@@ -2626,6 +3007,168 @@ void CoreTests::deepCleanupReportsAssetAndTriggerOptimization()
     QVERIFY(triggerAudit);
 }
 
+void CoreTests::dependencyUsageReportExportsRealUsagePaths()
+{
+    AnalysisResult analysis;
+    analysis.rootFolder = QStringLiteral("C:/Maps/TestMap.SC2Components");
+    analysis.externalConsumersUnknown = true;
+    analysis.scannedFiles = {
+        {QStringLiteral("C:/Maps/TestMap.SC2Components/DocumentInfo"), false, false, 128},
+        {QStringLiteral("C:/Maps/TestMap.SC2Components/Mods/Void.SC2Mod/Assets/Textures/Dep.dds"), false, false, 64}
+    };
+
+    DataNode localUnit;
+    localUnit.sourceFile = QStringLiteral("GameData/UnitData.xml");
+    localUnit.elementName = QStringLiteral("CUnit");
+    localUnit.id = QStringLiteral("LocalUnit");
+    localUnit.referencedIds = {QStringLiteral("DepWeapon"), QStringLiteral("MissingExternal")};
+
+    DataNode localEffect;
+    localEffect.sourceFile = QStringLiteral("GameData/EffectData.xml");
+    localEffect.elementName = QStringLiteral("CEffectDamage");
+    localEffect.id = QStringLiteral("LocalEffect");
+    localEffect.referencedIds = {QStringLiteral("DepBehavior")};
+
+    DataNode dependencyWeapon;
+    dependencyWeapon.sourceFile = QStringLiteral("Mods/Void.SC2Mod/Base.SC2Data/GameData/WeaponData.xml");
+    dependencyWeapon.elementName = QStringLiteral("CWeaponLegacy");
+    dependencyWeapon.id = QStringLiteral("DepWeapon");
+
+    DataNode dependencyBehavior;
+    dependencyBehavior.sourceFile = QStringLiteral("Mods/Void.SC2Mod/Base.SC2Data/GameData/BehaviorData.xml");
+    dependencyBehavior.elementName = QStringLiteral("CBehaviorBuff");
+    dependencyBehavior.id = QStringLiteral("DepBehavior");
+
+    analysis.nodes = {localUnit, localEffect, dependencyWeapon, dependencyBehavior};
+
+    const sc2dh::DependencyUsageReportBuilder builder;
+    const sc2dh::DependencyUsageReport report = builder.build(analysis);
+    QCOMPARE(report.dependencies.size(), 1);
+    const sc2dh::DependencyUsageEntry &entry = report.dependencies.front();
+    QCOMPARE(entry.path, QStringLiteral("Mods/Void.SC2Mod"));
+    QCOMPARE(entry.usedObjectsByType.value(QStringLiteral("CWeaponLegacy")), 1);
+    QCOMPARE(entry.usedObjectsByType.value(QStringLiteral("CBehaviorBuff")), 1);
+    QVERIFY(entry.directLocalUsers.join(QStringLiteral("\n")).contains(QStringLiteral("CUnit(LocalUnit) -> CWeaponLegacy(DepWeapon)")));
+    QVERIFY(entry.usageChains.join(QStringLiteral("\n")).contains(QStringLiteral("CEffectDamage(LocalEffect) -> CBehaviorBuff(DepBehavior)")));
+    QVERIFY(entry.unresolvedExternalIds.contains(QStringLiteral("MissingExternal")));
+    QVERIFY(entry.possibleImportFiles.join(QStringLiteral("\n")).contains(QStringLiteral("Mods/Void.SC2Mod/Assets/Textures/Dep.dds")));
+    QVERIFY(report.unknownProvenanceIds.contains(QStringLiteral("MissingExternal")));
+
+    const QJsonObject json = builder.toJson(report);
+    const QJsonArray dependencies = json.value(QStringLiteral("dependencies")).toArray();
+    QCOMPARE(dependencies.size(), 1);
+    const QJsonObject dependency = dependencies.first().toObject();
+    QCOMPARE(dependency.value(QStringLiteral("path")).toString(), QStringLiteral("Mods/Void.SC2Mod"));
+    bool jsonHasLocalUnit = false;
+    for (const QJsonValue &value : dependency.value(QStringLiteral("directLocalUsers")).toArray())
+        jsonHasLocalUnit = jsonHasLocalUnit || value.toString().contains(QStringLiteral("LocalUnit"));
+    QVERIFY(jsonHasLocalUnit);
+    QVERIFY(dependency.value(QStringLiteral("unresolvedExternalIds")).toArray().contains(QStringLiteral("MissingExternal")));
+
+    const QString text = builder.toText(report);
+    QVERIFY(text.contains(QStringLiteral("Dependency Usage Report")));
+    QVERIFY(text.contains(QStringLiteral("Mods/Void.SC2Mod")));
+    QVERIFY(text.contains(QStringLiteral("Unknown provenance IDs: MissingExternal")));
+    QVERIFY(text.contains(QStringLiteral("Dependency cleanup is report-only")));
+
+    QTemporaryDir exportDir;
+    QVERIFY(exportDir.isValid());
+    QString error;
+    const QString jsonPath = QDir(exportDir.path()).absoluteFilePath(QStringLiteral("dependency_report.json"));
+    const QString textPath = QDir(exportDir.path()).absoluteFilePath(QStringLiteral("dependency_report.txt"));
+    QVERIFY2(builder.writeJson(jsonPath, report, &error), qPrintable(error));
+    QVERIFY2(builder.writeText(textPath, report, &error), qPrintable(error));
+    QFile jsonFile(jsonPath);
+    QVERIFY(jsonFile.open(QIODevice::ReadOnly));
+    QVERIFY(QString::fromUtf8(jsonFile.readAll()).contains(QStringLiteral("\"dependencies\"")));
+    QFile textFile(textPath);
+    QVERIFY(textFile.open(QIODevice::ReadOnly));
+    QVERIFY(QString::fromUtf8(textFile.readAll()).contains(QStringLiteral("Dependency Usage Report")));
+}
+
+void CoreTests::mapPerformanceAnalyzerBuildsEstimatedStaticRiskHeatmap()
+{
+    const QByteArray objects = QByteArrayLiteral(
+        "ObjectDoodad { Id = 71 Name = \"LeftTree\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
+        "ObjectDoodad { Id = 72 Name = \"LeftRock\" Type = \"RockVisual\" Position = (20, 10, 0) }\n"
+        "ObjectUnit { Id = 73 Name = \"RightMarine\" Type = \"Marine\" Position = (110, 10, 0) }\n"
+        "ObjectDestructible { Id = 74 Name = \"RightDebris\" Type = \"DebrisDestructible\" Position = (120, 10, 0) }\n");
+
+    AnalysisResult analysis;
+    analysis.rootFolder = QStringLiteral("C:/Maps/Perf.SC2Components");
+    analysis.scannedFiles = {
+        {QStringLiteral("Assets/TreeVisual.m3"), false, false, 2 * 1024 * 1024},
+        {QStringLiteral("scripts/Perf.galaxy"), false, false, 512}
+    };
+
+    DataNode tree;
+    tree.sourceFile = QStringLiteral("GameData/ActorData.xml");
+    tree.elementName = QStringLiteral("CActorModel");
+    tree.id = QStringLiteral("TreeVisual");
+    tree.referencedIds = {QStringLiteral("TreeModel")};
+
+    DataNode treeModel;
+    treeModel.sourceFile = QStringLiteral("GameData/ModelData.xml");
+    treeModel.elementName = QStringLiteral("CModel");
+    treeModel.id = QStringLiteral("TreeModel");
+
+    DataNode marine;
+    marine.sourceFile = QStringLiteral("GameData/UnitData.xml");
+    marine.elementName = QStringLiteral("CUnit");
+    marine.id = QStringLiteral("Marine");
+    marine.referencedIds = {QStringLiteral("MarineActor")};
+
+    DataNode marineActor;
+    marineActor.sourceFile = QStringLiteral("GameData/ActorData.xml");
+    marineActor.elementName = QStringLiteral("CActorUnit");
+    marineActor.id = QStringLiteral("MarineActor");
+
+    analysis.nodes = {tree, treeModel, marine, marineActor};
+
+    DeepCleanupCandidate periodic;
+    periodic.kind = DeepCleanupKind::TriggerPerformance;
+    periodic.filePath = QStringLiteral("scripts/Perf.galaxy");
+    periodic.lineNumber = 12;
+    periodic.reason = QStringLiteral("Periodic timer below 0.5s in trigger/Galaxy code.");
+    DeepCleanupCandidate scan;
+    scan.kind = DeepCleanupKind::TriggerPerformance;
+    scan.filePath = QStringLiteral("scripts/Perf.galaxy");
+    scan.lineNumber = 20;
+    scan.reason = QStringLiteral("Unit-group or region scan in trigger/Galaxy code.");
+    analysis.deepCleanupCandidates = {periodic, scan};
+
+    sc2dh::perf::MapPerformanceOptions options;
+    options.columns = 2;
+    options.rows = 1;
+    const sc2dh::perf::MapPerformanceReport report =
+        sc2dh::perf::MapPerformanceAnalyzer().buildReport(objects, analysis, options);
+
+    QCOMPARE(report.cells.size(), 2);
+    const sc2dh::perf::MapPerformanceCell &left = report.cells.at(0);
+    const sc2dh::perf::MapPerformanceCell &right = report.cells.at(1);
+    QCOMPARE(left.doodadCount, 2);
+    QCOMPARE(left.unitCount, 0);
+    QVERIFY(left.uniqueActorModelCount >= 1);
+    QVERIFY(left.linkedAssetBytes >= qint64(2 * 1024 * 1024));
+    QVERIFY(left.reasons.join(QStringLiteral("\n")).contains(QStringLiteral("Doodad Density")));
+    QVERIFY(left.reasons.join(QStringLiteral("\n")).contains(QStringLiteral("Trigger CPU Risk")));
+    QVERIFY(left.relatedObjects.join(QStringLiteral("\n")).contains(QStringLiteral("LeftTree")));
+    QVERIFY(left.relatedFiles.join(QStringLiteral("\n")).contains(QStringLiteral("TreeVisual.m3")));
+    QVERIFY(left.triggerLines.join(QStringLiteral("\n")).contains(QStringLiteral("scripts/Perf.galaxy:12")));
+    QCOMPARE(left.scoreLabel, QStringLiteral("Estimated Static Risk"));
+    QVERIFY(!left.scoreLabel.contains(QStringLiteral("FPS"), Qt::CaseInsensitive));
+    QVERIFY(left.combinedRiskScore > 0.0);
+
+    QCOMPARE(right.doodadCount, 0);
+    QCOMPARE(right.unitCount, 2);
+    QCOMPARE(right.destructibleCount, 1);
+    QVERIFY(right.uniqueActorModelCount >= 1);
+    QVERIFY(right.reasons.join(QStringLiteral("\n")).contains(QStringLiteral("Units")));
+    QVERIFY(right.relatedObjects.join(QStringLiteral("\n")).contains(QStringLiteral("RightMarine")));
+    QCOMPARE(right.periodicTimerCount, 1);
+    QCOMPARE(right.unitGroupScanCount, 1);
+}
+
 void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
 {
     const QByteArray objects = QByteArrayLiteral(
@@ -2664,6 +3207,60 @@ void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
     QStringList galaxyErrors;
     QVERIFY2(planner.validateGeneratedGalaxy(galaxy, &galaxyErrors), qPrintable(galaxyErrors.join(QStringLiteral("; "))));
     QVERIFY(!galaxy.contains(QStringLiteral("PathingBlocker")));
+}
+
+void CoreTests::decorationStreamingKeepsExternallyReferencedDoodadsStatic()
+{
+    const QByteArray objects = QByteArrayLiteral(
+        "ObjectDoodad { Id = 41 Name = \"ReferencedVisual\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
+        "ObjectDoodad { Id = 42 Name = \"FreeVisual\" Type = \"TreeVisual\" Position = (20, 10, 0) }\n");
+    const QVector<sc2dh::decor::DecorZone> zones = {
+        {1, QStringLiteral("ZoneA"), 0.0, 0.0, 50.0, 50.0}
+    };
+    sc2dh::decor::DecorationSafetyContext safety;
+    safety.referenceFilesByDoodadKey.insert(QStringLiteral("referencedvisual"),
+                                            {QStringLiteral("MapScript.galaxy")});
+
+    sc2dh::decor::DecorationStreamingPlanner planner;
+    const sc2dh::decor::DecorationOptimizedArtifacts artifacts =
+        planner.createOptimizedArtifacts(objects, zones, safety);
+
+    QVERIFY2(artifacts.valid, qPrintable(artifacts.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(artifacts.removedDoodadIndices.size(), 1);
+    const QString optimizedObjects = QString::fromUtf8(artifacts.optimizedObjectsBytes);
+    QVERIFY(optimizedObjects.contains(QStringLiteral("ReferencedVisual")));
+    QVERIFY(!optimizedObjects.contains(QStringLiteral("FreeVisual")));
+    QVERIFY(artifacts.galaxySource.contains(QStringLiteral("FreeVisual"))
+            || artifacts.galaxySource.contains(QStringLiteral("TreeVisual")));
+    QVERIFY(!artifacts.galaxySource.contains(QStringLiteral("ReferencedVisual")));
+
+    const sc2dh::decor::DoodadPlacement &referenced = artifacts.plan.doodads.at(0);
+    QVERIFY(!referenced.dynamicCandidate);
+    QVERIFY(referenced.staticOnlyReason.contains(QStringLiteral("pathing/gameplay dependency")));
+    QCOMPARE(referenced.safetyReferenceFiles, QStringList{QStringLiteral("MapScript.galaxy")});
+}
+
+void CoreTests::decorationStreamingRejectsInvalidGalaxyOptions()
+{
+    const QByteArray objects = QByteArrayLiteral(
+        "ObjectDoodad { Id = 51 Name = \"Visual\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n");
+    sc2dh::decor::GalaxyGenerationOptions options;
+    options.functionPrefix = QStringLiteral("1 Bad Prefix");
+    options.batchLimit = 0;
+    const QVector<sc2dh::decor::DecorZone> zones = {
+        {0, QStringLiteral("Invalid"), 0.0, 0.0, 50.0, 50.0},
+        {0, QStringLiteral("DuplicateInvalid"), 0.0, 0.0, 50.0, 50.0}
+    };
+
+    const sc2dh::decor::DecorationOptimizedArtifacts artifacts =
+        sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(objects, zones, options);
+
+    QVERIFY(!artifacts.valid);
+    const QString warnings = artifacts.warnings.join(QStringLiteral("\n"));
+    QVERIFY(warnings.contains(QStringLiteral("function prefix")));
+    QVERIFY(warnings.contains(QStringLiteral("batch limit")));
+    QVERIFY(warnings.contains(QStringLiteral("zone id must be positive")));
+    QVERIFY(warnings.contains(QStringLiteral("zone id is duplicated")));
 }
 
 void CoreTests::decorationStreamingBuildsOptimizedObjectsArtifacts()
@@ -2767,6 +3364,165 @@ void CoreTests::decorationStreamingPreparesArchivePatch()
     QVERIFY(runtime.contains(QStringLiteral("void NAME_OUT_FUNK_1()")));
     QVERIFY(runtime.contains(QStringLiteral("VisualA")) || runtime.contains(QStringLiteral("TreeVisual")));
     QVERIFY(!runtime.contains(QStringLiteral("StaticBlock")));
+}
+
+void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
+{
+#ifndef SC2DH_USE_STORMLIB
+    QSKIP("StormLib archive writer is unavailable.");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString sourcePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("DecorSource.SC2Map"));
+    const QString outputPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("DecorSource_DecorOptimized.SC2Map"));
+    const QByteArray objects = QByteArrayLiteral(
+        "ObjectDoodad { Id = 31 Name = \"ReferencedVisual\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
+        "ObjectDoodad { Id = 32 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) }\n"
+        "ObjectDoodad { Id = 33 Name = \"FreeVisual\" Type = \"RockVisual\" Position = (12, 12, 0) }\n");
+    const QByteArray mapScript = QByteArrayLiteral(
+        "include \"TriggerLibs/NativeLib\"\n"
+        "void InitMap() { TriggerDebugOutput(1, StringToText(\"ReferencedVisual\"), true); }\n");
+
+    QString error;
+    QVERIFY2(createTestMpqArchive(sourcePath,
+                                  {
+                                      {QStringLiteral("Objects"), objects},
+                                      {QStringLiteral("MapScript.galaxy"), mapScript},
+                                      {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog/>")}
+                                  },
+                                  &error),
+             qPrintable(error));
+
+    sc2dh::decor::DecorOptimizedMapRequest request;
+    request.sourceArchivePath = sourcePath;
+    request.outputArchivePath = outputPath;
+    request.zones = {{1, QStringLiteral("ZoneA"), 0.0, 0.0, 50.0, 50.0}};
+    request.galaxyOptions.functionPrefix = QStringLiteral("NAME_OUT_FUNK");
+    request.galaxyOptions.batchLimit = 4;
+
+    const sc2dh::decor::DecorOptimizedMapResult result =
+        sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
+    QVERIFY2(result.success, qPrintable(result.error + QStringLiteral(" ") + result.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(result.outputArchivePath, outputPath);
+    QCOMPARE(result.removedDoodads, 1);
+    QVERIFY(QFileInfo::exists(sourcePath));
+    QVERIFY(QFileInfo::exists(outputPath));
+
+    Sc2Archive original;
+    QVERIFY2(original.load(sourcePath, &error), qPrintable(error));
+    QByteArray originalObjects;
+    QVERIFY2(original.readEntry(QStringLiteral("Objects"), &originalObjects, &error), qPrintable(error));
+    QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("ReferencedVisual")));
+    QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("FreeVisual")));
+    QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("StaticBlock")));
+
+    Sc2Archive optimized;
+    QVERIFY2(optimized.load(outputPath, &error), qPrintable(error));
+    QByteArray optimizedObjects;
+    QVERIFY2(optimized.readEntry(QStringLiteral("Objects"), &optimizedObjects, &error), qPrintable(error));
+    const QString optimizedObjectsText = QString::fromUtf8(optimizedObjects);
+    QVERIFY(optimizedObjectsText.contains(QStringLiteral("ReferencedVisual")));
+    QVERIFY(!optimizedObjectsText.contains(QStringLiteral("FreeVisual")));
+    QVERIFY(optimizedObjectsText.contains(QStringLiteral("StaticBlock")));
+
+    QByteArray optimizedMapScript;
+    QVERIFY2(optimized.readEntry(QStringLiteral("MapScript.galaxy"), &optimizedMapScript, &error), qPrintable(error));
+    const QString mapScriptText = QString::fromUtf8(optimizedMapScript);
+    QCOMPARE(mapScriptText.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QVERIFY(mapScriptText.contains(QStringLiteral("include \"TriggerLibs/NativeLib\"")));
+
+    QByteArray runtime;
+    QVERIFY2(optimized.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error), qPrintable(error));
+    const QString runtimeText = QString::fromUtf8(runtime);
+    QVERIFY(runtimeText.contains(QStringLiteral("void NAME_OUT_FUNK_1()")));
+    QVERIFY(runtimeText.contains(QStringLiteral("DecorOpt_CreateZone")));
+    QVERIFY(runtimeText.contains(QStringLiteral("RockVisual")));
+    QVERIFY(!runtimeText.contains(QStringLiteral("ReferencedVisual")));
+    QVERIFY(!runtimeText.contains(QStringLiteral("StaticBlock")));
+#endif
+}
+
+void CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
+{
+#ifndef SC2DH_USE_STORMLIB
+    QSKIP("StormLib archive writer is unavailable.");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString sourcePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("CliDecorSource.SC2Map"));
+    const QString outputPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("CliDecorOptimized.SC2Map"));
+    const QString zonesPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("zones.json"));
+    const QString reportPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("decor_report.json"));
+    const QByteArray objects = QByteArrayLiteral(
+        "ObjectDoodad { Id = 61 Name = \"LeftFree\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
+        "ObjectDoodad { Id = 62 Name = \"RightFree\" Type = \"RockVisual\" Position = (110, 10, 0) }\n"
+        "ObjectDoodad { Id = 63 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) }\n");
+    QString error;
+    QVERIFY2(createTestMpqArchive(sourcePath,
+                                  {
+                                      {QStringLiteral("Objects"), objects},
+                                      {QStringLiteral("MapScript.galaxy"), QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\n")},
+                                      {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog/>")}
+                                  },
+                                  &error),
+             qPrintable(error));
+    QVERIFY(writeTextFile(zonesPath, QByteArrayLiteral(
+        "["
+        "{\"id\":1,\"name\":\"Left\",\"xMin\":0,\"yMin\":0,\"xMax\":50,\"yMax\":50},"
+        "{\"id\":2,\"name\":\"Right\",\"xMin\":100,\"yMin\":0,\"xMax\":150,\"yMax\":50}"
+        "]")));
+
+    QString cliPath = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("SC2DecorOptimizeMap.exe"));
+    if (!QFileInfo::exists(cliPath))
+        cliPath = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("SC2DecorOptimizeMap"));
+    QVERIFY2(QFileInfo::exists(cliPath), qPrintable(QStringLiteral("Missing CLI executable: %1").arg(cliPath)));
+
+    QProcess process;
+    process.setProgram(cliPath);
+    process.setArguments({
+        sourcePath,
+        outputPath,
+        QStringLiteral("--zones"),
+        zonesPath,
+        QStringLiteral("--report"),
+        reportPath,
+        QStringLiteral("--batch"),
+        QStringLiteral("4"),
+        QStringLiteral("--overwrite")
+    });
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    QVERIFY2(process.waitForStarted(5000), qPrintable(process.errorString()));
+    QVERIFY2(process.waitForFinished(60000), qPrintable(process.errorString()));
+    const QString output = QString::fromUtf8(process.readAll());
+    QVERIFY2(process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0,
+             qPrintable(output));
+
+    QFile reportFile(reportPath);
+    QVERIFY(reportFile.open(QIODevice::ReadOnly));
+    const QJsonDocument reportJson = QJsonDocument::fromJson(reportFile.readAll());
+    QVERIFY(reportJson.isObject());
+    QCOMPARE(reportJson.object().value(QStringLiteral("removedDoodads")).toInt(), 2);
+    QCOMPARE(reportJson.object().value(QStringLiteral("zones")).toArray().size(), 2);
+
+    Sc2Archive optimized;
+    QVERIFY2(optimized.load(outputPath, &error), qPrintable(error));
+    QByteArray optimizedObjects;
+    QVERIFY2(optimized.readEntry(QStringLiteral("Objects"), &optimizedObjects, &error), qPrintable(error));
+    const QString optimizedObjectsText = QString::fromUtf8(optimizedObjects);
+    QVERIFY(!optimizedObjectsText.contains(QStringLiteral("LeftFree")));
+    QVERIFY(!optimizedObjectsText.contains(QStringLiteral("RightFree")));
+    QVERIFY(optimizedObjectsText.contains(QStringLiteral("StaticBlock")));
+
+    QByteArray runtime;
+    QVERIFY2(optimized.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error), qPrintable(error));
+    const QString runtimeText = QString::fromUtf8(runtime);
+    QVERIFY(runtimeText.contains(QStringLiteral("void NAME_OUT_FUNK_1()")));
+    QVERIFY(runtimeText.contains(QStringLiteral("void NAME_OUT_FUNK_2()")));
+    QVERIFY(runtimeText.contains(QStringLiteral("if (DecorOpt_Loaded[1]) { return; }")));
+    QVERIFY(runtimeText.contains(QStringLiteral("if (DecorOpt_Loaded[2]) { return; }")));
+#endif
 }
 
 void CoreTests::deepCleanupReportsSemanticDuplicateReview()
@@ -3231,6 +3987,76 @@ void CoreTests::archiveDataCollectionCreatesFileAndListfile()
     QByteArray verifiedListfile;
     QVERIFY2(verified.readEntry(QStringLiteral("(listfile)"), &verifiedListfile, &error), qPrintable(error));
     QVERIFY(QString::fromUtf8(verifiedListfile).contains(QStringLiteral("DataCollectionData.xml")));
+}
+
+void CoreTests::archiveSaveCopyRemovesEntriesAndUpdatesListfile()
+{
+#ifndef SC2DH_USE_STORMLIB
+    QSKIP("StormLib archive writer is unavailable.");
+#else
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString source = QDir(directory.path()).absoluteFilePath(QStringLiteral("cleanup_source.SC2Map"));
+    const QString output = QDir(directory.path()).absoluteFilePath(QStringLiteral("cleanup_output.SC2Map"));
+    const QString unitEntry = QStringLiteral("Base.SC2Data/GameData/UnitData.xml");
+    const QString addedEntry = QStringLiteral("scripts/generated_cleanup.galaxy");
+    const QString removedAsset = QStringLiteral("Assets/UnusedTexture.dds");
+    const QString removedTrash = QStringLiteral("debug/temp_build.log");
+    const QByteArray originalXml = QByteArrayLiteral("<Catalog><CUnit id=\"Before\"/></Catalog>");
+    const QByteArray rewrittenXml = QByteArrayLiteral("<Catalog><CUnit id=\"After\"/></Catalog>");
+    QString error;
+
+    QVERIFY2(createTestMpqArchive(source,
+                                  {
+                                      {QStringLiteral("Objects"), QByteArrayLiteral("ObjectUnit { Id = 1 }\n")},
+                                      {unitEntry, originalXml},
+                                      {removedAsset, QByteArrayLiteral("unused texture payload")},
+                                      {removedTrash, QByteArrayLiteral("temporary debug payload")}
+                                  },
+                                  &error),
+             qPrintable(error));
+
+    Sc2Archive archive;
+    QVERIFY2(archive.load(source, &error), qPrintable(error));
+    QVERIFY2(archive.saveCopy(output,
+                              {
+                                  {unitEntry, rewrittenXml},
+                                  {addedEntry, QByteArrayLiteral("void SC2DH_CleanupGenerated() {}\n")}
+                              },
+                              {removedAsset, removedTrash},
+                              &error),
+             qPrintable(error));
+
+    Sc2Archive original;
+    QVERIFY2(original.load(source, &error), qPrintable(error));
+    QByteArray originalRoundTrip;
+    QVERIFY2(original.readEntry(unitEntry, &originalRoundTrip, &error), qPrintable(error));
+    QCOMPARE(originalRoundTrip, originalXml);
+    QByteArray originalRemoved;
+    QVERIFY2(original.readEntry(removedAsset, &originalRemoved, &error), qPrintable(error));
+
+    Sc2Archive verified;
+    QVERIFY2(verified.load(output, &error), qPrintable(error));
+    QByteArray actualXml;
+    QVERIFY2(verified.readEntry(unitEntry, &actualXml, &error), qPrintable(error));
+    QCOMPARE(actualXml, rewrittenXml);
+    QByteArray added;
+    QVERIFY2(verified.readEntry(addedEntry, &added, &error), qPrintable(error));
+    QVERIFY(QString::fromUtf8(added).contains(QStringLiteral("SC2DH_CleanupGenerated")));
+
+    QByteArray removedBytes;
+    QString removeReadError;
+    QVERIFY(!verified.readEntry(removedAsset, &removedBytes, &removeReadError));
+    QVERIFY(!verified.readEntry(removedTrash, &removedBytes, &removeReadError));
+
+    QByteArray listfile;
+    QVERIFY2(verified.readEntry(QStringLiteral("(listfile)"), &listfile, &error), qPrintable(error));
+    const QString listfileText = QString::fromUtf8(listfile).replace(QLatin1Char('\\'), QLatin1Char('/'));
+    QVERIFY(listfileText.contains(unitEntry));
+    QVERIFY(listfileText.contains(addedEntry));
+    QVERIFY(!listfileText.contains(removedAsset));
+    QVERIFY(!listfileText.contains(removedTrash));
+#endif
 }
 
 QTEST_MAIN(CoreTests)

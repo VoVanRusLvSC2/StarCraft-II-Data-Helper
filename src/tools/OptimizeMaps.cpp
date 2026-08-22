@@ -664,7 +664,7 @@ int duplicateMergeCandidateCount(const AnalysisResult &analysis)
     return int(std::count_if(analysis.duplicateContentGroups.cbegin(),
                              analysis.duplicateContentGroups.cend(),
                              [](const DuplicateContentGroup &group) {
-                                 return group.mergeCandidate && group.nodeIndices.size() > 1;
+                                 return group.autoRecommended && group.mergeCandidate && group.nodeIndices.size() > 1;
                              }));
 }
 

@@ -1,6 +1,7 @@
 #include "ui/M3PreviewWidget.h"
 
 #include "core/M3ModelParser.h"
+#include "app/AppSettings.h"
 
 #include <QMatrix4x4>
 #include <QMouseEvent>
@@ -68,7 +69,7 @@ void M3PreviewWidget::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.fillRect(rect(), QColor(0, 10, 13));
-    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::Antialiasing, sc2dh::app::AppSettings::modelAntialiasing());
 
     QMatrix4x4 rotation;
     rotation.rotate(m_pitch, 1, 0, 0);

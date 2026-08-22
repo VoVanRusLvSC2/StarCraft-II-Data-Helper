@@ -10,6 +10,7 @@
 #include "ui/FormatterPage.h"
 #include "ui/GraphPage.h"
 #include "ui/LogPanel.h"
+#include "ui/MapPerformancePage.h"
 #include "ui/OverviewPage.h"
 #include "ui/PropertiesPage.h"
 #include "ui/RenameIdsPage.h"
@@ -45,6 +46,42 @@
 
 namespace sc2dh::app
 {
+namespace
+{
+[[maybe_unused]] const char *const mainWindowTranslationSources[] = {
+    QT_TRANSLATE_NOOP("MainWindow", "Open SC2 File"),
+    QT_TRANSLATE_NOOP("MainWindow", "Open Folder"),
+    QT_TRANSLATE_NOOP("MainWindow", "Analyze"),
+    QT_TRANSLATE_NOOP("MainWindow", "Optimization"),
+    QT_TRANSLATE_NOOP("MainWindow", "Review Optimization Plan"),
+    QT_TRANSLATE_NOOP("MainWindow", "Settings"),
+    QT_TRANSLATE_NOOP("MainWindow", "Fullscreen"),
+    QT_TRANSLATE_NOOP("MainWindow", "Windowed"),
+    QT_TRANSLATE_NOOP("MainWindow", "Exit"),
+    QT_TRANSLATE_NOOP("MainWindow", "Analyze / refresh the current project (F5)"),
+    QT_TRANSLATE_NOOP("MainWindow", "Selected source path"),
+    QT_TRANSLATE_NOOP("MainWindow", "Join Discord"),
+    QT_TRANSLATE_NOOP("MainWindow", "Support on Boosty"),
+    QT_TRANSLATE_NOOP("MainWindow", "Objects"),
+    QT_TRANSLATE_NOOP("MainWindow", "Dependencies"),
+    QT_TRANSLATE_NOOP("MainWindow", "Graph"),
+    QT_TRANSLATE_NOOP("MainWindow", "Map Performance"),
+    QT_TRANSLATE_NOOP("MainWindow", "Properties"),
+    QT_TRANSLATE_NOOP("MainWindow", "Data Collection"),
+    QT_TRANSLATE_NOOP("MainWindow", "Rename To Standard"),
+    QT_TRANSLATE_NOOP("MainWindow", "Duplicate Merge"),
+    QT_TRANSLATE_NOOP("MainWindow", "Unused Data Objects"),
+    QT_TRANSLATE_NOOP("MainWindow", "Logs"),
+    QT_TRANSLATE_NOOP("MainWindow", "XML Source"),
+    QT_TRANSLATE_NOOP("MainWindow", "Toggle fullscreen mode (F11)")
+};
+
+QString mainText(const char *source)
+{
+    return QCoreApplication::translate("MainWindow", source);
+}
+}
+
 MainWindowUiBuilder::MainWindowUiBuilder(MainWindow &window)
     : m_window(window)
 {
@@ -75,23 +112,23 @@ void MainWindowUiBuilder::build()
     toolbar->setIconSize(QSize(0, 0));
     toolbar->setMinimumHeight(58);
 
-    window->m_openFileAction = new QAction(QStringLiteral("Open SC2 File"), window);
-    window->m_openFolderAction = new QAction(QStringLiteral("Open Folder"), window);
-    window->m_analyzeAction = new QAction(QStringLiteral("Analyze"), window);
-    window->m_dryRunAction = new QAction(QStringLiteral("Optimization"), window);
-    window->m_applyAction = new QAction(QStringLiteral("Review Optimization Plan"), window);
-    window->m_settingsAction = new QAction(QStringLiteral("Settings"), window);
-    window->m_fullscreenAction = new QAction(QStringLiteral("Fullscreen"), window);
-    window->m_exitAction = new QAction(QStringLiteral("Exit"), window);
+    window->m_openFileAction = new QAction(mainText("Open SC2 File"), window);
+    window->m_openFolderAction = new QAction(mainText("Open Folder"), window);
+    window->m_analyzeAction = new QAction(mainText("Analyze"), window);
+    window->m_dryRunAction = new QAction(mainText("Optimization"), window);
+    window->m_applyAction = new QAction(mainText("Review Optimization Plan"), window);
+    window->m_settingsAction = new QAction(mainText("Settings"), window);
+    window->m_fullscreenAction = new QAction(mainText("Fullscreen"), window);
+    window->m_exitAction = new QAction(mainText("Exit"), window);
     window->m_analyzeAction->setShortcut(QKeySequence(Qt::Key_F5));
     window->m_analyzeAction->setShortcutContext(Qt::ApplicationShortcut);
-    window->m_analyzeAction->setToolTip(QStringLiteral("Analyze / refresh the current project (F5)"));
+    window->m_analyzeAction->setToolTip(mainText("Analyze / refresh the current project (F5)"));
     window->m_dryRunAction->setEnabled(false);
     window->m_applyAction->setEnabled(false);
 
     window->m_pathEdit = new QLineEdit(window);
     window->m_pathEdit->setObjectName(QStringLiteral("pathEdit"));
-    window->m_pathEdit->setPlaceholderText(QStringLiteral("Selected source path"));
+    window->m_pathEdit->setPlaceholderText(mainText("Selected source path"));
     window->m_pathEdit->setReadOnly(true);
     window->m_pathEdit->setCursorPosition(0);
     window->m_pathEdit->hide();
@@ -126,7 +163,7 @@ void MainWindowUiBuilder::build()
     discordButton->setIcon(QIcon(QStringLiteral(":/textures/Discord.png")));
     discordButton->setIconSize(QSize(30, 30));
     discordButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    discordButton->setToolTip(QStringLiteral("Join Discord"));
+    discordButton->setToolTip(mainText("Join Discord"));
     discordButton->setCursor(Qt::PointingHandCursor);
     discordButton->setFocusPolicy(Qt::NoFocus);
     discordButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -136,7 +173,7 @@ void MainWindowUiBuilder::build()
     boostyButton->setObjectName(QStringLiteral("boostyPromoButton"));
     boostyButton->setText(QStringLiteral("Boosty"));
     boostyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    boostyButton->setToolTip(QStringLiteral("Support on Boosty"));
+    boostyButton->setToolTip(mainText("Support on Boosty"));
     boostyButton->setCursor(Qt::PointingHandCursor);
     boostyButton->setFocusPolicy(Qt::NoFocus);
     boostyButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -159,6 +196,7 @@ void MainWindowUiBuilder::build()
     window->m_analysisPage = new OverviewPage(window->m_tabs);
     window->m_dependenciesPage = new DependenciesPage(window->m_tabs);
     window->m_graphPage = new GraphPage(window->m_tabs);
+    window->m_mapPerformancePage = new MapPerformancePage(window->m_tabs);
     window->m_propertiesPage = new PropertiesPage(window->m_tabs);
     window->m_dataCollectionPage = new DataCollectionPage(window->m_tabs);
     window->m_renameIdsPage = new RenameIdsPage(window->m_tabs);
@@ -169,16 +207,17 @@ void MainWindowUiBuilder::build()
     window->m_logPanel = new LogPanel(window->m_tabs);
     window->m_xmlSourcePage = new XmlSourcePage(window->m_tabs);
 
-    window->m_tabs->addTab(window->m_analysisPage, QStringLiteral("Objects"));
-    window->m_tabs->addTab(window->m_dependenciesPage, QStringLiteral("Dependencies"));
-    window->m_tabs->addTab(window->m_graphPage, QStringLiteral("Graph"));
-    window->m_tabs->addTab(window->m_propertiesPage, QStringLiteral("Properties"));
-    window->m_tabs->addTab(window->m_dataCollectionPage, QStringLiteral("Data Collection"));
-    window->m_tabs->addTab(window->m_renameIdsPage, QStringLiteral("Rename To Standard"));
-    window->m_tabs->addTab(window->m_duplicatesPage, QStringLiteral("Duplicate Merge"));
-    window->m_tabs->addTab(window->m_cleanupPage, QStringLiteral("Unused Data Objects"));
-    window->m_tabs->addTab(window->m_logPanel, QStringLiteral("Logs"));
-    window->m_tabs->addTab(window->m_xmlSourcePage, QStringLiteral("XML Source"));
+    window->m_tabs->addTab(window->m_analysisPage, mainText("Objects"));
+    window->m_tabs->addTab(window->m_dependenciesPage, mainText("Dependencies"));
+    window->m_tabs->addTab(window->m_graphPage, mainText("Graph"));
+    window->m_tabs->addTab(window->m_mapPerformancePage, mainText("Map Performance"));
+    window->m_tabs->addTab(window->m_propertiesPage, mainText("Properties"));
+    window->m_tabs->addTab(window->m_dataCollectionPage, mainText("Data Collection"));
+    window->m_tabs->addTab(window->m_renameIdsPage, mainText("Rename To Standard"));
+    window->m_tabs->addTab(window->m_duplicatesPage, mainText("Duplicate Merge"));
+    window->m_tabs->addTab(window->m_cleanupPage, mainText("Unused Data Objects"));
+    window->m_tabs->addTab(window->m_logPanel, mainText("Logs"));
+    window->m_tabs->addTab(window->m_xmlSourcePage, mainText("XML Source"));
     window->m_tabs->tabBar()->setExpanding(false);
     window->m_tabs->tabBar()->setUsesScrollButtons(true);
     window->m_tabs->tabBar()->setElideMode(Qt::ElideNone);

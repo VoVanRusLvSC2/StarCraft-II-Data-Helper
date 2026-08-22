@@ -3,6 +3,7 @@
 #include "core/CatalogLinkSchema.h"
 #include "core/DeepCleanupService.h"
 #include "core/CatalogProtection.h"
+#include "core/UnifiedReferenceIndex.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -244,6 +245,7 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
             group.nodeIndices = component;
             group.commonIdMask = numberedIdBase(result->nodes[component.front()].id) + QStringLiteral("#");
             group.mergeCandidate = true;
+            group.autoRecommended = false;
             result->duplicateContentGroups.append(group);
             foundCandidate = true;
             for (int index : component)
@@ -256,8 +258,11 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
             group.contentHash = result->nodes[indices.front()].contentHash;
             group.nodeIndices = indices;
             group.commonIdMask = QStringLiteral("unrelated IDs");
-            group.mergeCandidate = false;
+            group.mergeCandidate = true;
+            group.autoRecommended = false;
             result->duplicateContentGroups.append(group);
+            for (int index : indices)
+                result->nodes[index].duplicateContent = true;
         }
     }
 
@@ -307,6 +312,27 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
             if (match.value() > 0)
                 externalSources[match.key()].append(QFileInfo(fileInfo.filePath).fileName());
         }
+    }
+    sc2dh::refs::UnifiedReferenceIndex unifiedReferences;
+    unifiedReferences.build(*result);
+    for (const sc2dh::refs::ReferenceRecord &reference : unifiedReferences.records()) {
+        if (reference.targetId.isEmpty())
+            continue;
+        const bool rootReference =
+            reference.kind == sc2dh::refs::ReferenceKind::ScriptText
+            || reference.kind == sc2dh::refs::ReferenceKind::PlacementRoot
+            || reference.kind == sc2dh::refs::ReferenceKind::BinaryUnconfirmed;
+        if (!rootReference)
+            continue;
+        ++scriptReferences[reference.targetId];
+        QString source = reference.sourceFile;
+        if (reference.lineNumber > 0)
+            source += QStringLiteral(":%1").arg(reference.lineNumber);
+        if (reference.kind == sc2dh::refs::ReferenceKind::BinaryUnconfirmed)
+            source += QStringLiteral(" (binary non-rewritable)");
+        else if (reference.kind == sc2dh::refs::ReferenceKind::PlacementRoot)
+            source += QStringLiteral(" (placement root)");
+        externalSources[reference.targetId].append(source);
     }
 
     // Reachability deliberately ignores Data Collection records: catalog grouping
@@ -588,21 +614,25 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
     }
 
     report += QStringLiteral("\nExact duplicate body groups\n");
+    QHash<QString, int> incomingReferenceCount;
+    for (const DataNode &source : result.nodes)
+        for (const QString &reference : source.referencedIds)
+            ++incomingReferenceCount[reference];
     for (const DuplicateContentGroup &group : result.duplicateContentGroups)
     {
         const DataNode &recommended = result.nodes[group.nodeIndices.front()];
         int redirectable = 0;
         for (int index : group.nodeIndices)
-        {
-            const QString id = result.nodes[index].id;
-            for (const DataNode &source : result.nodes)
-                redirectable += std::count(source.referencedIds.cbegin(), source.referencedIds.cend(), id);
-        }
+            redirectable += incomingReferenceCount.value(result.nodes[index].id);
+        const QString classification = group.autoRecommended
+            ? QStringLiteral("automatic merge candidate")
+            : group.mergeCandidate ? QStringLiteral("manual merge review")
+                                   : QStringLiteral("allowed identical body");
         report += QStringLiteral("- Hash: %1 | count: %2 | ID mask: %3 | classification: %4 | recommended keep: %5 | redirectable references: %6 | unsafe: %7\n")
                       .arg(group.contentHash.left(12))
                       .arg(group.nodeIndices.size())
                       .arg(group.commonIdMask,
-                           group.mergeCandidate ? QStringLiteral("merge candidate") : QStringLiteral("allowed identical body"),
+                           classification,
                            recommended.id)
                       .arg(redirectable)
                       .arg(result.parseErrors.isEmpty() ? QStringLiteral("no") : QStringLiteral("yes (parse errors may hide references)"));
@@ -718,7 +748,7 @@ QString FolderAnalyzer::buildDryRunReport(const AnalysisResult &result, const QV
         }
         const DataNode &node = result.nodes[index];
         ++estimatedRemoved;
-        if (node.duplicateId || node.duplicateContent)
+        if (node.duplicateId)
         {
             report += QStringLiteral("- %1 | %2\n").arg(node.id, node.sourceFile);
             ++duplicateAffected;

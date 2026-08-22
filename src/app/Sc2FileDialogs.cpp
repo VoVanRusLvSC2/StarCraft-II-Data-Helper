@@ -605,18 +605,24 @@ namespace
             m_path->setPlaceholderText(QStringLiteral("Current folder..."));
             layout->addWidget(m_path);
 
-            auto *searchRow = new QHBoxLayout;
-            m_parentButton = new QPushButton(QStringLiteral("Up"), this);
+            auto *commandBar = new QFrame(this);
+            commandBar->setObjectName(QStringLiteral("sc2OpenFileCommandBar"));
+            auto *searchRow = new QHBoxLayout(commandBar);
+            searchRow->setContentsMargins(8, 5, 8, 5);
+            searchRow->setSpacing(8);
+            m_parentButton = new QPushButton(QStringLiteral("UP //"), commandBar);
             m_parentButton->setObjectName(QStringLiteral("sc2OpenFileParentButton"));
             m_parentButton->setToolTip(QStringLiteral("Open parent directory"));
             m_parentButton->setMinimumSize(74, 34);
             m_parentButton->setMaximumHeight(34);
-            m_search = new QLineEdit(this);
+            auto *searchTag = new QLabel(QStringLiteral("SEARCH"), commandBar);
+            searchTag->setObjectName(QStringLiteral("sc2OpenFileSearchTag"));
+            m_search = new QLineEdit(commandBar);
             m_search->setObjectName(QStringLiteral("sc2OpenFileSearch"));
             m_search->setMinimumHeight(34);
             m_search->setMaximumHeight(34);
-            m_search->setPlaceholderText(QStringLiteral("Search files and folders..."));
-            m_filter = new QComboBox(this);
+            m_search->setPlaceholderText(QStringLiteral("files and folders..."));
+            m_filter = new QComboBox(commandBar);
             m_filter->setObjectName(QStringLiteral("sc2OpenFileFilter"));
             m_filter->setMinimumHeight(34);
             m_filter->setMaximumHeight(34);
@@ -625,9 +631,10 @@ namespace
             for (const Sc2FileOpenFilter &filter : m_filters)
                 m_filter->addItem(filter.label);
             searchRow->addWidget(m_parentButton);
+            searchRow->addWidget(searchTag);
             searchRow->addWidget(m_search, 1);
             searchRow->addWidget(m_filter);
-            layout->addLayout(searchRow);
+            layout->addWidget(commandBar);
 
             auto *splitter = new QSplitter(Qt::Horizontal, this);
             splitter->setObjectName(QStringLiteral("sc2OpenFileSplitter"));

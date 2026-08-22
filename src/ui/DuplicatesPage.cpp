@@ -19,8 +19,10 @@ namespace {
 
 QString duplicateContentLabel(const DuplicateContentGroup &group)
 {
-    return group.mergeCandidate
-        ? QStringLiteral("Same %1 body and related ID mask %2").arg(group.elementName, group.commonIdMask)
+    return group.autoRecommended
+        ? QStringLiteral("Verified automatic merge candidate: same %1 body and related ID mask %2").arg(group.elementName, group.commonIdMask)
+        : group.mergeCandidate
+        ? QStringLiteral("Same %1 body and related ID mask %2, but manual review is required").arg(group.elementName, group.commonIdMask)
         : QStringLiteral("Same %1 body, but IDs are unrelated: allowed, no merge suggested").arg(group.elementName);
 }
 
@@ -159,14 +161,24 @@ void DuplicatesPage::setAnalysisResult(const AnalysisResult &result)
     m_model->removeRows(0, m_model->rowCount());
 
     int groupCount = 0;
-    int mergeCandidateCount = 0;
+    int automaticMergeCount = 0;
+    int manualMergeCount = 0;
     int allowedCount = 0;
     int nodeCount = 0;
 
+    QHash<QString, int> incomingReferences;
+    for (const DataNode &source : m_result.nodes)
+        for (const QString &reference : source.referencedIds)
+            ++incomingReferences[reference];
+
     for (const DuplicateContentGroup &group : m_result.duplicateContentGroups) {
         ++groupCount;
-        if (group.mergeCandidate) ++mergeCandidateCount; else ++allowedCount;
-        const QString kind = group.mergeCandidate ? QStringLiteral("Merge candidate") : QStringLiteral("Allowed identical body");
+        if (group.autoRecommended) ++automaticMergeCount;
+        else if (group.mergeCandidate) ++manualMergeCount;
+        else ++allowedCount;
+        const QString kind = group.autoRecommended ? QStringLiteral("Automatic merge candidate")
+                            : group.mergeCandidate ? QStringLiteral("Manual merge review")
+                                                   : QStringLiteral("Allowed identical body");
         const QString key = group.commonIdMask;
         QList<QStandardItem *> groupRows = buildRow(kind,
                                                     key,
@@ -189,8 +201,7 @@ void DuplicatesPage::setAnalysisResult(const AnalysisResult &result)
             const DataNode &node = m_result.nodes[index];
             ++nodeCount;
             int incoming = 0;
-            for (const DataNode &source : m_result.nodes)
-                if (source.referencedIds.contains(node.id)) ++incoming;
+            incoming = incomingReferences.value(node.id);
             QList<QStandardItem *> childRows = buildRow(QStringLiteral("Node"),
                                                         key,
                                                         node.id,
@@ -208,7 +219,7 @@ void DuplicatesPage::setAnalysisResult(const AnalysisResult &result)
             childRows.first()->setData(groupCount - 1, Qt::UserRole + 3);
             childRows.at(1)->setData(index, Qt::UserRole + 2);
             childRows.at(1)->setData(groupCount - 1, Qt::UserRole + 3);
-            if (group.mergeCandidate) {
+            if (group.mergeCandidate && group.autoRecommended) {
                 if (groupRows.first()->rowCount() == 0) childRows.first()->setCheckState(Qt::Checked);
                 else childRows.at(1)->setCheckState(Qt::Checked);
             }
@@ -228,19 +239,26 @@ void DuplicatesPage::setAnalysisResult(const AnalysisResult &result)
                                     QStringLiteral("0"),
                                     QStringLiteral("Everything is unique so far.")));
     } else {
-        m_summaryLabel->setText(QStringLiteral("%1 merge candidates | %2 allowed identical-body groups | %3 nodes | Double-click an object to open full XML.")
-                                    .arg(mergeCandidateCount).arg(allowedCount).arg(nodeCount));
+        m_summaryLabel->setText(QStringLiteral("%1 automatic merge candidates | %2 manual-review groups | %3 allowed identical-body groups | %4 nodes | Double-click an object to open full XML.")
+                                    .arg(automaticMergeCount).arg(manualMergeCount).arg(allowedCount).arg(nodeCount));
     }
 
-    m_tree->expandAll();
-    m_tree->resizeColumnToContents(0);
-    m_tree->resizeColumnToContents(1);
-    m_tree->resizeColumnToContents(2);
-    m_tree->resizeColumnToContents(3);
-    m_tree->resizeColumnToContents(4);
-    m_tree->resizeColumnToContents(5);
-    m_tree->resizeColumnToContents(6);
-    m_tree->resizeColumnToContents(7);
+    m_tree->collapseAll();
+    for (int row = 0; row < m_model->rowCount(); ++row) {
+        const QModelIndex groupIndex = m_model->index(row, 0);
+        if (m_model->rowCount(groupIndex) <= 48)
+            m_tree->expand(groupIndex);
+    }
+    if (nodeCount <= 500) {
+        for (int column = 0; column < m_model->columnCount(); ++column)
+            m_tree->resizeColumnToContents(column);
+    } else {
+        m_tree->setColumnWidth(0, 185);
+        m_tree->setColumnWidth(1, 180);
+        m_tree->setColumnWidth(2, 280);
+        m_tree->setColumnWidth(3, 150);
+        m_tree->setColumnWidth(4, 180);
+    }
     m_applyButton->setEnabled(false);
     const MergeRequest request = selectedRequest();
     m_previewButton->setEnabled(request.keepNodeIndex >= 0 && !request.removeNodeIndices.isEmpty());

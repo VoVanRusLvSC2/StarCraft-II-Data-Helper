@@ -5,17 +5,56 @@
 #include <QString>
 #include <QVector>
 
-enum class UnitFamilyRole {
-    Unit, Actor, Button, Model, DeathModel, DeathFireModel, DeathDisintegrateModel,
-    DeathBlastModel, PortraitModel, DeathVoice, Death, Attack, Help, Pissed, Yes,
-    What, Ready, Weapon, Ability, Effect, Behavior, Validator, Requirement, Upgrade,
-    Sound, Mover, Turret, Footprint, SiteOp, Beam, Texture, RequirementNode,
-    Other, ManualReview
+enum class UnitFamilyRole
+{
+    Unit,
+    Actor,
+    Button,
+    Model,
+    DeathModel,
+    DeathFireModel,
+    DeathDisintegrateModel,
+    DeathBlastModel,
+    PortraitModel,
+    DeathVoice,
+    Death,
+    Attack,
+    Help,
+    Pissed,
+    Yes,
+    What,
+    Ready,
+    Weapon,
+    Ability,
+    Effect,
+    Behavior,
+    Validator,
+    Requirement,
+    Upgrade,
+    Sound,
+    Mover,
+    Turret,
+    Footprint,
+    SiteOp,
+    Beam,
+    Texture,
+    RequirementNode,
+    Other,
+    ManualReview
 };
 
-enum class DataCollectionMode { Unit, UnitAbilWeapon };
+enum class DataCollectionMode
+{
+    Unit,
+    UnitAbilWeapon
+};
 
-enum class DataCollectionEntityType { Unit, Ability, Weapon };
+enum class DataCollectionEntityType
+{
+    Unit,
+    Ability,
+    Weapon
+};
 
 QString dataCollectionEntityTypeName(DataCollectionEntityType type);
 
@@ -46,5 +85,5 @@ class UnitFamilyDetector
 public:
     QVector<UnitFamily> detect(const AnalysisResult &analysis) const;
     QVector<UnitFamily> detectCollectionFamilies(const AnalysisResult &analysis,
-                                                  DataCollectionMode mode = DataCollectionMode::UnitAbilWeapon) const;
+                                                 DataCollectionMode mode = DataCollectionMode::UnitAbilWeapon) const;
 };

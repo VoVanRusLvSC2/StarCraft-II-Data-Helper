@@ -27,6 +27,7 @@ struct DoodadPlacement
     QString tintColor;
     QString teamColor;
     QString flags;
+    QStringList safetyReferenceFiles;
     bool hasPosition = false;
     bool dynamicCandidate = false;
     QString staticOnlyReason;
@@ -57,6 +58,11 @@ struct DecorationStreamingPlan
     QVector<int> staticOnlyDoodads;
     QVector<int> unassignedDoodads;
     QStringList warnings;
+};
+
+struct DecorationSafetyContext
+{
+    QHash<QString, QStringList> referenceFilesByDoodadKey;
 };
 
 struct GalaxyGenerationOptions
@@ -93,6 +99,10 @@ public:
     QVector<DoodadPlacement> parseObjects(const QByteArray &objectsBytes, QStringList *warnings = nullptr) const;
     DecorationStreamingPlan buildPlan(const QByteArray &objectsBytes,
                                       const QVector<DecorZone> &zones,
+                                      const DecorationSafetyContext &safetyContext,
+                                      QStringList *warnings = nullptr) const;
+    DecorationStreamingPlan buildPlan(const QByteArray &objectsBytes,
+                                      const QVector<DecorZone> &zones,
                                       QStringList *warnings = nullptr) const;
     QString generateGalaxy(const DecorationStreamingPlan &plan,
                            const GalaxyGenerationOptions &options = {}) const;
@@ -107,7 +117,19 @@ public:
                                                QStringList *warnings = nullptr) const;
     DecorationOptimizedArtifacts createOptimizedArtifacts(const QByteArray &objectsBytes,
                                                           const QVector<DecorZone> &zones,
+                                                          const DecorationSafetyContext &safetyContext,
                                                           const GalaxyGenerationOptions &options = {}) const;
+    DecorationOptimizedArtifacts createOptimizedArtifacts(const QByteArray &objectsBytes,
+                                                          const QVector<DecorZone> &zones,
+                                                          const GalaxyGenerationOptions &options = {}) const;
+    DecorationArchivePatch prepareArchivePatch(const QByteArray &objectsBytes,
+                                               const QByteArray &mapScriptBytes,
+                                               const QVector<DecorZone> &zones,
+                                               const DecorationSafetyContext &safetyContext,
+                                               const GalaxyGenerationOptions &options = {},
+                                               const QString &objectsEntry = QStringLiteral("Objects"),
+                                               const QString &mapScriptEntry = QStringLiteral("MapScript.galaxy"),
+                                               const QString &runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy")) const;
     DecorationArchivePatch prepareArchivePatch(const QByteArray &objectsBytes,
                                                const QByteArray &mapScriptBytes,
                                                const QVector<DecorZone> &zones,

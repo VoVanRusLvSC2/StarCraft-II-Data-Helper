@@ -70,11 +70,30 @@ int replaceRedirectTokens(QString *value,
 
 bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, const QString &value)
 {
-    if (sc2dh::isNonReferenceCatalogFieldName(fieldName) || sc2dh::looksLikeCatalogFilterList(value))
+    const auto isActorEventNode = [](pugi::xml_node candidate) {
+        if (!candidate || candidate.type() != pugi::node_element)
+            return false;
+        const QString name = QString::fromUtf8(candidate.name());
+        if (name.compare(QStringLiteral("On"), Qt::CaseInsensitive) != 0
+            && name.compare(QStringLiteral("Remove"), Qt::CaseInsensitive) != 0
+            && name.compare(QStringLiteral("Do"), Qt::CaseInsensitive) != 0)
+            return false;
+        const pugi::xml_node parent = candidate.parent();
+        return parent
+            && parent.type() == pugi::node_element
+            && QString::fromUtf8(parent.name()).startsWith(QStringLiteral("CActor"), Qt::CaseInsensitive);
+    };
+    const bool actorEventValue = isActorEventNode(node)
+        && (fieldName.compare(QStringLiteral("Terms"), Qt::CaseInsensitive) == 0
+            || fieldName.compare(QStringLiteral("Send"), Qt::CaseInsensitive) == 0
+            || fieldName.isEmpty());
+    if ((!actorEventValue && sc2dh::isNonReferenceCatalogFieldName(fieldName))
+        || (!actorEventValue && sc2dh::looksLikeCatalogFilterList(value)))
         return false;
 
     for (pugi::xml_node current = node; current && current.type() == pugi::node_element; current = current.parent()) {
-        if (sc2dh::isNonReferenceCatalogFieldName(QString::fromUtf8(current.name())))
+        if (!isActorEventNode(current)
+            && sc2dh::isNonReferenceCatalogFieldName(QString::fromUtf8(current.name())))
             return false;
     }
     return true;
@@ -284,18 +303,6 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
         }
         if (!sc2dh::isSafeAutomaticObjectId(remove.id)) {
             preview.warnings << QStringLiteral("%1 has a numeric or unsafe ID and cannot be removed by duplicate merge.").arg(remove.id);
-            continue;
-        }
-        bool relatedMergeGroup = false;
-        for (const DuplicateContentGroup &group : analysis.duplicateContentGroups) {
-            if (group.mergeCandidate && group.nodeIndices.contains(request.keepNodeIndex) && group.nodeIndices.contains(index)) {
-                relatedMergeGroup = true;
-                break;
-            }
-        }
-        if (!relatedMergeGroup && remove.id != keep.id && remove.elementName == keep.elementName && remove.contentHash == keep.contentHash) {
-            preview.warnings << QStringLiteral("%1 and %2 have unrelated IDs; identical body reuse is allowed and merge is not suggested.")
-                                    .arg(remove.id, keep.id);
             continue;
         }
         if (remove.id == keep.id || remove.elementName != keep.elementName || remove.contentHash != keep.contentHash) {
@@ -537,17 +544,6 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
     QSet<int> removedNodeIndexes;
     QStringList removedIds;
 
-    const auto isRelatedMergeCandidate = [&](int keepIndex, int removeIndex) {
-        for (const DuplicateContentGroup &group : analysis.duplicateContentGroups) {
-            if (group.mergeCandidate
-                && group.nodeIndices.contains(keepIndex)
-                && group.nodeIndices.contains(removeIndex)) {
-                return true;
-            }
-        }
-        return false;
-    };
-
     for (const MergeRequest &request : requests) {
         if (request.keepNodeIndex < 0 || request.keepNodeIndex >= analysis.nodes.size()) {
             ++result.skippedMerges;
@@ -592,8 +588,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
             }
             if (remove.id == keep.id
                 || remove.elementName != keep.elementName
-                || remove.contentHash != keep.contentHash
-                || !isRelatedMergeCandidate(request.keepNodeIndex, removeIndex)) {
+                || remove.contentHash != keep.contentHash) {
                 ++result.skippedMerges;
                 result.warnings << QStringLiteral("Skipped invalid duplicate merge %1 -> %2.").arg(remove.id, keep.id);
                 continue;

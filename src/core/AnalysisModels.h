@@ -36,6 +36,10 @@ struct DuplicateContentGroup
     QVector<int> nodeIndices;
     QString commonIdMask;
     bool mergeCandidate = true;
+    // Exact matching XML does not prove that distinct catalog IDs are
+    // interchangeable.  This is deliberately separate from manual merge
+    // eligibility: only explicitly proven cases may be preselected.
+    bool autoRecommended = false;
 };
 
 enum class CandidateState { Safe, Risky, Blocked };

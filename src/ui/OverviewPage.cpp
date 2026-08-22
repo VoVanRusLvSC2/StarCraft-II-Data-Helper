@@ -43,15 +43,20 @@ public:
 
 QString buildSummaryText(const AnalysisResult &result)
 {
-    int mergeCandidates = 0;
+    int automaticMergeCandidates = 0;
+    int manualMergeReviews = 0;
     int allowedBodies = 0;
-    for (const DuplicateContentGroup &group : result.duplicateContentGroups)
-        group.mergeCandidate ? ++mergeCandidates : ++allowedBodies;
-    return QStringLiteral("%1 files scanned | %2 XML files | %3 objects | %4 merge candidates | %5 allowed body matches | %6 cleanup candidates")
+    for (const DuplicateContentGroup &group : result.duplicateContentGroups) {
+        if (group.autoRecommended) ++automaticMergeCandidates;
+        else if (group.mergeCandidate) ++manualMergeReviews;
+        else ++allowedBodies;
+    }
+    return QStringLiteral("%1 files scanned | %2 XML files | %3 objects | %4 automatic merges | %5 manual duplicate reviews | %6 allowed body matches | %7 cleanup candidates")
         .arg(result.totalFilesScanned())
         .arg(result.totalXmlFiles())
         .arg(result.totalDataNodes())
-        .arg(mergeCandidates)
+        .arg(automaticMergeCandidates)
+        .arg(manualMergeReviews)
         .arg(allowedBodies)
         .arg(result.possibleUnusedNodeIndices.size());
 }

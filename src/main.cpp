@@ -1,5 +1,6 @@
 #include "app/MainWindow.h"
 #include "app/AudioManager.h"
+#include "app/AppSettings.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -7,25 +8,37 @@
 #include <QIcon>
 #include <QPixmap>
 #include <QSettings>
+#include <QTranslator>
 
 int main(int argc, char *argv[])
 {
-    qputenv("QT_OPENGL", "desktop");
-    QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
-    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+    QCoreApplication::setApplicationName(QStringLiteral("SC2 Data Helper"));
+    QCoreApplication::setOrganizationName(QStringLiteral("SC2DataHelper"));
+    QCoreApplication::setOrganizationDomain(QStringLiteral("local"));
+    sc2dh::app::AppSettings::configureRendererBeforeApplication();
 
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("SC2 Data Helper"));
     QApplication::setApplicationVersion(QStringLiteral("2.1.0"));
-    QApplication::setOrganizationName(QStringLiteral("SC2DataHelper"));
-    QApplication::setOrganizationDomain(QStringLiteral("local"));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
+
+    QTranslator appTranslator;
+    const QString languageCode = sc2dh::app::AppSettings::resolvedLanguage();
+    for (const sc2dh::app::LanguageOption &language : sc2dh::app::AppSettings::supportedLanguages()) {
+        if (language.code == languageCode && !language.localeName.isEmpty()) {
+            if (appTranslator.load(QStringLiteral(":/i18n/SC2DataHelper_%1.qm").arg(language.localeName)))
+                app.installTranslator(&appTranslator);
+            break;
+        }
+    }
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [] {
         AudioManager::instance()->shutdown();
     });
 
-    const QPixmap cursorPixmap(QStringLiteral(":/cursors/cursor.png"));
-    if (!cursorPixmap.isNull()) QApplication::setOverrideCursor(QCursor(cursorPixmap, 2, 2));
+    if (sc2dh::app::AppSettings::customCursor()) {
+        const QPixmap cursorPixmap(QStringLiteral(":/cursors/cursor.png"));
+        if (!cursorPixmap.isNull()) QApplication::setOverrideCursor(QCursor(cursorPixmap, 2, 2));
+    }
 
     MainWindow window;
     const QStringList args = app.arguments();

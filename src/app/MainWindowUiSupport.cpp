@@ -1,4 +1,5 @@
 #include "app/MainWindowUiSupport.h"
+#include "app/AppSettings.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -105,7 +106,7 @@ namespace
                 m_glowPhase += 0.035;
                 if (m_glowPhase > 1000.0)
                     m_glowPhase = 0.0;
-                if (QSettings().value(QStringLiteral("ui/backgroundGlows"), true).toBool())
+                if (sc2dh::app::AppSettings::backgroundGlows())
                     update(); });
             timer->start(70);
         }
@@ -122,17 +123,19 @@ namespace
             baseGradient.setColorAt(1.0, QColor(0, 5, 10, 130));
             painter.fillRect(event->rect(), baseGradient);
 
-            if (QSettings().value(QStringLiteral("ui/backgroundGlows"), true).toBool())
+            if (sc2dh::app::AppSettings::backgroundGlows())
                 drawBackgroundGlows(painter);
 
-            painter.setOpacity(0.13);
-            drawCoverPixmap(painter, rect(), m_lights);
-            painter.setOpacity(0.20);
-            drawCoverPixmap(painter, rect(), m_frame);
-            painter.setOpacity(0.08);
-            drawCoverPixmap(painter, rect(), m_highlight);
-            painter.setOpacity(0.035);
-            drawCoverPixmap(painter, rect(), m_scanlines);
+            if (sc2dh::app::AppSettings::decorativeTextures()) {
+                painter.setOpacity(0.13);
+                drawCoverPixmap(painter, rect(), m_lights);
+                painter.setOpacity(0.20);
+                drawCoverPixmap(painter, rect(), m_frame);
+                painter.setOpacity(0.08);
+                drawCoverPixmap(painter, rect(), m_highlight);
+                painter.setOpacity(0.035);
+                drawCoverPixmap(painter, rect(), m_scanlines);
+            }
         }
 
     private:
@@ -337,6 +340,10 @@ namespace
             State &state = m_states[button];
             if (!state.effect)
                 return;
+            if (!sc2dh::app::AppSettings::buttonAnimations()) {
+                state.effect->setBlurRadius(0.0);
+                return;
+            }
             state.effect->setColor(target > 0.0
                                        ? state.glowColor
                                        : QColor(state.glowColor.red(), state.glowColor.green(), state.glowColor.blue(), 0));
@@ -353,6 +360,10 @@ namespace
         {
             if (!button || target.isEmpty())
                 return;
+            if (!sc2dh::app::AppSettings::buttonAnimations()) {
+                button->setIconSize(target);
+                return;
+            }
             auto *animation = new QPropertyAnimation(button, "iconSize", button);
             animation->setDuration(130);
             animation->setStartValue(button->iconSize());

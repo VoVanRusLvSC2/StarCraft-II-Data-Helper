@@ -68,7 +68,7 @@ int main(int argc, char *argv[])
     while (true) {
         const DuplicateContentGroup *candidate = nullptr;
         for (const DuplicateContentGroup &group : analysis.duplicateContentGroups) {
-            if (group.mergeCandidate && group.nodeIndices.size() > 1) {
+            if (group.autoRecommended && group.mergeCandidate && group.nodeIndices.size() > 1) {
                 candidate = &group;
                 break;
             }
@@ -164,7 +164,7 @@ int main(int argc, char *argv[])
     report.insert(QStringLiteral("unusedIds"), unusedIds);
     report.insert(QStringLiteral("finalDuplicateMergeCandidates"),
                   int(std::count_if(verified.duplicateContentGroups.cbegin(), verified.duplicateContentGroups.cend(),
-                                    [](const DuplicateContentGroup &g) { return g.mergeCandidate; })));
+                                    [](const DuplicateContentGroup &g) { return g.autoRecommended; })));
     if (!writeReport(args.at(4), report, &error)) {
         err << error << '\n';
         return 12;

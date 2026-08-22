@@ -44,6 +44,20 @@ bool containsAny(const QString &value, const QStringList &needles)
     return false;
 }
 
+bool isGalaxyIdentifier(const QString &value)
+{
+    if (value.isEmpty())
+        return false;
+    const QChar first = value.front();
+    if (!(first.isLetter() || first == QLatin1Char('_')))
+        return false;
+    for (const QChar ch : value) {
+        if (!(ch.isLetterOrNumber() || ch == QLatin1Char('_')))
+            return false;
+    }
+    return true;
+}
+
 QString galaxyString(QString value)
 {
     value.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
@@ -68,6 +82,30 @@ bool inZone(const sc2dh::decor::DoodadPlacement &doodad, const sc2dh::decor::Dec
     const double yMin = std::min(zone.yMin, zone.yMax);
     const double yMax = std::max(zone.yMin, zone.yMax);
     return doodad.x >= xMin && doodad.x <= xMax && doodad.y >= yMin && doodad.y <= yMax;
+}
+
+QString safetyKey(QString value)
+{
+    return value.trimmed().toCaseFolded();
+}
+
+QStringList externalReferenceFiles(const sc2dh::decor::DoodadPlacement &doodad,
+                                   const sc2dh::decor::DecorationSafetyContext &context)
+{
+    QStringList files;
+    const auto appendForKey = [&](const QString &value) {
+        const QString key = safetyKey(value);
+        if (!key.isEmpty())
+            files += context.referenceFilesByDoodadKey.value(key);
+    };
+    appendForKey(doodad.id);
+    appendForKey(doodad.name);
+    files.removeAll(QString());
+    files.removeDuplicates();
+    std::sort(files.begin(), files.end(), [](const QString &left, const QString &right) {
+        return left.compare(right, Qt::CaseInsensitive) < 0;
+    });
+    return files;
 }
 
 } // namespace
@@ -181,6 +219,7 @@ QVector<DoodadPlacement> DecorationStreamingPlanner::parseObjects(const QByteArr
 
 DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &objectsBytes,
                                                               const QVector<DecorZone> &zones,
+                                                              const DecorationSafetyContext &safetyContext,
                                                               QStringList *warnings) const
 {
     DecorationStreamingPlan plan;
@@ -189,10 +228,28 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
         *warnings = plan.warnings;
 
     for (const DecorZone &zone : zones)
+    {
+        if (zone.id <= 0)
+            plan.warnings << QStringLiteral("Decoration zone id must be positive: %1.").arg(zone.id);
         plan.zones << ZoneAssignment{zone.id, {}};
+    }
+    QSet<int> zoneIds;
+    for (const DecorZone &zone : zones) {
+        if (zoneIds.contains(zone.id))
+            plan.warnings << QStringLiteral("Decoration zone id is duplicated: %1.").arg(zone.id);
+        zoneIds.insert(zone.id);
+    }
 
     for (int i = 0; i < plan.doodads.size(); ++i) {
-        const DoodadPlacement &doodad = plan.doodads.at(i);
+        DoodadPlacement &doodad = plan.doodads[i];
+        if (doodad.dynamicCandidate) {
+            doodad.safetyReferenceFiles = externalReferenceFiles(doodad, safetyContext);
+            if (!doodad.safetyReferenceFiles.isEmpty()) {
+                doodad.dynamicCandidate = false;
+                doodad.staticOnlyReason = QStringLiteral("Static-only: pathing/gameplay dependency (referenced by trigger/script text: %1).")
+                                              .arg(doodad.safetyReferenceFiles.join(QStringLiteral(", ")));
+            }
+        }
         if (!doodad.dynamicCandidate) {
             plan.staticOnlyDoodads << i;
             continue;
@@ -215,6 +272,13 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
     if (warnings)
         *warnings = plan.warnings;
     return plan;
+}
+
+DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &objectsBytes,
+                                                              const QVector<DecorZone> &zones,
+                                                              QStringList *warnings) const
+{
+    return buildPlan(objectsBytes, zones, DecorationSafetyContext{}, warnings);
 }
 
 QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan &plan,
@@ -504,10 +568,16 @@ QByteArray DecorationStreamingPlanner::removeDynamicDoodadsFromObjects(const QBy
 
 DecorationOptimizedArtifacts DecorationStreamingPlanner::createOptimizedArtifacts(const QByteArray &objectsBytes,
                                                                                   const QVector<DecorZone> &zones,
+                                                                                  const DecorationSafetyContext &safetyContext,
                                                                                   const GalaxyGenerationOptions &options) const
 {
     DecorationOptimizedArtifacts artifacts;
-    artifacts.plan = buildPlan(objectsBytes, zones, &artifacts.warnings);
+    artifacts.plan = buildPlan(objectsBytes, zones, safetyContext, &artifacts.warnings);
+    const QString prefix = options.functionPrefix.isEmpty() ? QStringLiteral("NAME_OUT_FUNK") : options.functionPrefix;
+    if (!isGalaxyIdentifier(prefix))
+        artifacts.warnings << QStringLiteral("Decoration function prefix is not a valid Galaxy identifier: %1.").arg(prefix);
+    if (options.batchLimit <= 0)
+        artifacts.warnings << QStringLiteral("Decoration batch limit must be positive.");
 
     QStringList removalWarnings;
     artifacts.optimizedObjectsBytes = removeDynamicDoodadsFromObjects(objectsBytes,
@@ -523,9 +593,17 @@ DecorationOptimizedArtifacts DecorationStreamingPlanner::createOptimizedArtifact
     return artifacts;
 }
 
+DecorationOptimizedArtifacts DecorationStreamingPlanner::createOptimizedArtifacts(const QByteArray &objectsBytes,
+                                                                                  const QVector<DecorZone> &zones,
+                                                                                  const GalaxyGenerationOptions &options) const
+{
+    return createOptimizedArtifacts(objectsBytes, zones, DecorationSafetyContext{}, options);
+}
+
 DecorationArchivePatch DecorationStreamingPlanner::prepareArchivePatch(const QByteArray &objectsBytes,
                                                                        const QByteArray &mapScriptBytes,
                                                                        const QVector<DecorZone> &zones,
+                                                                       const DecorationSafetyContext &safetyContext,
                                                                        const GalaxyGenerationOptions &options,
                                                                        const QString &objectsEntry,
                                                                        const QString &mapScriptEntry,
@@ -536,7 +614,7 @@ DecorationArchivePatch DecorationStreamingPlanner::prepareArchivePatch(const QBy
     patch.mapScriptEntry = mapScriptEntry.isEmpty() ? QStringLiteral("MapScript.galaxy") : mapScriptEntry;
     patch.runtimeEntry = runtimeEntry.isEmpty() ? QStringLiteral("scripts/sc2dh_decor_opt.galaxy") : runtimeEntry;
 
-    patch.artifacts = createOptimizedArtifacts(objectsBytes, zones, options);
+    patch.artifacts = createOptimizedArtifacts(objectsBytes, zones, safetyContext, options);
     patch.warnings = patch.artifacts.warnings;
     if (!patch.artifacts.valid) {
         patch.error = QStringLiteral("Decoration optimized artifacts are not valid.");
@@ -556,6 +634,18 @@ DecorationArchivePatch DecorationStreamingPlanner::prepareArchivePatch(const QBy
     patch.replacementEntries.insert(patch.mapScriptEntry, rewrittenMapScript);
     patch.valid = true;
     return patch;
+}
+
+DecorationArchivePatch DecorationStreamingPlanner::prepareArchivePatch(const QByteArray &objectsBytes,
+                                                                       const QByteArray &mapScriptBytes,
+                                                                       const QVector<DecorZone> &zones,
+                                                                       const GalaxyGenerationOptions &options,
+                                                                       const QString &objectsEntry,
+                                                                       const QString &mapScriptEntry,
+                                                                       const QString &runtimeEntry) const
+{
+    return prepareArchivePatch(objectsBytes, mapScriptBytes, zones, DecorationSafetyContext{},
+                               options, objectsEntry, mapScriptEntry, runtimeEntry);
 }
 
 } // namespace sc2dh::decor

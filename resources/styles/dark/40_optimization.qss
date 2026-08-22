@@ -97,7 +97,7 @@ QLabel#optimizationAssetPreview {
    this scoped rule the splitter handle and the global transparent scrollbar
    skin are almost indistinguishable at some Windows DPI scales. */
 QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar:vertical {
-    background-color: rgba(0, 18, 20, 245);
+    background: transparent;
     border: 4px solid transparent;
     border-image: url(:/textures/ui_nova_global_scrollbar_bg.png) 22 5 22 5 repeat repeat;
     width: 28px;
@@ -106,7 +106,7 @@ QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar
 }
 
 QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar::handle:vertical {
-    background-color: rgba(0, 215, 153, 80);
+    background: transparent;
     border: 5px solid transparent;
     border-image: url(:/textures/ui_nova_global_scrollbarbutton_normal.png) 24 10 24 10 repeat repeat;
     min-height: 64px;
@@ -115,7 +115,7 @@ QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar
 
 QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar::handle:vertical:hover,
 QWidget#optimizationWizardPage QTableWidget[optimizationTable="true"] QScrollBar::handle:vertical:pressed {
-    background-color: rgba(0, 255, 184, 120);
+    background: transparent;
     border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 14 7 14 7 repeat repeat;
 }
 

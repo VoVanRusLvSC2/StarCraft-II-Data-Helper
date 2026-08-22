@@ -5,6 +5,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
+#include <QSet>
+
+#include <algorithm>
 
 namespace
 {
@@ -20,6 +24,201 @@ QString defaultOutputPath(const QString &sourceArchivePath)
 bool samePath(const QString &left, const QString &right)
 {
     return QFileInfo(left).absoluteFilePath().compare(QFileInfo(right).absoluteFilePath(), Qt::CaseInsensitive) == 0;
+}
+
+QString normalizedEntry(QString entry)
+{
+    return QDir::cleanPath(entry).replace('\\', '/').toCaseFolded();
+}
+
+bool isTokenKey(const QString &value)
+{
+    static const QRegularExpression expression(QStringLiteral("^[A-Za-z0-9_@]+$"));
+    return expression.match(value).hasMatch();
+}
+
+const QRegularExpression &tokenExpression()
+{
+    static const QRegularExpression expression(QStringLiteral("(?<![A-Za-z0-9_@])([A-Za-z0-9_@]+)(?![A-Za-z0-9_@])"));
+    return expression;
+}
+
+bool looksLikeUtf8Text(const QByteArray &bytes)
+{
+    if (bytes.isEmpty())
+        return true;
+    const qsizetype sampleSize = std::min<qsizetype>(bytes.size(), 8192);
+    int printable = 0;
+    int zeros = 0;
+    for (qsizetype i = 0; i < sampleSize; ++i) {
+        const uchar value = uchar(bytes.at(i));
+        if (value == 0)
+            ++zeros;
+        if (value == '\r' || value == '\n' || value == '\t' || (value >= 32 && value < 127) || value >= 128)
+            ++printable;
+    }
+    return zeros == 0 && printable >= (sampleSize * 85) / 100;
+}
+
+bool looksLikeUtf16LeText(const QByteArray &bytes)
+{
+    if (bytes.size() < 4 || bytes.size() % 2 != 0)
+        return false;
+    const qsizetype pairs = std::min<qsizetype>(bytes.size() / 2, 4096);
+    int textPairs = 0;
+    int zeroHigh = 0;
+    for (qsizetype i = 0; i < pairs; ++i) {
+        const uchar low = uchar(bytes.at(i * 2));
+        const uchar high = uchar(bytes.at(i * 2 + 1));
+        if (high == 0)
+            ++zeroHigh;
+        if (high == 0 && (low == '\r' || low == '\n' || low == '\t' || (low >= 32 && low < 127)))
+            ++textPairs;
+    }
+    return zeroHigh >= (pairs * 70) / 100 && textPairs >= (pairs * 60) / 100;
+}
+
+bool decodeText(const QByteArray &bytes, QString *text)
+{
+    if (looksLikeUtf8Text(bytes)) {
+        if (text)
+            *text = QString::fromUtf8(bytes);
+        return true;
+    }
+    if (looksLikeUtf16LeText(bytes)) {
+        const auto *data = reinterpret_cast<const char16_t *>(bytes.constData());
+        if (text)
+            *text = QString::fromUtf16(data, bytes.size() / 2);
+        return true;
+    }
+    return false;
+}
+
+bool isDecorationSafetyTextEntry(const QString &entryName,
+                                 const QString &objectsEntry,
+                                 const QString &runtimeEntry)
+{
+    const QString normalized = normalizedEntry(entryName);
+    if (normalized == normalizedEntry(objectsEntry) || normalized == normalizedEntry(runtimeEntry))
+        return false;
+
+    const QString fileName = QFileInfo(normalized).fileName();
+    static const QSet<QString> extensions = {
+        QStringLiteral("galaxy"),
+        QStringLiteral("xml"),
+        QStringLiteral("txt"),
+        QStringLiteral("sc2triggers"),
+        QStringLiteral("sc2lib"),
+        QStringLiteral("sc2layout"),
+        QStringLiteral("layout")
+    };
+    if (extensions.contains(QFileInfo(fileName).suffix().toLower()))
+        return true;
+    return normalized.contains(QStringLiteral("localizeddata/"))
+        || normalized.contains(QStringLiteral("gamestrings"))
+        || normalized.contains(QStringLiteral("objectstrings"))
+        || normalized.contains(QStringLiteral("triggerlibs/"))
+        || normalized.contains(QStringLiteral("/scripts/"))
+        || fileName == QStringLiteral("mapinfo")
+        || fileName == QStringLiteral("documentinfo")
+        || fileName == QStringLiteral("preloadassetdb.txt");
+}
+
+void addReference(sc2dh::decor::DecorationSafetyContext *context,
+                  const QString &key,
+                  const QString &entryName)
+{
+    if (!context || key.isEmpty())
+        return;
+    QStringList &files = context->referenceFilesByDoodadKey[key.toCaseFolded()];
+    files << entryName;
+    files.removeDuplicates();
+}
+
+void addReferencesForAllKeys(sc2dh::decor::DecorationSafetyContext *context,
+                             const QSet<QString> &tokenKeys,
+                             const QSet<QString> &phraseKeys,
+                             const QString &entryName)
+{
+    for (const QString &key : tokenKeys)
+        addReference(context, key, entryName);
+    for (const QString &key : phraseKeys)
+        addReference(context, key, entryName);
+}
+
+void scanTextForDoodadKeys(sc2dh::decor::DecorationSafetyContext *context,
+                           const QString &entryName,
+                           const QString &text,
+                           const QSet<QString> &tokenKeys,
+                           const QSet<QString> &phraseKeys)
+{
+    auto matches = tokenExpression().globalMatch(text);
+    while (matches.hasNext()) {
+        const QString token = matches.next().captured(1).toCaseFolded();
+        if (tokenKeys.contains(token))
+            addReference(context, token, entryName);
+    }
+
+    const QString foldedText = text.toCaseFolded();
+    for (const QString &key : phraseKeys) {
+        if (foldedText.contains(key))
+            addReference(context, key, entryName);
+    }
+}
+
+sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive &archive,
+                                                                const QByteArray &objectsBytes,
+                                                                const sc2dh::decor::DecorOptimizedMapRequest &request,
+                                                                QStringList *warnings,
+                                                                QString *error)
+{
+    sc2dh::decor::DecorationSafetyContext context;
+    sc2dh::decor::DecorationStreamingPlanner planner;
+    const QVector<sc2dh::decor::DoodadPlacement> doodads = planner.parseObjects(objectsBytes);
+
+    QSet<QString> tokenKeys;
+    QSet<QString> phraseKeys;
+    for (const sc2dh::decor::DoodadPlacement &doodad : doodads) {
+        for (const QString &value : {doodad.id, doodad.name}) {
+            const QString key = value.trimmed().toCaseFolded();
+            if (key.isEmpty())
+                continue;
+            if (isTokenKey(value.trimmed()))
+                tokenKeys.insert(key);
+            else if (key.size() >= 3)
+                phraseKeys.insert(key);
+        }
+    }
+    if (tokenKeys.isEmpty() && phraseKeys.isEmpty())
+        return context;
+
+    for (const QString &entry : archive.allEntries()) {
+        if (!isDecorationSafetyTextEntry(entry, request.objectsEntry, request.runtimeEntry))
+            continue;
+
+        QByteArray bytes;
+        QString readError;
+        if (!archive.readEntry(entry, &bytes, &readError)) {
+            addReferencesForAllKeys(&context, tokenKeys, phraseKeys, entry);
+            if (warnings)
+                *warnings << QStringLiteral("Decoration safety: treated all doodads as referenced by unreadable text entry %1: %2")
+                                 .arg(entry, readError);
+            continue;
+        }
+
+        QString text;
+        if (!decodeText(bytes, &text)) {
+            addReferencesForAllKeys(&context, tokenKeys, phraseKeys, entry);
+            if (warnings)
+                *warnings << QStringLiteral("Decoration safety: treated all doodads as referenced by undecodable text entry %1.")
+                                 .arg(entry);
+            continue;
+        }
+        scanTextForDoodadKeys(&context, entry, text, tokenKeys, phraseKeys);
+    }
+
+    Q_UNUSED(error);
+    return context;
 }
 
 } // namespace
@@ -76,9 +275,14 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
     }
 
     DecorationStreamingPlanner planner;
+    QStringList safetyWarnings;
+    const DecorationSafetyContext safetyContext =
+        buildArchiveSafetyContext(archive, objectsBytes, request, &safetyWarnings, &error);
+    result.warnings += safetyWarnings;
     result.patch = planner.prepareArchivePatch(objectsBytes,
                                                mapScriptBytes,
                                                request.zones,
+                                               safetyContext,
                                                request.galaxyOptions,
                                                request.objectsEntry,
                                                request.mapScriptEntry,

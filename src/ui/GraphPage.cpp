@@ -1,4 +1,5 @@
 #include "ui/GraphPage.h"
+#include "app/AppSettings.h"
 
 #include <QFrame>
 #include <QBrush>
@@ -130,19 +131,19 @@ protected:
         painter->resetTransform();
         painter->fillRect(viewport()->rect(), QColor(3, 8, 12));
 
-        if (!m_grid.isNull()) {
+        if (sc2dh::app::AppSettings::decorativeTextures() && !m_grid.isNull()) {
             painter->setOpacity(0.18);
             painter->drawTiledPixmap(viewport()->rect(), m_grid);
         }
-        if (!m_points.isNull()) {
+        if (sc2dh::app::AppSettings::decorativeTextures() && !m_points.isNull()) {
             painter->setOpacity(0.08);
             painter->drawTiledPixmap(viewport()->rect(), m_points);
         }
-        if (!m_lights.isNull()) {
+        if (sc2dh::app::AppSettings::decorativeTextures() && !m_lights.isNull()) {
             painter->setOpacity(0.17);
             painter->drawPixmap(viewport()->rect(), m_lights, m_lights.rect());
         }
-        if (!m_scanlines.isNull()) {
+        if (sc2dh::app::AppSettings::decorativeTextures() && !m_scanlines.isNull()) {
             painter->setOpacity(0.11);
             painter->drawPixmap(viewport()->rect(), m_scanlines, m_scanlines.rect());
         }
