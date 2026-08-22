@@ -221,6 +221,7 @@ private slots:
     void mergePreviewAndApplyRedirectBeforeDelete();
     void mergeAllowsManualUnrelatedExactDuplicateAndActorEvents();
     void mergeRewritesNonXmlReferenceFiles();
+    void mergeBlocksBinaryNonRewritableReferences();
     void mergeDoesNotRewriteSurvivingCatalogIdentityIds();
     void mergeAllowsResidualOldIdWarning();
     void mergeRollbackOnFailure();
@@ -2461,6 +2462,53 @@ void CoreTests::mergeRewritesNonXmlReferenceFiles()
     QVERIFY(objectsOutput.contains(QStringLiteral("Type = BossDamage01")));
     QVERIFY(objectsOutput.contains(QStringLiteral("Name = BossDamage02Extra")));
     QCOMPARE(MergeService::countIdTokens(objectsOutput, QStringLiteral("BossDamage02")), 0);
+}
+
+void CoreTests::mergeBlocksBinaryNonRewritableReferences()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("GameData")));
+    QVERIFY(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+
+    const QString file = QDir(dir.path()).absoluteFilePath(QStringLiteral("GameData/Effects.xml"));
+    const QString binaryFile = QDir(dir.path()).absoluteFilePath(QStringLiteral("Assets/Model.m3"));
+    const QByteArray originalXml = QByteArrayLiteral(
+        "<Catalog><CEffect id=\"BossDamage01\"><Amount value=\"5\"/></CEffect>"
+        "<CEffect id=\"BossDamage02\"><Amount value=\"5\"/></CEffect></Catalog>");
+    QVERIFY(writeTextFile(file, originalXml));
+    QByteArray binaryBytes;
+    binaryBytes.append('\0');
+    binaryBytes.append("BossDamage02");
+    binaryBytes.append('\0');
+    QVERIFY(writeTextFile(binaryFile, binaryBytes));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int keep = -1;
+    int remove = -1;
+    for (int i = 0; i < analysis.nodes.size(); ++i) {
+        if (analysis.nodes[i].id == QStringLiteral("BossDamage01"))
+            keep = i;
+        if (analysis.nodes[i].id == QStringLiteral("BossDamage02"))
+            remove = i;
+    }
+    QVERIFY(keep >= 0 && remove >= 0);
+
+    const MergePreview preview = MergeService().preview(analysis, MergeRequest{keep, {remove}});
+    QVERIFY(!preview.valid);
+    QVERIFY(preview.warnings.join(QStringLiteral("\n")).contains(QStringLiteral("not safe text")));
+    QVERIFY(preview.warnings.join(QStringLiteral("\n")).contains(QStringLiteral("Assets/Model.m3")));
+
+    const MergeApplyResult applied = MergeService().apply(analysis, MergeRequest{keep, {remove}}, dir.path(), {});
+    QVERIFY(!applied.success);
+
+    QFile unchanged(file);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), originalXml);
 }
 
 void CoreTests::mergeDoesNotRewriteSurvivingCatalogIdentityIds()
