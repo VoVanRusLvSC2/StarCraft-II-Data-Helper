@@ -412,6 +412,15 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         result.error = QStringLiteral("Decoration optimized copy must not overwrite the source archive.");
         return result;
     }
+    QSet<int> positiveZoneIds;
+    for (const DecorZone &zone : request.zones) {
+        if (zone.id > 0)
+            positiveZoneIds.insert(zone.id);
+    }
+    if (positiveZoneIds.size() < 2) {
+        result.error = QStringLiteral("Create at least two positive decoration zones before creating an optimized map copy.");
+        return result;
+    }
     if (QFileInfo::exists(result.outputArchivePath)) {
         if (!request.overwriteExisting) {
             result.error = QStringLiteral("Output archive already exists.");

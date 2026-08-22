@@ -3865,6 +3865,18 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
                                   &error),
              qPrintable(error));
 
+    sc2dh::decor::DecorOptimizedMapRequest oneZoneRequest;
+    oneZoneRequest.sourceArchivePath = sourcePath;
+    oneZoneRequest.outputArchivePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("OneZone_DecorOptimized.SC2Map"));
+    oneZoneRequest.zones = {
+        {1, QStringLiteral("OnlyZone"), 0.0, 0.0, 50.0, 50.0}
+    };
+    const sc2dh::decor::DecorOptimizedMapResult oneZoneResult =
+        sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(oneZoneRequest);
+    QVERIFY(!oneZoneResult.success);
+    QVERIFY(oneZoneResult.error.contains(QStringLiteral("at least two")));
+    QVERIFY(!QFileInfo::exists(oneZoneRequest.outputArchivePath));
+
     sc2dh::decor::DecorOptimizedMapRequest request;
     request.sourceArchivePath = sourcePath;
     request.outputArchivePath = outputPath;
