@@ -4,6 +4,7 @@
 #include "core/DecorationStreamingPlanner.h"
 #include "core/MapPerformanceAnalyzer.h"
 
+#include <QImage>
 #include <QWidget>
 
 class QLabel;
@@ -35,6 +36,7 @@ private:
     void updateDecorPreview();
     void createDecorOptimizedMapCopy();
     bool readObjectsFile(QByteArray *objectsBytes, QString *sourceLabel) const;
+    bool readMinimapImage(QImage *image, QString *sourceLabel) const;
     QString sourceArchivePath() const;
     QString defaultDecorOutputPath() const;
     QVector<sc2dh::decor::DecorZone> zonesFromModel() const;
@@ -47,6 +49,8 @@ private:
     AnalysisResult m_result;
     QByteArray m_objectsBytes;
     QString m_objectsSourceLabel;
+    QImage m_minimapImage;
+    QString m_minimapSourceLabel;
     bool m_hasObjects = false;
     sc2dh::perf::MapPerformanceReport m_report;
     QVector<sc2dh::decor::DecorZone> m_decorZones;

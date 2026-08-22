@@ -155,6 +155,13 @@ public:
         update();
     }
 
+    void setBackgroundImage(const QImage &image, const QString &sourceLabel)
+    {
+        m_backgroundImage = image;
+        m_backgroundSourceLabel = sourceLabel;
+        update();
+    }
+
     void setSelectedCellIndex(int cellIndex)
     {
         if (m_selectedCell == cellIndex)
@@ -186,6 +193,15 @@ protected:
         }
 
         const QRectF area = gridArea();
+        if (!m_backgroundImage.isNull()) {
+            painter.save();
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            painter.drawImage(area, m_backgroundImage);
+            painter.fillRect(area, QColor(5, 10, 18, 95));
+            painter.restore();
+        } else {
+            painter.fillRect(area, QColor(QStringLiteral("#101827")));
+        }
         painter.setPen(QPen(QColor(QStringLiteral("#2b3f54")), 1));
         painter.drawRect(area);
 
@@ -298,6 +314,8 @@ private:
 
     sc2dh::perf::MapPerformanceReport m_report;
     QVector<sc2dh::decor::DecorZone> m_zones;
+    QImage m_backgroundImage;
+    QString m_backgroundSourceLabel;
     int m_selectedCell = -1;
 };
 
@@ -573,6 +591,14 @@ void MapPerformancePage::setAnalysisResult(const AnalysisResult &result)
 
 void MapPerformancePage::rebuild()
 {
+    if (readMinimapImage(&m_minimapImage, &m_minimapSourceLabel)) {
+        static_cast<MapHeatmapWidget *>(m_heatmap)->setBackgroundImage(m_minimapImage, m_minimapSourceLabel);
+    } else {
+        m_minimapImage = {};
+        m_minimapSourceLabel.clear();
+        static_cast<MapHeatmapWidget *>(m_heatmap)->setBackgroundImage({}, {});
+    }
+
     QByteArray objectsBytes;
     QString sourceLabel;
     if (!readObjectsFile(&objectsBytes, &sourceLabel)) {
@@ -586,7 +612,9 @@ void MapPerformancePage::rebuild()
         populateZoneTable({});
         populateDoodadTable({});
         m_summaryLabel->setText(QStringLiteral("Objects placement file was not found or is larger than %1. Open a SC2Map/extracted map with an Objects entry.").arg(formatBytes(MaxObjectsBytes)));
-        m_warningLabel->setText(QStringLiteral("Estimated Static Risk is unavailable until the map placement data can be read."));
+        m_warningLabel->setText(m_minimapImage.isNull()
+                                    ? QStringLiteral("Estimated Static Risk is unavailable until the map placement data can be read.")
+                                    : QStringLiteral("Minimap.tga background loaded from %1, but Objects placement data is unavailable.").arg(m_minimapSourceLabel));
         m_decorSummaryLabel->setText(QStringLiteral("Decoration Streaming requires a readable Objects entry."));
         m_galaxyPreview->clear();
         m_createCopyButton->setEnabled(false);
@@ -608,13 +636,18 @@ void MapPerformancePage::rebuild()
     const int riskyCells = std::count_if(m_report.cells.cbegin(), m_report.cells.cend(), [](const sc2dh::perf::MapPerformanceCell &cell) {
         return cell.combinedRiskScore >= 40.0;
     });
-    m_summaryLabel->setText(QStringLiteral("%1 placement(s), %2x%3 grid, %4 cell(s) over medium risk. Source: %5")
+    m_summaryLabel->setText(QStringLiteral("%1 placement(s), %2x%3 grid, %4 cell(s) over medium risk. Source: %5%6")
                                 .arg(m_report.placements.size())
                                 .arg(m_report.columns)
                                 .arg(m_report.rows)
                                 .arg(riskyCells)
-                                .arg(sourceLabel));
+                                .arg(sourceLabel)
+                                .arg(m_minimapImage.isNull()
+                                         ? QString()
+                                         : QStringLiteral(" | Minimap: %1").arg(m_minimapSourceLabel)));
     QString warning = QStringLiteral("Estimated Static Risk is static analysis from map data, not FPS/runtime measurement.");
+    if (m_minimapImage.isNull())
+        warning += QStringLiteral(" Minimap.tga was not found or could not be decoded; using coordinate grid fallback.");
     if (!m_report.warnings.isEmpty())
         warning += QStringLiteral(" Warnings: %1").arg(m_report.warnings.join(QStringLiteral(" | ")));
     m_warningLabel->setText(warning);
@@ -639,6 +672,38 @@ bool MapPerformancePage::readObjectsFile(QByteArray *objectsBytes, QString *sour
         *objectsBytes = bytes;
         if (sourceLabel)
             *sourceLabel = ScannedFileReader::relativePath(m_result.rootFolder, file.filePath);
+        return true;
+    }
+    return false;
+}
+
+bool MapPerformancePage::readMinimapImage(QImage *image, QString *sourceLabel) const
+{
+    if (!image)
+        return false;
+    *image = {};
+    if (sourceLabel)
+        sourceLabel->clear();
+
+    ScannedFileReader reader(m_result);
+    for (const ScannedFileInfo &file : m_result.scannedFiles) {
+        const QString relative = ScannedFileReader::relativePath(m_result.rootFolder, file.filePath);
+        if (QFileInfo(relative).fileName().compare(QStringLiteral("Minimap.tga"), Qt::CaseInsensitive) != 0)
+            continue;
+
+        QByteArray bytes;
+        if (!reader.readBytes(file, 32ll * 1024ll * 1024ll, &bytes))
+            continue;
+
+        QImage loaded;
+        if (!loaded.loadFromData(bytes, "TGA") && !loaded.loadFromData(bytes))
+            continue;
+        if (loaded.isNull())
+            continue;
+
+        *image = loaded;
+        if (sourceLabel)
+            *sourceLabel = relative;
         return true;
     }
     return false;
