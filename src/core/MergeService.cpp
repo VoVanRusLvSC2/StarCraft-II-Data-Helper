@@ -68,22 +68,37 @@ int replaceRedirectTokens(QString *value,
     return replacements;
 }
 
+bool isActorEventElementName(const QString &name)
+{
+    return name.compare(QStringLiteral("On"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Remove"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Do"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Event"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Term"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Terms"), Qt::CaseInsensitive) == 0;
+}
+
+bool hasActorCatalogAncestor(pugi::xml_node node)
+{
+    for (pugi::xml_node parent = node.parent(); parent && parent.type() == pugi::node_element; parent = parent.parent()) {
+        if (QString::fromUtf8(parent.name()).startsWith(QStringLiteral("CActor"), Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
+}
+
+bool isInsideActorEvent(pugi::xml_node node)
+{
+    for (pugi::xml_node current = node; current && current.type() == pugi::node_element; current = current.parent()) {
+        if (isActorEventElementName(QString::fromUtf8(current.name())) && hasActorCatalogAncestor(current))
+            return true;
+    }
+    return false;
+}
+
 bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, const QString &value)
 {
-    const auto isActorEventNode = [](pugi::xml_node candidate) {
-        if (!candidate || candidate.type() != pugi::node_element)
-            return false;
-        const QString name = QString::fromUtf8(candidate.name());
-        if (name.compare(QStringLiteral("On"), Qt::CaseInsensitive) != 0
-            && name.compare(QStringLiteral("Remove"), Qt::CaseInsensitive) != 0
-            && name.compare(QStringLiteral("Do"), Qt::CaseInsensitive) != 0)
-            return false;
-        const pugi::xml_node parent = candidate.parent();
-        return parent
-            && parent.type() == pugi::node_element
-            && QString::fromUtf8(parent.name()).startsWith(QStringLiteral("CActor"), Qt::CaseInsensitive);
-    };
-    const bool actorEventValue = isActorEventNode(node)
+    const bool actorEventValue = isInsideActorEvent(node)
         && (fieldName.compare(QStringLiteral("Terms"), Qt::CaseInsensitive) == 0
             || fieldName.compare(QStringLiteral("Send"), Qt::CaseInsensitive) == 0
             || fieldName.isEmpty());
@@ -92,7 +107,7 @@ bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, 
         return false;
 
     for (pugi::xml_node current = node; current && current.type() == pugi::node_element; current = current.parent()) {
-        if (!isActorEventNode(current)
+        if (!isInsideActorEvent(current)
             && sc2dh::isNonReferenceCatalogFieldName(QString::fromUtf8(current.name())))
             return false;
     }

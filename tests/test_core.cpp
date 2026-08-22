@@ -1648,7 +1648,8 @@ void CoreTests::referenceRenamePreviewAndApply()
     const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Family.xml"));
     const QByteArray original = QByteArrayLiteral(
         "<Catalog><CUnit id=\"Vassel\" actor=\"ActorVassel\"/>"
-        "<CActorUnit id=\"ActorVassel\" unitName=\"Vassel\"><Event>Unit,Vassel ActorVassel ActorVasselExtra</Event></CActorUnit>"
+        "<CActorUnit id=\"ActorVassel\" unitName=\"Vassel\"><Event>Unit,Vassel ActorVassel ActorVasselExtra</Event>"
+        "<Events><On Terms=\"Unit,Vassel\" Send=\"Create ActorVassel\"/></Events></CActorUnit>"
         "</Catalog>");
     QVERIFY(writeTextFile(path, original));
     FolderAnalyzer analyzer; AnalysisResult analysis; QString error;
@@ -1659,7 +1660,7 @@ void CoreTests::referenceRenamePreviewAndApply()
     ReferenceRenamer renamer;
     const RenamePreviewReport preview = renamer.preview(analysis, plan);
     QVERIFY2(preview.valid, qPrintable(preview.conflicts.join(QStringLiteral("; "))));
-    QVERIFY(preview.referencesUpdated >= 4);
+    QVERIFY(preview.referencesUpdated >= 6);
     QFile unchanged(path); QVERIFY(unchanged.open(QIODevice::ReadOnly)); QCOMPARE(unchanged.readAll(), original); unchanged.close();
     const RenameApplyResult applied = renamer.apply(analysis, plan, dir.path(), {});
     QVERIFY2(applied.success, qPrintable(applied.error));
@@ -1670,6 +1671,8 @@ void CoreTests::referenceRenamePreviewAndApply()
     QCOMPARE(output.count(QStringLiteral("id=\"Vessel\"")), 2);
     QVERIFY(output.contains(QStringLiteral("unitName=\"Vessel\"")));
     QVERIFY(output.contains(QStringLiteral("Unit,Vessel Vessel ActorVasselExtra")));
+    QVERIFY(output.contains(QStringLiteral("Terms=\"Unit,Vessel\"")));
+    QVERIFY(output.contains(QStringLiteral("Send=\"Create Vessel\"")));
 }
 
 void CoreTests::referenceRenameRewritesSafeTextReferences()
@@ -2323,6 +2326,7 @@ void CoreTests::mergeAllowsManualUnrelatedExactDuplicateAndActorEvents()
         "<CEffectDamage id=\"AlphaEffect\"><Amount value=\"5\"/></CEffectDamage>"
         "<CEffectDamage id=\"BetaEffect\"><Amount value=\"5\"/></CEffectDamage>"
         "<CActorUnit id=\"Actor\"><On Terms=\"Effect,BetaEffect,Start\" Send=\"Create BetaEffect\"/>"
+        "<Events><On index=\"9\" Terms=\"Effect,BetaEffect,Start\" Send=\"Create BetaEffect\"/></Events>"
         "<EventText>BetaEffect BetaEffectExtra</EventText></CActorUnit>"
         "</Catalog>")));
 
@@ -2367,8 +2371,10 @@ void CoreTests::mergeAllowsManualUnrelatedExactDuplicateAndActorEvents()
     QVERIFY(!output.contains(QStringLiteral("<CEffectDamage id=\"BetaEffect\"")));
     QVERIFY(output.contains(QStringLiteral("Terms=\"Effect,AlphaEffect,Start\"")));
     QVERIFY(output.contains(QStringLiteral("Send=\"Create AlphaEffect\"")));
+    QVERIFY(output.contains(QStringLiteral("index=\"9\" Terms=\"Effect,AlphaEffect,Start\"")));
     QVERIFY(output.contains(QStringLiteral(">AlphaEffect BetaEffectExtra<")));
     QVERIFY(output.contains(QStringLiteral("<CEffectDamage id=\"AlphaEffect\"")));
+    QCOMPARE(MergeService::countIdTokens(output, QStringLiteral("BetaEffect")), 0);
 }
 
 void CoreTests::mergeRewritesNonXmlReferenceFiles()

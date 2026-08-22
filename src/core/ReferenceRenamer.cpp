@@ -332,11 +332,44 @@ QString blockingReferenceSummary(const sc2dh::refs::UnifiedReferenceIndex &index
     return sources.join(QStringLiteral(", "));
 }
 
+bool isActorEventElementName(const QString &name)
+{
+    return name.compare(QStringLiteral("On"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Remove"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Do"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Event"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Term"), Qt::CaseInsensitive) == 0
+        || name.compare(QStringLiteral("Terms"), Qt::CaseInsensitive) == 0;
+}
+
+bool hasActorCatalogAncestor(pugi::xml_node node)
+{
+    for (pugi::xml_node parent = node.parent(); parent && parent.type() == pugi::node_element; parent = parent.parent()) {
+        if (QString::fromUtf8(parent.name()).startsWith(QStringLiteral("CActor"), Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
+}
+
+bool isInsideActorEvent(pugi::xml_node node)
+{
+    for (pugi::xml_node current = node; current && current.type() == pugi::node_element; current = current.parent()) {
+        if (isActorEventElementName(QString::fromUtf8(current.name())) && hasActorCatalogAncestor(current))
+            return true;
+    }
+    return false;
+}
+
 bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, const QString &value)
 {
     if (fieldName.compare(QStringLiteral("parent"), Qt::CaseInsensitive) == 0)
         return false;
-    if (sc2dh::isNonReferenceCatalogFieldName(fieldName) || sc2dh::looksLikeCatalogFilterList(value))
+    const bool actorEventValue = isInsideActorEvent(node)
+        && (fieldName.compare(QStringLiteral("Terms"), Qt::CaseInsensitive) == 0
+            || fieldName.compare(QStringLiteral("Send"), Qt::CaseInsensitive) == 0
+            || fieldName.compare(QStringLiteral("value"), Qt::CaseInsensitive) == 0
+            || fieldName.isEmpty());
+    if (!actorEventValue && (sc2dh::isNonReferenceCatalogFieldName(fieldName) || sc2dh::looksLikeCatalogFilterList(value)))
         return false;
     // Generic scalar <Field value="..."> nodes are commonly enums, numbers,
     // flags, animation names or editor metadata. Rewrite them only when the
@@ -344,11 +377,13 @@ bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, 
     // Validator, etc.). This prevents an object named "Moving" from corrupting
     // <AllowedMovement value="Moving"/> during a broad batch rename.
     if (fieldName.compare(QStringLiteral("value"), Qt::CaseInsensitive) == 0
+        && !actorEventValue
         && typedReferenceCatalogPrefix(node, fieldName).isEmpty())
         return false;
 
     for (pugi::xml_node current = node; current && current.type() == pugi::node_element; current = current.parent()) {
-        if (sc2dh::isNonReferenceCatalogFieldName(QString::fromUtf8(current.name())))
+        if (!isInsideActorEvent(current)
+            && sc2dh::isNonReferenceCatalogFieldName(QString::fromUtf8(current.name())))
             return false;
     }
     return true;
