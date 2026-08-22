@@ -217,6 +217,29 @@ struct PendingRename {
     bool found = false;
 };
 
+QStringList linkedDataCollectionElements(const QString &elementName)
+{
+    if (elementName.compare(QStringLiteral("CUnit"), Qt::CaseInsensitive) == 0)
+        return {QStringLiteral("CDataCollectionUnit")};
+    if (elementName.startsWith(QStringLiteral("CAbil"), Qt::CaseInsensitive))
+        return {QStringLiteral("CDataCollectionAbil")};
+    if (elementName.startsWith(QStringLiteral("CWeapon"), Qt::CaseInsensitive))
+        return {QStringLiteral("CDataCollection"), QStringLiteral("CDataCollectionWeapon")};
+    return {};
+}
+
+bool isDefaultDataCollectionNode(const DataNode &node)
+{
+    if (!node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)
+        || node.elementName.startsWith(QStringLiteral("CDataCollectionPattern"), Qt::CaseInsensitive))
+        return false;
+    pugi::xml_document fragment;
+    if (!fragment.load_string(node.serializedXml.toUtf8().constData()))
+        return false;
+    const pugi::xml_node collection = fragment.first_child();
+    return QString::fromUtf8(collection.attribute("default").value()).compare(QStringLiteral("1"), Qt::CaseInsensitive) == 0;
+}
+
 bool containsTarget(const RenameTargetMap &renames, const PendingRename &pending)
 {
     const auto it = renames.constFind(pending.oldId);
@@ -393,6 +416,13 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
 {
     QHash<QString, QVector<PendingRename>> pendingByFile;
     QStringList unsafeIds;
+    QSet<QString> explicitIdentityKeys;
+    struct LinkedCollectionCandidate {
+        QString oldId;
+        QString newId;
+        QStringList collectionElements;
+    };
+    QVector<LinkedCollectionCandidate> linkedCollectionCandidates;
     for (const RenamePlanItem &item : plan.items) {
         if (!item.selected || item.blocked) continue;
         if (!sc2dh::isSafeAutomaticObjectId(item.oldId) || sc2dh::isReservedCatalogToken(item.oldId)) {
@@ -411,6 +441,33 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         pending.sourceFile = node.sourceFile;
         pending.expectedLocation = node.originalLocation;
         pendingByFile[node.sourceFile].append(pending);
+        explicitIdentityKeys.insert(catalogLookupKey(node.elementName, item.oldId));
+
+        const QStringList linkedCollections = linkedDataCollectionElements(node.elementName);
+        if (!linkedCollections.isEmpty())
+            linkedCollectionCandidates.append({item.oldId, item.newId, linkedCollections});
+    }
+    QSet<QString> implicitIdentityKeys;
+    for (const LinkedCollectionCandidate &candidate : std::as_const(linkedCollectionCandidates)) {
+        if (!sc2dh::isSafeAutomaticObjectId(candidate.oldId) || !sc2dh::isSafeAutomaticObjectId(candidate.newId))
+            continue;
+        for (const DataNode &node : analysis.nodes) {
+            if (node.id != candidate.oldId || isDefaultDataCollectionNode(node))
+                continue;
+            if (!candidate.collectionElements.contains(node.elementName, Qt::CaseInsensitive))
+                continue;
+            const QString key = catalogLookupKey(node.elementName, node.id);
+            if (explicitIdentityKeys.contains(key) || implicitIdentityKeys.contains(key))
+                continue;
+            PendingRename pending;
+            pending.oldId = candidate.oldId;
+            pending.newId = candidate.newId;
+            pending.elementName = node.elementName;
+            pending.sourceFile = node.sourceFile;
+            pending.expectedLocation = node.originalLocation;
+            pendingByFile[node.sourceFile].append(pending);
+            implicitIdentityKeys.insert(key);
+        }
     }
     if (!unsafeIds.isEmpty() && warnings) {
         unsafeIds.removeDuplicates();

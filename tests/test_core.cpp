@@ -1258,6 +1258,167 @@ void CoreTests::dataCollectionRollback()
     QVERIFY(!QFileInfo::exists(QDir(dir.path()).absoluteFilePath(QStringLiteral("(listfile)"))));
 }
 
+void CoreTests::autoCollectionSurvivesOptimizationBatch()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Batch.xml"));
+    QVERIFY(writeTextFile(path, QByteArrayLiteral(
+        "<Catalog>"
+        "<CDataCollectionPattern id=\"UnitPattern_Base\"/>"
+        "<CDataCollectionPattern id=\"AbilityPattern_Base\"/>"
+        "<CDataCollectionPattern id=\"WeaponPattern_Base\"/>"
+        "<CDataCollectionUnit id=\"UnitTemplate\"/>"
+        "<CDataCollectionAbil id=\"AbilityTemplate\"/>"
+        "<CDataCollectionWeapon id=\"WeaponTemplate\"/>"
+        "<CUnit id=\"BatchUnit\" parent=\"UnitTemplate\" refs=\"BatchActor BatchAbility BatchWeapon BatchBehavior\"/>"
+        "<CActorUnit id=\"BatchActor\" refs=\"BatchModel DuplicateDamageB\"><Model value=\"BatchModel\"/></CActorUnit>"
+        "<CModel id=\"BatchModel\"/>"
+        "<CAbilEffectTarget id=\"BatchAbility\" parent=\"AbilityTemplate\" refs=\"BatchButton DuplicateDamageB BatchBehavior\"/>"
+        "<CButton id=\"BatchButton\"/>"
+        "<CWeaponLegacy id=\"BatchWeapon\" parent=\"WeaponTemplate\" refs=\"DuplicateDamageB\"/>"
+        "<CEffectDamage id=\"DuplicateDamageA\"><Amount value=\"10\"/></CEffectDamage>"
+        "<CEffectDamage id=\"DuplicateDamageB\"><Amount value=\"10\"/></CEffectDamage>"
+        "<CBehaviorBuff id=\"BatchBehavior\"><Face value=\"BatchButton\"/></CBehaviorBuff>"
+        "<CAbilEffectTarget id=\"DeadAbility\" refs=\"DeadEffect\"/>"
+        "<CEffectDamage id=\"DeadEffect\"/>"
+        "<CDataCollectionUnit id=\"BatchUnit\" parent=\"UnitTemplate\">"
+        "<Pattern value=\"UnitPattern_Base\"/>"
+        "<EditorNote value=\"KeepMe\"/>"
+        "<DataRecord Entry=\"Unit,BatchUnit\"/>"
+        "<DataRecord Entry=\"Effect,LegacyManual\"/>"
+        "</CDataCollectionUnit>"
+        "</Catalog>")));
+
+    auto analyzeInto = [&](AnalysisResult &target) {
+        FolderAnalyzer analyzer;
+        AnalysisResult result;
+        QString error;
+        QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &result, &error), qPrintable(error));
+        target = result;
+    };
+    auto nodeById = [](const AnalysisResult &analysis, const QString &id) -> const DataNode * {
+        for (const DataNode &node : analysis.nodes) {
+            if (node.id == id)
+                return &node;
+        }
+        return nullptr;
+    };
+    auto nodeIndexById = [](const AnalysisResult &analysis, const QString &id) {
+        for (int index = 0; index < analysis.nodes.size(); ++index) {
+            if (analysis.nodes.at(index).id == id)
+                return index;
+        }
+        return -1;
+    };
+    auto readAllXml = [&](QString &combined) {
+        combined.clear();
+        const QFileInfoList files = QDir(dir.path()).entryInfoList({QStringLiteral("*.xml")}, QDir::Files, QDir::Name);
+        for (const QFileInfo &fileInfo : files) {
+            QFile file(fileInfo.absoluteFilePath());
+            QVERIFY(file.open(QIODevice::ReadOnly));
+            combined += QString::fromUtf8(file.readAll());
+        }
+    };
+
+    AnalysisResult analysis;
+    analyzeInto(analysis);
+    QVector<int> removeRows;
+    removeRows.append(nodeIndexById(analysis, QStringLiteral("DeadAbility")));
+    removeRows.append(nodeIndexById(analysis, QStringLiteral("DeadEffect")));
+    QVERIFY(removeRows[0] >= 0);
+    QVERIFY(removeRows[1] >= 0);
+    QString backupFolder;
+    QString error;
+    QStringList changedFiles;
+    int removedNodes = 0;
+    int skippedNodes = 0;
+    QVERIFY2(FolderAnalyzer().applySelectedChanges(analysis,
+                                                   removeRows,
+                                                   dir.path(),
+                                                   {},
+                                                   &backupFolder,
+                                                   &error,
+                                                   &changedFiles,
+                                                   &removedNodes,
+                                                   &skippedNodes),
+             qPrintable(error));
+    QCOMPARE(changedFiles.size(), 1);
+    QCOMPARE(removedNodes, 2);
+    QCOMPARE(skippedNodes, 0);
+
+    analyzeInto(analysis);
+    QVERIFY(!nodeById(analysis, QStringLiteral("DeadAbility")));
+    QVERIFY(!nodeById(analysis, QStringLiteral("DeadEffect")));
+
+    const int duplicateA = nodeIndexById(analysis, QStringLiteral("DuplicateDamageA"));
+    const int duplicateB = nodeIndexById(analysis, QStringLiteral("DuplicateDamageB"));
+    QVERIFY(duplicateA >= 0);
+    QVERIFY(duplicateB >= 0);
+    MergeRequest mergeRequest;
+    mergeRequest.keepNodeIndex = duplicateA;
+    mergeRequest.removeNodeIndices = {duplicateB};
+    const MergeApplyResult merged = MergeService().apply(analysis, mergeRequest, dir.path(), {});
+    QVERIFY2(merged.success, qPrintable(merged.error));
+    QVERIFY(merged.nodesDeleted >= 1);
+
+    analyzeInto(analysis);
+    QVERIFY(nodeById(analysis, QStringLiteral("DuplicateDamageA")));
+    QVERIFY(!nodeById(analysis, QStringLiteral("DuplicateDamageB")));
+    const DataNode *weaponAfterMerge = nodeById(analysis, QStringLiteral("BatchWeapon"));
+    QVERIFY(weaponAfterMerge);
+    QVERIFY(weaponAfterMerge->referencedIds.contains(QStringLiteral("DuplicateDamageA")));
+    QVERIFY(!weaponAfterMerge->referencedIds.contains(QStringLiteral("DuplicateDamageB")));
+
+    const int unitBeforeRename = nodeIndexById(analysis, QStringLiteral("BatchUnit"));
+    QVERIFY(unitBeforeRename >= 0);
+    RenamePlan renamePlan;
+    renamePlan.valid = true;
+    RenamePlanItem renameItem;
+    renameItem.nodeIndex = unitBeforeRename;
+    renameItem.oldId = QStringLiteral("BatchUnit");
+    renameItem.newId = QStringLiteral("BatchRenamed");
+    renamePlan.items.append(renameItem);
+    const RenameApplyResult renamed = ReferenceRenamer().apply(analysis, renamePlan, dir.path(), {});
+    QVERIFY2(renamed.success, qPrintable(renamed.error));
+
+    analyzeInto(analysis);
+    QVERIFY(!nodeById(analysis, QStringLiteral("BatchUnit")));
+    QVERIFY(nodeById(analysis, QStringLiteral("BatchRenamed")));
+
+    const QVector<QString> roots = {
+        QStringLiteral("BatchRenamed"),
+        QStringLiteral("BatchAbility"),
+        QStringLiteral("BatchWeapon"),
+    };
+    for (const QString &rootId : roots) {
+        QVector<UnitFamily> families = UnitFamilyDetector().detectCollectionFamilies(analysis, DataCollectionMode::UnitAbilWeapon);
+        auto it = std::find_if(families.begin(), families.end(), [&](const UnitFamily &family) {
+            return family.rootId == rootId;
+        });
+        QVERIFY2(it != families.end(), qPrintable(rootId));
+        DataCollectionBuildRequest request;
+        request.family = *it;
+        const DataCollectionApplyResult applied = DataCollectionUnitBuilder().apply(analysis, request, dir.path(), {}, true, &families);
+        QVERIFY2(applied.success, qPrintable(applied.error));
+        analyzeInto(analysis);
+    }
+
+    const DataCollectionAuditSummary audit = auditDataCollections(analysis);
+    QCOMPARE(audit.missingPrimaryRecords, 0);
+    QCOMPARE(audit.mixedRootCollections, 0);
+    QCOMPARE(audit.rootTypeConflicts, 0);
+
+    QString xml;
+    readAllXml(xml);
+    QVERIFY(xml.contains(QStringLiteral("EditorNote value=\"KeepMe\"")));
+    QVERIFY(xml.contains(QStringLiteral("Entry=\"Effect,LegacyManual\"")));
+    QCOMPARE(xml.count(QStringLiteral("Entry=\"Unit,BatchRenamed\"")), 1);
+    QCOMPARE(xml.count(QStringLiteral("Entry=\"Abil,BatchAbility\"")), 1);
+    QCOMPARE(xml.count(QStringLiteral("Entry=\"Weapon,BatchWeapon\"")), 1);
+    QCOMPARE(xml.count(QStringLiteral("Entry=\"Effect,DuplicateDamageA\"")), 1);
+    QVERIFY(!xml.contains(QStringLiteral("Entry=\"Effect,DuplicateDamageB\"")));
+}
+
 void CoreTests::unitFamilyDetectionAndStandardPlanning()
 {
     QTemporaryDir dir;
