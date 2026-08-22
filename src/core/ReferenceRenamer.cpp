@@ -1,6 +1,7 @@
 #include "core/ReferenceRenamer.h"
 
 #include "core/BackupManager.h"
+#include "core/CatalogLinkSchema.h"
 #include "core/CatalogProtection.h"
 #include "core/FolderAnalyzer.h"
 #include "core/MergeService.h"
@@ -83,6 +84,49 @@ bool shouldRewriteSafeTextReferenceFile(const ScannedFileInfo &file, const QStri
     if (file.isXml)
         return false;
     return file.isSc2DataLike || isPlacementObjectsPath(relativePath);
+}
+
+bool isParentAttributeReferenceOnly(const DataNode &node, const QString &oldId)
+{
+    bool parentMatches = false;
+    for (auto it = node.attributes.cbegin(); it != node.attributes.cend(); ++it) {
+        if (it.key().compare(QStringLiteral("parent"), Qt::CaseInsensitive) == 0 && it.value() == oldId) {
+            parentMatches = true;
+            break;
+        }
+    }
+    if (!parentMatches || node.serializedXml.isEmpty())
+        return false;
+
+    pugi::xml_document document;
+    const QByteArray bytes = node.serializedXml.toUtf8();
+    if (!document.load_buffer(bytes.constData(), size_t(bytes.size())))
+        return false;
+
+    pugi::xml_node root = document.first_child();
+    while (root && root.type() != pugi::node_element)
+        root = root.next_sibling();
+    if (!root)
+        return false;
+
+    pugi::xml_attribute parent = root.attribute("parent");
+    if (!parent || QString::fromUtf8(parent.value()) != oldId)
+        return false;
+    root.remove_attribute(parent);
+
+    std::ostringstream stream;
+    root.print(stream, "  ", pugi::format_raw, pugi::encoding_utf8);
+
+    DataNode parentlessNode = node;
+    parentlessNode.serializedXml = QString::fromStdString(stream.str());
+    for (auto it = parentlessNode.attributes.begin(); it != parentlessNode.attributes.end();) {
+        if (it.key().compare(QStringLiteral("parent"), Qt::CaseInsensitive) == 0)
+            it = parentlessNode.attributes.erase(it);
+        else
+            ++it;
+    }
+
+    return !sc2dh::extractCatalogLinkReferences(parentlessNode).contains(oldId);
 }
 
 struct RenameTarget
@@ -956,42 +1000,67 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
         restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
         return result;
     }
-    QSet<QString> rebuiltIds;
-    for (const DataNode &node : rebuilt.nodes) rebuiltIds.insert(node.id);
     QSet<QString> newIds;
     for (auto it = appliedRenames.cbegin(); it != appliedRenames.cend(); ++it)
         newIds.insert(it.value());
     QSet<QString> oldIdsToCheck;
-    QStringList postWarnings;
+    QHash<QString, QSet<QString>> oldScopesById;
+    QHash<QString, QSet<QString>> newScopesById;
+    QStringList postErrors;
     for (const RenamePlanItem &item : plan.items) {
         if (appliedRenames.value(item.oldId) != item.newId)
             continue;
-        if (!rebuiltIds.contains(item.newId))
-            postWarnings << QStringLiteral("%1 -> %2 was written, but refreshed analysis did not expose the new ID.")
-                                .arg(item.oldId, item.newId);
-        if (!newIds.contains(item.oldId) && rebuiltIds.contains(item.oldId))
-            postWarnings << QStringLiteral("%1 -> %2 was written, but refreshed analysis still exposes the old ID.")
-                                .arg(item.oldId, item.newId);
-        if (!newIds.contains(item.oldId))
+        if (item.nodeIndex < 0 || item.nodeIndex >= analysis.nodes.size())
+            continue;
+        const QString scope = sc2dh::catalogIdentityScope(analysis.nodes.at(item.nodeIndex).elementName);
+        newScopesById[item.newId].insert(scope);
+        if (!newIds.contains(item.oldId)) {
             oldIdsToCheck.insert(item.oldId);
+            oldScopesById[item.oldId].insert(scope);
+        }
+    }
+    for (auto it = newScopesById.cbegin(); it != newScopesById.cend(); ++it) {
+        bool found = false;
+        for (const DataNode &node : rebuilt.nodes) {
+            if (node.id == it.key() && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            postErrors << QStringLiteral("Refreshed analysis did not expose renamed ID %1 in the expected catalog scope.")
+                              .arg(it.key());
+    }
+    for (auto it = oldScopesById.cbegin(); it != oldScopesById.cend(); ++it) {
+        for (const DataNode &node : rebuilt.nodes) {
+            if (node.id == it.key() && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
+                postErrors << QStringLiteral("Refreshed analysis still exposes old ID %1 in %2.")
+                                  .arg(it.key(), node.elementName);
+                break;
+            }
+        }
     }
     if (!oldIdsToCheck.isEmpty()) {
         for (const DataNode &node : rebuilt.nodes) {
             for (const QString &reference : node.referencedIds) {
                 if (oldIdsToCheck.contains(reference)) {
-                    postWarnings << QStringLiteral("A refreshed-analysis reference to old ID %1 remains in %2.")
+                    if (isParentAttributeReferenceOnly(node, reference))
+                        continue;
+                    postErrors << QStringLiteral("A refreshed-analysis strong reference to old ID %1 remains in %2.")
                                         .arg(reference, node.id);
                     break;
                 }
             }
         }
     }
-    if (!postWarnings.isEmpty()) {
-        if (postWarnings.size() > 20)
-            postWarnings = postWarnings.mid(0, 20) << QStringLiteral("... %1 more post-rename verification warning(s).")
-                                                       .arg(postWarnings.size() - 20);
-        result.warnings << QStringLiteral("Post-rename verification reported non-fatal analysis mismatches:\n- %1")
-                               .arg(postWarnings.join(QStringLiteral("\n- ")));
+    if (!postErrors.isEmpty()) {
+        if (postErrors.size() > 20)
+            postErrors = postErrors.mid(0, 20) << QStringLiteral("... %1 more post-rename verification error(s).")
+                                                   .arg(postErrors.size() - 20);
+        result.error = QStringLiteral("Post-rename verification failed:\n- %1")
+                           .arg(postErrors.join(QStringLiteral("\n- ")));
+        restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
     }
     result.success = true;
     result.changedFiles = relativeFiles;
