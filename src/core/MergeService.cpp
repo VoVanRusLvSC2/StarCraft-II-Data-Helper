@@ -262,6 +262,36 @@ bool restoreBackup(const QString &root, const QString &backup, const QStringList
     return ok;
 }
 
+QString mergeNodeLabel(const DataNode &node)
+{
+    return QStringLiteral("%1(%2)").arg(node.elementName.isEmpty() ? QStringLiteral("Unknown") : node.elementName,
+                                        node.id.isEmpty() ? QStringLiteral("<no id>") : node.id);
+}
+
+bool postMergeStrongReferenceAudit(const AnalysisResult &rebuilt,
+                                   const QHash<QString, QSet<QString>> &removedScopesById,
+                                   QString *error)
+{
+    for (auto it = removedScopesById.cbegin(); it != removedScopesById.cend(); ++it) {
+        const QString &removedId = it.key();
+        for (const DataNode &node : rebuilt.nodes) {
+            if (node.id == removedId && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
+                if (error)
+                    *error = QStringLiteral("Post-merge audit failed: removed %1 still exists as %2.")
+                                 .arg(removedId, mergeNodeLabel(node));
+                return false;
+            }
+            if (node.referencedIds.contains(removedId)) {
+                if (error)
+                    *error = QStringLiteral("Post-merge audit failed: %1 still has a strong catalog reference to removed ID %2.")
+                                 .arg(mergeNodeLabel(node), removedId);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 int MergeService::replaceIdTokens(QString *value, const QString &oldId, const QString &newId)
@@ -409,10 +439,12 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
 
     QHash<QString, QString> redirects;
     QHash<QString, QVector<const DataNode *>> removals;
+    QHash<QString, QSet<QString>> removedScopesById;
     for (int index : request.removeNodeIndices) {
         const DataNode &node = analysis.nodes[index];
         redirects.insert(node.id, plan.keptId);
         removals[node.sourceFile].append(&node);
+        removedScopesById[node.id].insert(sc2dh::catalogIdentityScope(node.elementName));
     }
     const QRegularExpression redirectsRegex = redirectExpression(redirects);
     QStringList skippedArchiveIds;
@@ -518,14 +550,10 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
         restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
         return result;
     }
-    for (const QString &removed : plan.removedIds) {
-        for (const DataNode &node : rebuilt.nodes) {
-            if (node.id == removed || node.referencedIds.contains(removed)) {
-                result.warnings << QStringLiteral("Post-merge audit still sees residual old ID token %1 in refreshed analysis for manual review.")
-                                       .arg(removed);
-                break;
-            }
-        }
+    if (!postMergeStrongReferenceAudit(rebuilt, removedScopesById, &error)) {
+        result.error = error;
+        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
     }
     result.success = true;
     result.changedFiles = relativeFiles;
@@ -556,6 +584,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
 
     QHash<QString, QString> redirects;
     QHash<QString, QVector<const DataNode *>> removals;
+    QHash<QString, QSet<QString>> removedScopesById;
     QSet<int> removedNodeIndexes;
     QStringList removedIds;
 
@@ -610,6 +639,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
             }
             redirects.insert(remove.id, keep.id);
             removals[remove.sourceFile].append(&remove);
+            removedScopesById[remove.id].insert(sc2dh::catalogIdentityScope(remove.elementName));
             removedNodeIndexes.insert(removeIndex);
             removedIds << remove.id;
         }
@@ -756,14 +786,10 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
         restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
         return result;
     }
-    for (const QString &removed : removedIds) {
-        for (const DataNode &node : rebuilt.nodes) {
-            if (node.id == removed || node.referencedIds.contains(removed)) {
-                result.warnings << QStringLiteral("Post-merge audit still sees residual old ID token %1 in refreshed analysis for manual review.")
-                                       .arg(removed);
-                break;
-            }
-        }
+    if (!postMergeStrongReferenceAudit(rebuilt, removedScopesById, &error)) {
+        result.error = error;
+        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        return result;
     }
 
     result.success = true;
