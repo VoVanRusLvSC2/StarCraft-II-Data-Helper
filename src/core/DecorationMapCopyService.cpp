@@ -284,6 +284,49 @@ void scanTextForDoodadKeys(sc2dh::decor::DecorationSafetyContext *context,
     }
 }
 
+void scanXmlForStaticOnlyDoodadTypes(sc2dh::decor::DecorationSafetyContext *context,
+                                     const QString &entryName,
+                                     const QString &text,
+                                     const QSet<QString> &doodadTypes)
+{
+    if (!context || doodadTypes.isEmpty())
+        return;
+
+    const QString folded = text.toCaseFolded();
+    for (const QString &typeKey : doodadTypes) {
+        if (context->staticOnlyReasonByDoodadType.contains(typeKey))
+            continue;
+
+        const QString idNeedle = QStringLiteral("id=\"%1\"").arg(typeKey);
+        int idIndex = folded.indexOf(idNeedle);
+        if (idIndex < 0) {
+            const QString idNeedleApostrophe = QStringLiteral("id='%1'").arg(typeKey);
+            idIndex = folded.indexOf(idNeedleApostrophe);
+        }
+        if (idIndex < 0)
+            continue;
+
+        const qsizetype blockStart = std::max<qsizetype>(0, folded.lastIndexOf(QLatin1Char('<'), idIndex));
+        int blockEnd = folded.indexOf(QStringLiteral("</"), idIndex);
+        if (blockEnd < 0)
+            blockEnd = int(std::min<qsizetype>(folded.size(), qsizetype(idIndex) + 3000));
+        else
+            blockEnd = int(std::min<qsizetype>(folded.size(), qsizetype(blockEnd) + 300));
+        const QString block = folded.mid(blockStart, blockEnd - blockStart);
+        if (!block.contains(QStringLiteral("footprint"))
+            && !block.contains(QStringLiteral("pathing"))
+            && !block.contains(QStringLiteral("blocker"))
+            && !block.contains(QStringLiteral("destruct"))) {
+            continue;
+        }
+
+        context->staticOnlyReasonByDoodadType.insert(
+            typeKey,
+            QStringLiteral("Static-only: pathing/gameplay dependency (doodad type has footprint/pathing data in %1).")
+                .arg(entryName));
+    }
+}
+
 sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive &archive,
                                                                 const QByteArray &objectsBytes,
                                                                 const sc2dh::decor::DecorOptimizedMapRequest &request,
@@ -296,7 +339,11 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
 
     QSet<QString> tokenKeys;
     QSet<QString> phraseKeys;
+    QSet<QString> doodadTypes;
     for (const sc2dh::decor::DoodadPlacement &doodad : doodads) {
+        const QString typeKey = doodad.type.trimmed().toCaseFolded();
+        if (!typeKey.isEmpty())
+            doodadTypes.insert(typeKey);
         for (const QString &value : {doodad.id, doodad.name}) {
             const QString key = value.trimmed().toCaseFolded();
             if (key.isEmpty())
@@ -307,7 +354,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
                 phraseKeys.insert(key);
         }
     }
-    if (tokenKeys.isEmpty() && phraseKeys.isEmpty())
+    if (tokenKeys.isEmpty() && phraseKeys.isEmpty() && doodadTypes.isEmpty())
         return context;
 
     for (const QString &entry : archive.allEntries()) {
@@ -333,6 +380,8 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
             continue;
         }
         scanTextForDoodadKeys(&context, entry, text, tokenKeys, phraseKeys);
+        if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive))
+            scanXmlForStaticOnlyDoodadTypes(&context, entry, text, doodadTypes);
     }
 
     Q_UNUSED(error);

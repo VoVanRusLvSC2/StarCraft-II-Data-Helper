@@ -68,6 +68,7 @@ struct DecorationSafetyContext
     QHash<QString, QStringList> referenceFilesByDoodadKey;
     QSet<QString> excludedDoodadKeys;
     QHash<QString, int> forcedZoneByDoodadKey;
+    QHash<QString, QString> staticOnlyReasonByDoodadType;
 };
 
 struct GalaxyGenerationOptions

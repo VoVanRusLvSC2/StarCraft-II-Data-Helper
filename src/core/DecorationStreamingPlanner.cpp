@@ -123,6 +123,13 @@ int forcedZoneIdFor(const sc2dh::decor::DoodadPlacement &doodad,
     return 0;
 }
 
+QString typeStaticOnlyReason(const sc2dh::decor::DoodadPlacement &doodad,
+                             const sc2dh::decor::DecorationSafetyContext &context)
+{
+    const auto it = context.staticOnlyReasonByDoodadType.constFind(safetyKey(doodad.type));
+    return it == context.staticOnlyReasonByDoodadType.cend() ? QString() : it.value();
+}
+
 QStringList externalReferenceFiles(const sc2dh::decor::DoodadPlacement &doodad,
                                    const sc2dh::decor::DecorationSafetyContext &context)
 {
@@ -302,6 +309,13 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
         if (doodad.userExcluded && doodad.dynamicCandidate) {
             doodad.dynamicCandidate = false;
             doodad.staticOnlyReason = QStringLiteral("Static-only: excluded by user.");
+        }
+        if (doodad.dynamicCandidate) {
+            const QString typeReason = typeStaticOnlyReason(doodad, safetyContext);
+            if (!typeReason.isEmpty()) {
+                doodad.dynamicCandidate = false;
+                doodad.staticOnlyReason = typeReason;
+            }
         }
         if (doodad.dynamicCandidate) {
             doodad.safetyReferenceFiles = externalReferenceFiles(doodad, safetyContext);

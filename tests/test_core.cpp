@@ -3609,7 +3609,8 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
         "ObjectDoodad { Id = 32 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) }\n"
         "ObjectDoodad { Id = 33 Name = \"FreeVisual\" Type = \"RockVisual\" Position = (12, 12, 0) }\n"
         "ObjectDoodad { Id = 34 Name = \"ManualRight\" Type = \"CrystalVisual\" Position = (13, 12, 0) }\n"
-        "ObjectDoodad { Id = 35 Name = \"KeepStatic\" Type = \"GrassVisual\" Position = (14, 12, 0) }\n");
+        "ObjectDoodad { Id = 35 Name = \"KeepStatic\" Type = \"GrassVisual\" Position = (14, 12, 0) }\n"
+        "ObjectDoodad { Id = 36 Name = \"FootprintFromData\" Type = \"BridgeVisual\" Position = (15, 12, 0) }\n");
     const QByteArray mapScript = QByteArrayLiteral(
         "include \"TriggerLibs/NativeLib\"\n"
         "void InitMap() { TriggerDebugOutput(1, StringToText(\"ReferencedVisual\"), true); }\n");
@@ -3619,7 +3620,8 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
                                   {
                                       {QStringLiteral("Objects"), objects},
                                       {QStringLiteral("MapScript.galaxy"), mapScript},
-                                      {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog><CUnit id=\"VerificationUnit\"/></Catalog>")}
+                                      {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"),
+                                       QByteArrayLiteral("<Catalog><CUnit id=\"VerificationUnit\"/><CDoodad id=\"BridgeVisual\"><Footprint value=\"Footprint2x2\"/></CDoodad></Catalog>")}
                                   },
                                   &error),
              qPrintable(error));
@@ -3657,6 +3659,7 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("StaticBlock")));
     QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("ManualRight")));
     QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("KeepStatic")));
+    QVERIFY(QString::fromUtf8(originalObjects).contains(QStringLiteral("FootprintFromData")));
 
     Sc2Archive optimized;
     QVERIFY2(optimized.load(outputPath, &error), qPrintable(error));
@@ -3668,6 +3671,7 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY(optimizedObjectsText.contains(QStringLiteral("StaticBlock")));
     QVERIFY(!optimizedObjectsText.contains(QStringLiteral("ManualRight")));
     QVERIFY(optimizedObjectsText.contains(QStringLiteral("KeepStatic")));
+    QVERIFY(optimizedObjectsText.contains(QStringLiteral("FootprintFromData")));
 
     QByteArray optimizedMapScript;
     QVERIFY2(optimized.readEntry(QStringLiteral("MapScript.galaxy"), &optimizedMapScript, &error), qPrintable(error));
@@ -3688,6 +3692,7 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY(!runtimeText.contains(QStringLiteral("ReferencedVisual")));
     QVERIFY(!runtimeText.contains(QStringLiteral("StaticBlock")));
     QVERIFY(!runtimeText.contains(QStringLiteral("GrassVisual")));
+    QVERIFY(!runtimeText.contains(QStringLiteral("BridgeVisual")));
 #endif
 }
 
