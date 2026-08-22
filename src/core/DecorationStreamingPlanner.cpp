@@ -261,7 +261,8 @@ QVector<DoodadPlacement> DecorationStreamingPlanner::parseObjects(const QByteArr
                                QStringLiteral("footprint"), QStringLiteral("destruct")})) {
             doodad.staticOnlyReason = QStringLiteral("Static-only: pathing/gameplay dependency.");
         } else if (!doodad.variation.isEmpty() || !doodad.tintColor.isEmpty()
-                   || !doodad.teamColor.isEmpty() || doodad.pitch != 0.0 || doodad.roll != 0.0) {
+                   || !doodad.teamColor.isEmpty() || doodad.pitch != 0.0
+                   || doodad.roll != 0.0 || doodad.z != 0.0) {
             doodad.staticOnlyReason = QStringLiteral("Static-only: unsupported runtime property.");
         } else {
             doodad.dynamicCandidate = true;
@@ -439,12 +440,11 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
             const DoodadPlacement &doodad = plan.doodads.at(doodadIndex);
             out += QStringLiteral("    p = Point(%1, %2);\n").arg(fixed(doodad.x), fixed(doodad.y));
             out += QStringLiteral("    a = libNtve_gf_CreateActorAtPoint(%1, p);\n").arg(galaxyString(doodad.type));
-            out += QStringLiteral("    ActorSend(a, libNtve_gf_SetScale(%1, %2, %3, 0.0));\n")
-                       .arg(fixed(doodad.scaleX), fixed(doodad.scaleY), fixed(doodad.scaleZ));
+            out += QStringLiteral("    ActorSend(a, libNtve_gf_SetScale(%1));\n")
+                       .arg(galaxyString(QStringLiteral("%1 %2 %3")
+                                             .arg(fixed(doodad.scaleX), fixed(doodad.scaleY), fixed(doodad.scaleZ))));
             if (doodad.rotation != 0.0)
-                out += QStringLiteral("    ActorSend(a, libNtve_gf_SetFacing(%1));\n").arg(fixed(doodad.rotation));
-            if (doodad.z != 0.0)
-                out += QStringLiteral("    ActorSend(a, libNtve_gf_SetHeight(%1));\n").arg(fixed(doodad.z));
+                out += QStringLiteral("    libNtve_gf_MakeModelFaceAngle(a, %1);\n").arg(fixed(doodad.rotation));
             out += QStringLiteral("    DecorOpt_Actors[%1][DecorOpt_ActorCount[%1]] = a;\n").arg(zone.zoneId);
             out += QStringLiteral("    DecorOpt_ActorCount[%1] += 1;\n").arg(zone.zoneId);
             out += QStringLiteral("    created += 1;\n");

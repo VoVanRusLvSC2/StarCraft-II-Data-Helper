@@ -3450,7 +3450,8 @@ void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
     const QByteArray objects = QByteArrayLiteral(
         "ObjectDoodad { Id = 1 Name = \"CrateA\" Type = \"CrateDoodad\" Position = (10, 20, 0) Rotation = 90 Scale = 1.25 }\n"
         "ObjectDoodad { Id = 2 Name = \"CrateB\" Type = \"CrateDoodad\" Position = (110, 20, 0) Scale = (1, 2, 1) }\n"
-        "ObjectDoodad { Id = 3 Name = \"PathBlock\" Type = \"PathingBlocker\" Position = (15, 25, 0) }\n");
+        "ObjectDoodad { Id = 3 Name = \"PathBlock\" Type = \"PathingBlocker\" Position = (15, 25, 0) }\n"
+        "ObjectDoodad { Id = 4 Name = \"Raised\" Type = \"RaisedVisual\" Position = (20, 25, 2) }\n");
 
     sc2dh::decor::DecorationStreamingPlanner planner;
     const QVector<sc2dh::decor::DecorZone> zones = {
@@ -3460,12 +3461,18 @@ void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
     QStringList warnings;
     const sc2dh::decor::DecorationStreamingPlan plan = planner.buildPlan(objects, zones, &warnings);
     QVERIFY(warnings.isEmpty());
-    QCOMPARE(plan.doodads.size(), 3);
+    QCOMPARE(plan.doodads.size(), 4);
     QCOMPARE(plan.zones.size(), 2);
     QCOMPARE(plan.zones.at(0).doodadIndices.size(), 1);
     QCOMPARE(plan.zones.at(1).doodadIndices.size(), 1);
-    QCOMPARE(plan.staticOnlyDoodads.size(), 1);
-    QVERIFY(plan.doodads.at(plan.staticOnlyDoodads.first()).staticOnlyReason.contains(QStringLiteral("pathing/gameplay")));
+    QCOMPARE(plan.staticOnlyDoodads.size(), 2);
+    QVERIFY(std::any_of(plan.staticOnlyDoodads.cbegin(), plan.staticOnlyDoodads.cend(), [&plan](int index) {
+        return plan.doodads.at(index).staticOnlyReason.contains(QStringLiteral("pathing/gameplay"));
+    }));
+    QVERIFY(std::any_of(plan.staticOnlyDoodads.cbegin(), plan.staticOnlyDoodads.cend(), [&plan](int index) {
+        return plan.doodads.at(index).name == QStringLiteral("Raised")
+            && plan.doodads.at(index).staticOnlyReason.contains(QStringLiteral("unsupported runtime property"));
+    }));
 
     sc2dh::decor::GalaxyGenerationOptions options;
     options.functionPrefix = QStringLiteral("NAME_OUT_FUNK");
@@ -3479,11 +3486,12 @@ void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
     QVERIFY(galaxy.contains(QStringLiteral("void NAME_OUT_FUNK_2()")));
     QVERIFY(galaxy.contains(QStringLiteral("if (DecorOpt_Loaded[1]) { return; }")));
     QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_CreateActorAtPoint(\"CrateDoodad\"")));
-    QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_SetScale(1.25, 1.25, 1.25, 0.0)")));
-    QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_SetFacing(90.0)")));
+    QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_SetScale(\"1.25 1.25 1.25\")")));
+    QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_MakeModelFaceAngle(a, 90.0)")));
     QStringList galaxyErrors;
     QVERIFY2(planner.validateGeneratedGalaxy(galaxy, &galaxyErrors), qPrintable(galaxyErrors.join(QStringLiteral("; "))));
     QVERIFY(!galaxy.contains(QStringLiteral("PathingBlocker")));
+    QVERIFY(!galaxy.contains(QStringLiteral("RaisedVisual")));
 }
 
 void CoreTests::decorationStreamingKeepsExternallyReferencedDoodadsStatic()
