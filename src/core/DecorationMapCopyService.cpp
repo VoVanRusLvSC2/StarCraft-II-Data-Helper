@@ -417,8 +417,8 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         if (zone.id > 0)
             positiveZoneIds.insert(zone.id);
     }
-    if (positiveZoneIds.size() < 2) {
-        result.error = QStringLiteral("Create at least two positive decoration zones before creating an optimized map copy.");
+    if (positiveZoneIds.isEmpty()) {
+        result.error = QStringLiteral("Create at least one positive decoration zone before creating an optimized map copy.");
         return result;
     }
     if (QFileInfo::exists(result.outputArchivePath)) {

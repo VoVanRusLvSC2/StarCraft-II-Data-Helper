@@ -376,6 +376,108 @@ QString section(const QString &title, const QStringList &values, int maxItems = 
     return output;
 }
 
+QString decorZoneName(const QVector<sc2dh::decor::DecorZone> &zones, int zoneId)
+{
+    for (const sc2dh::decor::DecorZone &zone : zones) {
+        if (zone.id == zoneId)
+            return zone.name.isEmpty() ? QStringLiteral("Zone %1").arg(zoneId) : zone.name;
+    }
+    return QStringLiteral("Zone %1").arg(zoneId);
+}
+
+QString decorDoodadLabel(const sc2dh::decor::DoodadPlacement &doodad)
+{
+    const QString name = doodad.name.isEmpty()
+        ? (doodad.id.isEmpty() ? doodad.type : doodad.id)
+        : doodad.name;
+    return QStringLiteral("%1 | id=%2 | type=%3 | pos=%4,%5")
+        .arg(name.isEmpty() ? QStringLiteral("<unnamed>") : name)
+        .arg(doodad.id.isEmpty() ? QStringLiteral("-") : doodad.id)
+        .arg(doodad.type.isEmpty() ? QStringLiteral("-") : doodad.type)
+        .arg(doodad.x, 0, 'f', 2)
+        .arg(doodad.y, 0, 'f', 2);
+}
+
+QString decorationPreviewText(const sc2dh::decor::DecorationOptimizedArtifacts &artifacts,
+                              const QVector<sc2dh::decor::DecorZone> &zones,
+                              const sc2dh::decor::GalaxyGenerationOptions &options)
+{
+    const sc2dh::decor::DecorationStreamingPlan &plan = artifacts.plan;
+    QString text;
+    text += QStringLiteral("DECORATION STREAMING PREVIEW / BETA\n");
+    text += QStringLiteral("Function prefix: %1\n").arg(options.functionPrefix);
+    text += QStringLiteral("Batch per game tick: %1\n\n").arg(options.batchLimit);
+    text += QStringLiteral("How to use in Galaxy:\n");
+    text += QStringLiteral("  - Create/load zone: %1_1(); or DecorOpt_CreateZone(1);\n").arg(options.functionPrefix);
+    text += QStringLiteral("  - Delete created actors from zone: DecorOpt_ClearZone(1);\n");
+    text += QStringLiteral("  - Delete all created dynamic actors: DecorOpt_ClearAll();\n");
+    text += QStringLiteral("  - Check loaded state: DecorOpt_IsZoneLoaded(1);\n\n");
+    text += QStringLiteral("Important:\n");
+    text += QStringLiteral("  - Create Decor-Optimized Map Copy removes listed dynamic visual doodads from Objects in the COPY only.\n");
+    text += QStringLiteral("  - Original map is not modified.\n");
+    text += QStringLiteral("  - Static-only doodads stay in Objects.\n\n");
+
+    int assigned = 0;
+    for (const sc2dh::decor::ZoneAssignment &zone : plan.zones)
+        assigned += zone.doodadIndices.size();
+    text += QStringLiteral("Summary: %1 doodad(s), %2 will be moved to dynamic Galaxy actors, %3 static-only, %4 unassigned.\n\n")
+                .arg(plan.doodads.size())
+                .arg(assigned)
+                .arg(plan.staticOnlyDoodads.size())
+                .arg(plan.unassignedDoodads.size());
+
+    text += QStringLiteral("ZONES / FUNCTIONS / DECOR THAT WILL BE REMOVED FROM OBJECTS\n");
+    for (const sc2dh::decor::ZoneAssignment &zone : plan.zones) {
+        text += QStringLiteral("\n[%1] %2\n").arg(zone.zoneId).arg(decorZoneName(zones, zone.zoneId));
+        text += QStringLiteral("Function: %1_%2()\n").arg(options.functionPrefix).arg(zone.zoneId);
+        text += QStringLiteral("API call: DecorOpt_CreateZone(%1)\n").arg(zone.zoneId);
+        text += QStringLiteral("Clear call: DecorOpt_ClearZone(%1)\n").arg(zone.zoneId);
+        if (zone.doodadIndices.isEmpty()) {
+            text += QStringLiteral("  - no dynamic doodads assigned\n");
+            continue;
+        }
+        for (int doodadIndex : zone.doodadIndices) {
+            if (doodadIndex >= 0 && doodadIndex < plan.doodads.size())
+                text += QStringLiteral("  - DELETE FROM OBJECTS COPY + recreate as actor: %1\n")
+                            .arg(decorDoodadLabel(plan.doodads.at(doodadIndex)));
+        }
+    }
+
+    text += QStringLiteral("\nSTATIC-ONLY / WILL STAY IN OBJECTS\n");
+    if (plan.staticOnlyDoodads.isEmpty()) {
+        text += QStringLiteral("  - none\n");
+    } else {
+        for (int doodadIndex : plan.staticOnlyDoodads) {
+            if (doodadIndex < 0 || doodadIndex >= plan.doodads.size())
+                continue;
+            const sc2dh::decor::DoodadPlacement &doodad = plan.doodads.at(doodadIndex);
+            text += QStringLiteral("  - KEEP STATIC: %1 | reason: %2\n")
+                        .arg(decorDoodadLabel(doodad),
+                             doodad.staticOnlyReason.isEmpty() ? QStringLiteral("Static-only") : doodad.staticOnlyReason);
+        }
+    }
+
+    text += QStringLiteral("\nUNASSIGNED DYNAMIC DOODADS / NOT DELETED UNTIL ASSIGNED\n");
+    if (plan.unassignedDoodads.isEmpty()) {
+        text += QStringLiteral("  - none\n");
+    } else {
+        for (int doodadIndex : plan.unassignedDoodads) {
+            if (doodadIndex >= 0 && doodadIndex < plan.doodads.size())
+                text += QStringLiteral("  - %1\n").arg(decorDoodadLabel(plan.doodads.at(doodadIndex)));
+        }
+    }
+
+    if (!artifacts.warnings.isEmpty()) {
+        text += QStringLiteral("\nWARNINGS\n");
+        for (const QString &warning : artifacts.warnings)
+            text += QStringLiteral("  - %1\n").arg(warning);
+    }
+
+    text += QStringLiteral("\n================ GENERATED GALAXY SCRIPT ================\n\n");
+    text += artifacts.galaxySource;
+    return text;
+}
+
 bool isObjectsEntry(const QString &rootFolder, const ScannedFileInfo &file)
 {
     const QString relative = ScannedFileReader::relativePath(rootFolder, file.filePath);
@@ -430,7 +532,7 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     decorLayout->setContentsMargins(10, 10, 10, 10);
     decorLayout->setSpacing(8);
 
-    m_decorSummaryLabel = new QLabel(QStringLiteral("Create zones, preview generated Galaxy and create a safe decor-optimized map copy."), decorGroup);
+    m_decorSummaryLabel = new QLabel(QStringLiteral("Create/select a zone, assign visual doodads, preview the function name + Galaxy script, then create a map copy where those doodads are removed from Objects and recreated by script."), decorGroup);
     m_decorSummaryLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
     m_decorSummaryLabel->setWordWrap(true);
     decorLayout->addWidget(m_decorSummaryLabel);
@@ -455,19 +557,23 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     auto *form = new QFormLayout();
     form->setContentsMargins(0, 0, 0, 0);
     form->setSpacing(6);
-    form->addRow(QStringLiteral("Grid columns"), m_gridColumnsSpin);
-    form->addRow(QStringLiteral("Grid rows"), m_gridRowsSpin);
+    form->addRow(QStringLiteral("Auto zone columns"), m_gridColumnsSpin);
+    form->addRow(QStringLiteral("Auto zone rows"), m_gridRowsSpin);
     form->addRow(QStringLiteral("Padding"), m_gridPaddingSpin);
     form->addRow(QStringLiteral("Function prefix"), m_prefixEdit);
     form->addRow(QStringLiteral("Batch per tick"), m_batchSpin);
     decorControls->addLayout(form, 1);
 
     auto *buttonLayout = new QVBoxLayout();
-    auto *autoZonesButton = new QPushButton(QStringLiteral("Build Auto Zones"), decorGroup);
-    auto *addZoneButton = new QPushButton(QStringLiteral("Add Zone"), decorGroup);
-    auto *deleteZoneButton = new QPushButton(QStringLiteral("Delete Selected Zone(s)"), decorGroup);
-    auto *previewButton = new QPushButton(QStringLiteral("Preview Galaxy"), decorGroup);
-    m_createCopyButton = new QPushButton(QStringLiteral("Create Decor-Optimized Map Copy"), decorGroup);
+    auto *autoZonesButton = new QPushButton(QStringLiteral("Auto-create zones"), decorGroup);
+    auto *addZoneButton = new QPushButton(QStringLiteral("Add manual zone"), decorGroup);
+    auto *deleteZoneButton = new QPushButton(QStringLiteral("Delete selected zone(s)"), decorGroup);
+    auto *previewButton = new QPushButton(QStringLiteral("Preview decor + Galaxy"), decorGroup);
+    m_createCopyButton = new QPushButton(QStringLiteral("Create copy + delete dynamic decor"), decorGroup);
+    autoZonesButton->setToolTip(QStringLiteral("Split currently readable ObjectDoodad placements into coordinate zones."));
+    addZoneButton->setToolTip(QStringLiteral("Add one editable coordinate zone. Doodads inside it can be moved to a generated Galaxy function."));
+    previewButton->setToolTip(QStringLiteral("Show zone function names, doodads that will be removed from Objects in the copy, and the generated Galaxy script."));
+    m_createCopyButton->setToolTip(QStringLiteral("Create a new map archive. The original map stays unchanged; dynamic visual doodads are removed only from the copy."));
     buttonLayout->addWidget(autoZonesButton);
     buttonLayout->addWidget(addZoneButton);
     buttonLayout->addWidget(deleteZoneButton);
@@ -497,20 +603,20 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     m_zoneTable->setMinimumHeight(120);
     decorLayout->addWidget(m_zoneTable);
 
-    auto *doodadLabel = new QLabel(QStringLiteral("Doodad assignments: check Exclude to keep a doodad static, or enter a Zone Id to move it to that dynamic zone."), decorGroup);
+    auto *doodadLabel = new QLabel(QStringLiteral("Decor list from Objects: check Keep Static to leave a doodad on the map, or enter Zone Id to force which generated function will recreate it. Dynamic rows are deleted from Objects only in the optimized copy."), decorGroup);
     doodadLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
     doodadLabel->setWordWrap(true);
     decorLayout->addWidget(doodadLabel);
 
     m_doodadModel = new QStandardItemModel(this);
     m_doodadModel->setHorizontalHeaderLabels({
-        QStringLiteral("Exclude"),
-        QStringLiteral("Forced Zone"),
+        QStringLiteral("Keep Static"),
+        QStringLiteral("Zone Id"),
         QStringLiteral("Name"),
         QStringLiteral("Id"),
         QStringLiteral("Type"),
         QStringLiteral("Position"),
-        QStringLiteral("State")
+        QStringLiteral("Action")
     });
     m_doodadTable = new QTableView(decorGroup);
     m_doodadTable->setObjectName(QStringLiteral("decorDoodadAssignmentTable"));
@@ -527,7 +633,7 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     m_galaxyPreview->setObjectName(QStringLiteral("decorGalaxyPreview"));
     m_galaxyPreview->setReadOnly(true);
     m_galaxyPreview->setMinimumHeight(150);
-    m_galaxyPreview->setPlaceholderText(QStringLiteral("Generated Galaxy preview will appear here."));
+    m_galaxyPreview->setPlaceholderText(QStringLiteral("Preview will show: zone function names, doodads removed from Objects in the optimized copy, clear functions, and generated Galaxy code."));
     decorLayout->addWidget(m_galaxyPreview);
 
     connect(autoZonesButton, &QPushButton::clicked, this, &MapPerformancePage::buildAutoDecorZones);
@@ -611,12 +717,22 @@ void MapPerformancePage::rebuild()
         m_model->removeRows(0, m_model->rowCount());
         populateZoneTable({});
         populateDoodadTable({});
-        m_summaryLabel->setText(QStringLiteral("Objects placement file was not found or is larger than %1. Open a SC2Map/extracted map with an Objects entry.").arg(formatBytes(MaxObjectsBytes)));
+        m_summaryLabel->setText(QStringLiteral("Objects placement file was not found/readable or is larger than %1. Open a .SC2Map/.SC2Mod archive or an extracted map folder that contains the root Objects placement file. Scanned files: %2.")
+                                    .arg(formatBytes(MaxObjectsBytes))
+                                    .arg(m_result.scannedFiles.size()));
         m_warningLabel->setText(m_minimapImage.isNull()
                                     ? QStringLiteral("Estimated Static Risk is unavailable until the map placement data can be read.")
                                     : QStringLiteral("Minimap.tga background loaded from %1, but Objects placement data is unavailable.").arg(m_minimapSourceLabel));
-        m_decorSummaryLabel->setText(QStringLiteral("Decoration Streaming requires a readable Objects entry."));
-        m_galaxyPreview->clear();
+        m_decorSummaryLabel->setText(QStringLiteral("No readable Objects entry: cannot list decor, assign zones, generate exact actor script, or remove static doodads from a map copy yet."));
+        m_galaxyPreview->setPlainText(QStringLiteral(
+            "NO OBJECTS ENTRY LOADED\n\n"
+            "This mode works from the map's root Objects file.\n\n"
+            "Expected workflow:\n"
+            "1. Open a .SC2Map/.SC2Mod archive or extracted map folder that contains Objects.\n"
+            "2. Add a manual zone or auto-create zones.\n"
+            "3. The table below lists ObjectDoodad decor from Objects.\n"
+            "4. Preview shows NAME_OUT_FUNK_N(), DecorOpt_CreateZone(N), DecorOpt_ClearZone(N), and full Galaxy.\n"
+            "5. Create copy + delete dynamic decor removes those visual doodads from Objects in the copy only.\n"));
         m_createCopyButton->setEnabled(false);
         m_details->clear();
         return;
@@ -874,12 +990,12 @@ void MapPerformancePage::updateDoodadTableState(const sc2dh::decor::DecorationSt
         if (!state)
             continue;
         if (zoneByDoodadIndex.contains(row)) {
-            state->setText(QStringLiteral("Dynamic zone %1").arg(zoneByDoodadIndex.value(row)));
+            state->setText(QStringLiteral("Will be deleted from Objects copy; recreate in zone %1").arg(zoneByDoodadIndex.value(row)));
         } else if (unassigned.contains(row)) {
-            state->setText(QStringLiteral("Unassigned dynamic doodad"));
+            state->setText(QStringLiteral("Dynamic candidate, but not inside any zone; will stay in Objects"));
         } else {
             const QString reason = plan.doodads.at(row).staticOnlyReason;
-            state->setText(reason.isEmpty() ? QStringLiteral("Static-only") : reason);
+            state->setText(reason.isEmpty() ? QStringLiteral("Keep static in Objects") : reason);
         }
     }
     m_doodadTable->resizeColumnsToContents();
@@ -890,7 +1006,7 @@ void MapPerformancePage::buildAutoDecorZones()
     if (!m_hasObjects) {
         QMessageBox::warning(this,
                              QStringLiteral("Decoration Streaming"),
-                             QStringLiteral("Objects entry is not available."));
+                             QStringLiteral("Objects entry is not available. Open a .SC2Map/.SC2Mod archive or extracted map folder that contains the root Objects placement file."));
         return;
     }
 
@@ -1004,8 +1120,11 @@ void MapPerformancePage::updateDecorPreview()
 {
     if (!m_hasObjects) {
         m_decorPreview = {};
-        m_decorSummaryLabel->setText(QStringLiteral("Decoration Streaming requires a readable Objects entry."));
-        m_galaxyPreview->clear();
+        m_decorSummaryLabel->setText(QStringLiteral("No readable Objects entry: open a map archive or extracted map folder with Objects first."));
+        m_galaxyPreview->setPlainText(QStringLiteral(
+            "NO OBJECTS ENTRY LOADED\n\n"
+            "Open a .SC2Map/.SC2Mod archive or extracted map folder with the root Objects file.\n"
+            "After that this panel will list every ObjectDoodad, show which function creates each zone, and create a copy with dynamic decor removed from Objects.\n"));
         m_createCopyButton->setEnabled(false);
         return;
     }
@@ -1014,8 +1133,15 @@ void MapPerformancePage::updateDecorPreview()
     static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorZones(m_decorZones);
     if (m_decorZones.isEmpty()) {
         m_decorPreview = {};
-        m_decorSummaryLabel->setText(QStringLiteral("No decoration zones defined. Use Build Auto Zones or Add Zone."));
-        m_galaxyPreview->clear();
+        m_decorSummaryLabel->setText(QStringLiteral("No decoration zones defined. Use Auto-create zones or Add manual zone. Preview/copy needs at least one zone with dynamic visual doodads."));
+        m_galaxyPreview->setPlainText(QStringLiteral(
+            "CREATE A ZONE FIRST\n\n"
+            "Use Add manual zone for one custom area, or Auto-create zones to split all runtime-safe visual doodads by coordinates.\n"
+            "Then this preview will show:\n"
+            "- NAME_OUT_FUNK_N() function names;\n"
+            "- which doodads will be deleted from Objects in the optimized copy;\n"
+            "- DecorOpt_ClearZone(N) / DecorOpt_ClearAll();\n"
+            "- full generated Galaxy script.\n"));
         m_createCopyButton->setEnabled(false);
         return;
     }
@@ -1037,7 +1163,7 @@ void MapPerformancePage::updateDecorPreview()
     for (const sc2dh::decor::ZoneAssignment &assignment : plan.zones)
         dynamicAssigned += assignment.doodadIndices.size();
 
-    QString summary = QStringLiteral("%1 doodad(s), %2 dynamic assigned, %3 static-only, %4 unassigned. Prefix: %5. Batch: %6.")
+    QString summary = QStringLiteral("%1 doodad(s), %2 will be deleted from Objects in the optimized copy and recreated by Galaxy, %3 static-only, %4 unassigned. Prefix/function example: %5_1(). Batch: %6.")
                           .arg(plan.doodads.size())
                           .arg(dynamicAssigned)
                           .arg(plan.staticOnlyDoodads.size())
@@ -1046,15 +1172,15 @@ void MapPerformancePage::updateDecorPreview()
                           .arg(options.batchLimit);
     if (!m_decorPreview.warnings.isEmpty())
         summary += QStringLiteral(" Warnings: %1").arg(m_decorPreview.warnings.join(QStringLiteral(" | ")));
-    if (m_decorZones.size() < 2)
-        summary += QStringLiteral(" Create at least two decoration zones before creating an optimized map copy.");
+    if (m_decorZones.isEmpty())
+        summary += QStringLiteral(" Create at least one decoration zone before creating an optimized map copy.");
     if (sourceArchivePath().isEmpty())
         summary += QStringLiteral(" Create-copy UI currently requires a .SC2Map/.SC2Mod archive source; components folders can still be inspected.");
     summary += QStringLiteral(" Archive creation re-scans scripts/triggers and may keep more doodads static if referenced.");
     m_decorSummaryLabel->setText(summary);
-    m_galaxyPreview->setPlainText(m_decorPreview.galaxySource);
+    m_galaxyPreview->setPlainText(decorationPreviewText(m_decorPreview, m_decorZones, options));
     m_createCopyButton->setEnabled(!sourceArchivePath().isEmpty()
-                                   && m_decorZones.size() >= 2
+                                   && !m_decorZones.isEmpty()
                                    && dynamicAssigned > 0
                                    && m_decorPreview.warnings.isEmpty());
 }
@@ -1088,10 +1214,10 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
     }
 
     const QVector<sc2dh::decor::DecorZone> zones = zonesFromModel();
-    if (zones.size() < 2) {
+    if (zones.isEmpty()) {
         QMessageBox::warning(this,
                              QStringLiteral("Create Decor-Optimized Map Copy"),
-                             QStringLiteral("Create at least two decoration zones first."));
+                             QStringLiteral("Create at least one decoration zone first."));
         return;
     }
 

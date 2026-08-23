@@ -3928,9 +3928,17 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     };
     const sc2dh::decor::DecorOptimizedMapResult oneZoneResult =
         sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(oneZoneRequest);
-    QVERIFY(!oneZoneResult.success);
-    QVERIFY(oneZoneResult.error.contains(QStringLiteral("at least two")));
-    QVERIFY(!QFileInfo::exists(oneZoneRequest.outputArchivePath));
+    QVERIFY2(oneZoneResult.success, qPrintable(oneZoneResult.error));
+    QVERIFY(QFileInfo::exists(oneZoneRequest.outputArchivePath));
+    QVERIFY(oneZoneResult.removedDoodads > 0);
+    Sc2Archive oneZoneOptimized;
+    QVERIFY2(oneZoneOptimized.load(oneZoneRequest.outputArchivePath, &error), qPrintable(error));
+    QByteArray oneZoneRuntime;
+    QVERIFY2(oneZoneOptimized.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &oneZoneRuntime, &error), qPrintable(error));
+    QVERIFY(QString::fromUtf8(oneZoneRuntime).contains(QStringLiteral("void NAME_OUT_FUNK_1()")));
+    QByteArray oneZoneObjects;
+    QVERIFY2(oneZoneOptimized.readEntry(QStringLiteral("Objects"), &oneZoneObjects, &error), qPrintable(error));
+    QVERIFY(!QString::fromUtf8(oneZoneObjects).contains(QStringLiteral("FreeVisual")));
 
     sc2dh::decor::DecorOptimizedMapRequest request;
     request.sourceArchivePath = sourcePath;
