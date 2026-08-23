@@ -339,6 +339,7 @@ add_executable(SC2OptimizeFolder
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
+    src/core/UnifiedReferenceIndex.cpp
     src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
     src/core/BackupManager.cpp
@@ -381,6 +382,7 @@ add_executable(SC2DataCollectionProbe
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
+    src/core/UnifiedReferenceIndex.cpp
     src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
     src/core/BackupManager.cpp
@@ -428,6 +430,7 @@ add_executable(SC2OptimizeMaps
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
+    src/core/UnifiedReferenceIndex.cpp
     src/core/ArchiveReferenceRewriter.cpp
     src/core/FolderAnalyzer.cpp
     src/core/BackupManager.cpp
