@@ -47,6 +47,28 @@
             "problemMatcher": []
         },
         {
+            "label": "SC2 Data Helper: prepare Debug",
+            "type": "process",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\scripts\\dev.ps1",
+                "-Action", "Stage", "-Configuration", "Debug"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "SC2 Data Helper: prepare Release",
+            "type": "process",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\scripts\\dev.ps1",
+                "-Action", "Stage", "-Configuration", "Release"
+            ],
+            "problemMatcher": []
+        },
+        {
             "label": "SC2 Data Helper: run Debug",
             "type": "process",
             "command": "powershell",

@@ -8,7 +8,7 @@
             "program": "${workspaceFolder}\\build\\windows-msvc\\Release\\SC2DataHelper.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "SC2 Data Helper: build Release",
+            "preLaunchTask": "SC2 Data Helper: prepare Release",
             "externalConsole": false
         },
         {
@@ -18,7 +18,7 @@
             "program": "${workspaceFolder}\\build\\windows-msvc\\Debug\\SC2DataHelper.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "SC2 Data Helper: build Debug",
+            "preLaunchTask": "SC2 Data Helper: prepare Debug",
             "externalConsole": false
         }
     ]
