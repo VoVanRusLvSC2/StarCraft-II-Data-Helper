@@ -30,7 +30,9 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G "Ninja Multi-Config"
       - name: Build
-        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums
+        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums SC2DataHelperTests
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
       - name: Stage release files
         shell: pwsh
         run: |

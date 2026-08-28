@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "SC2 Data Helper (Release)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}\\build\\windows-msvc\\Release\\SC2DataHelper.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "SC2 Data Helper: build Release",
+            "externalConsole": false
+        },
+        {
+            "name": "SC2 Data Helper (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}\\build\\windows-msvc\\Debug\\SC2DataHelper.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "SC2 Data Helper: build Debug",
+            "externalConsole": false
+        }
+    ]
+}

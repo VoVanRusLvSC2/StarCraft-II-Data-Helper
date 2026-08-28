@@ -1,0 +1,61 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "SC2 Data Helper: configure",
+            "type": "process",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\scripts\\dev.ps1",
+                "-Action", "Configure"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "SC2 Data Helper: build Debug",
+            "type": "process",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\scripts\\dev.ps1",
+                "-Action", "Build", "-Configuration", "Debug"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "SC2 Data Helper: build Release",
+            "type": "process",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\scripts\\dev.ps1",
+                "-Action", "Build", "-Configuration", "Release"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "SC2 Data Helper: test Debug",
+            "type": "process",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\scripts\\dev.ps1",
+                "-Action", "Test", "-Configuration", "Debug"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "SC2 Data Helper: run Debug",
+            "type": "process",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\scripts\\dev.ps1",
+                "-Action", "Run", "-Configuration", "Debug"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

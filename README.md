@@ -179,14 +179,19 @@ Requirements:
 - Visual Studio 2022 or another C++20 compiler
 
 ```powershell
-cmake -S . -B build
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
+$env:QT_ROOT = 'C:\Qt\6.8.2\msvc2022_64'
+.\scripts\dev.ps1 -Action Test -Configuration Debug
+.\scripts\dev.ps1 -Action Run -Configuration Debug
 ```
 
 Release executable:
 
-`build/Release/SC2DataHelper.exe`
+`build/windows-msvc/Release/SC2DataHelper.exe`
+
+`scripts/dev.ps1` is also the recommended entry point for VS Code and coding
+agents. It uses the checked-in CMake preset instead of paths specific to one
+computer. Install CMake, Visual Studio 2022 with C++ support, and a Qt kit;
+set `QT_ROOT` to that kit before running it.
 
 ## Notes
 

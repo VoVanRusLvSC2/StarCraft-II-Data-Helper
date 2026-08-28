@@ -74,6 +74,10 @@ __pycache__/
 # IDE and local helper state
 .vs/
 .vscode/
+!.vscode/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
 .lh/
 out/
 
