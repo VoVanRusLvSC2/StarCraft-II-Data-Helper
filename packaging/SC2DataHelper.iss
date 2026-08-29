@@ -18,10 +18,12 @@ OutputBaseFilename=SC2DataHelper-{#AppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
 LicenseFile=..\LICENSE
 
 [Files]
-Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Excludes: "vc_redist.x64.exe"
+Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{group}\SC2 Data Helper"; Filename: "{app}\{#AppExeName}"
@@ -31,4 +33,5 @@ Name: "{commondesktop}\SC2 Data Helper"; Filename: "{app}\{#AppExeName}"; Tasks:
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Run]
+Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Flags: waituntilterminated
 Filename: "{app}\{#AppExeName}"; Description: "Launch SC2 Data Helper"; Flags: nowait postinstall skipifsilent

@@ -30,7 +30,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G "Ninja Multi-Config"
       - name: Build
-        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums SC2DataHelperTests
+        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums SC2DecorOptimizeMap SC2DataHelperTests
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
       - name: Stage release files
@@ -42,6 +42,7 @@ jobs:
           Copy-Item build/Release/SC2DataHelper.exe $stage/
           Copy-Item build/Release/SC2OptimizeMaps.exe $stage/
           Copy-Item build/Release/SC2RepairMapEnums.exe $stage/
+          Copy-Item build/Release/SC2DecorOptimizeMap.exe $stage/
           Copy-Item resources $stage/resources -Recurse
           Copy-Item scripts $stage/scripts -Recurse
           Copy-Item LICENSE $stage/
@@ -51,7 +52,43 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:RELEASE_TAG.TrimStart('v')
-          windeployqt --release --no-translations --compiler-runtime "dist/SC2DataHelper-$version-win64/SC2DataHelper.exe"
+          $stage = "dist/SC2DataHelper-$version-win64"
+          Get-ChildItem $stage -Filter '*.exe' -File | ForEach-Object {
+            windeployqt --release --no-translations $_.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "windeployqt failed for $($_.Name)"
+            }
+          }
+      - name: Bundle Microsoft Visual C++ runtime
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $runtimePath = "dist/SC2DataHelper-$version-win64/vc_redist.x64.exe"
+          Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $runtimePath
+          $signature = Get-AuthenticodeSignature $runtimePath
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Microsoft Corporation*') {
+            throw 'The bundled Visual C++ runtime is not a valid Microsoft-signed installer.'
+          }
+      - name: Verify staged package
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $stage = "dist/SC2DataHelper-$version-win64"
+          $required = @(
+            'SC2DataHelper.exe',
+            'SC2OptimizeMaps.exe',
+            'SC2RepairMapEnums.exe',
+            'SC2DecorOptimizeMap.exe',
+            'Qt6Core.dll',
+            'Qt6Gui.dll',
+            'Qt6Widgets.dll',
+            'platforms/qwindows.dll',
+            'vc_redist.x64.exe'
+          )
+          $missing = $required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $stage $_)) }
+          if ($missing) {
+            throw "Release package is incomplete: $($missing -join ', ')"
+          }
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Build installer
