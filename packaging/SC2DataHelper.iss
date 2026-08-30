@@ -26,12 +26,12 @@ Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\*"; DestDir: "{app}"; Flags: 
 Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
-Name: "{group}\SC2 Data Helper"; Filename: "{app}\{#AppExeName}"
-Name: "{commondesktop}\SC2 Data Helper"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{group}\SC2 Map Optimizer (GUI)"; Filename: "{app}\{#AppExeName}"
+Name: "{commondesktop}\SC2 Map Optimizer (GUI)"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut for SC2 Map Optimizer (GUI)"
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Flags: waituntilterminated
-Filename: "{app}\{#AppExeName}"; Description: "Launch SC2 Data Helper"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Description: "Launch SC2 Map Optimizer (GUI)"; Flags: nowait postinstall skipifsilent
