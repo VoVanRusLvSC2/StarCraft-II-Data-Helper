@@ -109,6 +109,15 @@ int main(int argc, char *argv[])
         return 3;
     }
 
+    QByteArray componentList;
+    if (!archive.readEntry(QStringLiteral("ComponentList.SC2Components"), &componentList, &error)
+        || componentList.isEmpty()) {
+        err << "mandatory_component_missing=ComponentList.SC2Components" << '\n';
+        if (!error.isEmpty())
+            err << "mandatory_component_error=" << error << '\n';
+        return 4;
+    }
+
     QTemporaryDir workspace;
     if (!workspace.isValid()) {
         err << "temp_workspace_failed\n";
@@ -179,6 +188,7 @@ int main(int argc, char *argv[])
     if (statsOnly) {
         out << "archive=" << archivePath << '\n';
         out << "archive_entries=" << archive.totalEntriesCount() << '\n';
+        out << "component_list_bytes=" << componentList.size() << '\n';
         out << "game_data_xml_materialized=" << materializedXml << '\n';
         out << "families_detected=" << families.size() << '\n';
         out << "root_type_conflicts=" << skippedConflicts << '\n';
@@ -219,6 +229,7 @@ int main(int argc, char *argv[])
 
     out << "archive=" << archivePath << '\n';
     out << "archive_entries=" << archive.totalEntriesCount() << '\n';
+    out << "component_list_bytes=" << componentList.size() << '\n';
     out << "game_data_xml_materialized=" << materializedXml << '\n';
     out << "existing_datacollection_entries_skipped_for_zero_generation=" << skippedExistingCollections << '\n';
     out << "families_detected=" << families.size() << '\n';

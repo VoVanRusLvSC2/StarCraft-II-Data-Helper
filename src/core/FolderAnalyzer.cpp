@@ -11,7 +11,6 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QIODevice>
-#include <QSaveFile>
 #include <QRegularExpression>
 #include <QQueue>
 
@@ -442,6 +441,7 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
             info.usageState = (info.whitelisted || info.protectedObject || info.scriptReferences > 0)
                 ? UsageState::Blocked : UsageState::Used;
             info.state = CandidateState::Blocked;
+            info.removalSafety = RemovalSafety::Unsafe;
             info.riskLevel = QStringLiteral("high");
         } else {
             const bool disconnected = info.incomingXmlReferences == 0 && info.outgoingXmlTargets.isEmpty();
@@ -455,6 +455,7 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
                 info.reason = QStringLiteral("Linked subgraph is not reachable from any gameplay/editor/runtime root");
             }
             info.state = CandidateState::Safe;
+            info.removalSafety = RemovalSafety::Safe;
             info.riskLevel = isPrimaryEntity(node)
                 ? (disconnected ? QStringLiteral("low") : QStringLiteral("medium"))
                 : QStringLiteral("medium");
@@ -560,6 +561,28 @@ bool FolderAnalyzer::analyzeFolder(const QString &rootFolder,
         scanned.size = info.size();
         result->scannedFiles.append(scanned);
 
+        constexpr qint64 maxIndexedSourceBytes = 16ll * 1024ll * 1024ll;
+        if (scanned.size > maxIndexedSourceBytes)
+        {
+            result->unsupportedSources.append(
+                QStringLiteral("%1: source exceeds the %2 MiB reference-index limit")
+                    .arg(filePath)
+                    .arg(maxIndexedSourceBytes / (1024 * 1024)));
+        }
+        else
+        {
+            QString revisionError;
+            const SourceRevision revision = captureSourceRevision(filePath, &revisionError);
+            if (!revisionError.isEmpty())
+            {
+                result->unreadableSources.append(revisionError);
+            }
+            else
+            {
+                result->sourceRevisions.append(revision);
+            }
+        }
+
         if (!scanned.isXml)
         {
             continue;
@@ -595,6 +618,8 @@ bool FolderAnalyzer::analyzeFolder(const QString &rootFolder,
     if (progress)
         progress(filePaths.size(), filePaths.size(), QString());
 
+    result->sourceDiscoveryComplete = true;
+
     return finalizeAnalysisResult(result, whitelistIds, errorMessage,
                                   [&] {
                                       if (progress)
@@ -615,8 +640,22 @@ bool FolderAnalyzer::finalizeAnalysisResult(AnalysisResult *result,
             *errorMessage = QStringLiteral("Analysis canceled.");
         return false;
     }
+    result->referenceExtractionComplete = true;
     populateDuplicateAndCandidateFlags(result, whitelistIds);
+    result->dependencyGraphComplete = true;
     DeepCleanupService().populateCandidates(result);
+
+    for (const SourceRevision &revision : result->sourceRevisions)
+    {
+        QString revisionError;
+        if (sourceRevisionMatches(revision, &revisionError))
+            continue;
+        result->sourceChangedDuringAnalysis = true;
+        if (!revisionError.isEmpty() && !result->incompleteSources.contains(revisionError))
+            result->incompleteSources.append(revisionError);
+    }
+    updateAnalysisCompleteness(result);
+    enforceAnalysisCompletenessSafety(result);
     result->analysisReportText = buildAnalysisReport(*result);
     result->plannedChangesReportText = buildDryRunReport(*result, QVector<int>{});
     return true;
@@ -627,6 +666,7 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
     QString report;
     report += QStringLiteral("SC2 Data Helper Analysis Report\n");
     report += QStringLiteral("Root folder: %1\n").arg(result.rootFolder);
+    report += QStringLiteral("Analysis completeness: %1\n").arg(analysisCompletenessName(result.completeness));
     report += QStringLiteral("Total files scanned: %1\n").arg(result.totalFilesScanned());
     report += QStringLiteral("Total XML files: %1\n").arg(result.totalXmlFiles());
     report += QStringLiteral("Total data nodes found: %1\n").arg(result.totalDataNodes());
@@ -641,6 +681,9 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
             ++blockedUnused;
     report += QStringLiteral("Blocked unused data objects: %1\n").arg(blockedUnused);
     report += QStringLiteral("Parse errors: %1\n\n").arg(result.parseErrors.size());
+    report += QStringLiteral("Unreadable sources: %1\n").arg(result.unreadableSources.size());
+    report += QStringLiteral("Unsupported sources: %1\n").arg(result.unsupportedSources.size());
+    report += QStringLiteral("Incomplete sources: %1\n\n").arg(result.incompleteSources.size());
 
     report += QStringLiteral("Duplicate IDs\n");
     for (const DuplicateIdGroup &group : result.duplicateIdGroups)
@@ -749,6 +792,13 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
     {
         report += QStringLiteral("- %1: %2\n").arg(error.filePath, error.message);
     }
+    report += QStringLiteral("\nAnalysis source diagnostics\n");
+    for (const QString &source : result.unreadableSources)
+        report += QStringLiteral("- Unreadable: %1\n").arg(source);
+    for (const QString &source : result.unsupportedSources)
+        report += QStringLiteral("- Unsupported: %1\n").arg(source);
+    for (const QString &source : result.incompleteSources)
+        report += QStringLiteral("- Incomplete: %1\n").arg(source);
     return report;
 }
 
@@ -847,6 +897,14 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
     if (skippedNodes)
     {
         *skippedNodes = 0;
+    }
+
+    const DestructiveOperationPermission initialPermission = canApplyDestructiveChanges(result);
+    if (!initialPermission.allowed)
+    {
+        if (errorMessage)
+            *errorMessage = destructiveOperationPermissionText(initialPermission);
+        return false;
     }
 
     if (selectedRows.isEmpty())
@@ -960,23 +1018,12 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
         }
     }
 
-    QStringList changedFileList;
-    for (auto it = locationsByFile.cbegin(); it != locationsByFile.cend(); ++it)
+    const DestructiveOperationPermission commitPermission = canApplyDestructiveChanges(result);
+    if (!commitPermission.allowed)
     {
-        changedFileList.append(relativePath(rootFolder, it.key()));
-    }
-    for (const QString &file : collectionFiles)
-        if (!changedFileList.contains(relativePath(rootFolder, file))) changedFileList.append(relativePath(rootFolder, file));
-    QString backupRoot;
-    BackupManager backupManager;
-    if (!backupManager.createFolderBackup(rootFolder, changedFileList, analysisReport, plannedChanges, &backupRoot, errorMessage))
-    {
+        if (errorMessage)
+            *errorMessage = destructiveOperationPermissionText(commitPermission);
         return false;
-    }
-
-    if (backupFolder)
-    {
-        *backupFolder = backupRoot;
     }
 
     QHash<QString, QByteArray> rewrittenFiles;
@@ -1026,91 +1073,88 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
         rewrittenFiles.insert(filePath, rewritten);
     }
 
-    QStringList committedFiles;
-    const auto rollbackCommitted = [&]() {
-        if (backupRoot.startsWith(QStringLiteral("disabled"), Qt::CaseInsensitive))
-            return;
-        for (const QString &committed : committedFiles) {
-            const QString backupPath = QDir(backupRoot).absoluteFilePath(relativePath(rootFolder, committed));
-            QFile::remove(committed);
-            QFile::copy(backupPath, committed);
-        }
-    };
-    for (auto it = rewrittenFiles.cbegin(); it != rewrittenFiles.cend(); ++it)
-    {
-        QSaveFile saveFile(it.key());
-        if (!saveFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        {
-            if (errorMessage)
-            {
-                *errorMessage = QStringLiteral("Failed to open file for safe write: %1").arg(it.key());
-            }
-            rollbackCommitted();
-            return false;
-        }
-        if (saveFile.write(it.value()) != it.value().size())
-        {
-            if (errorMessage)
-            {
-                *errorMessage = QStringLiteral("Failed to write file safely: %1").arg(it.key());
-            }
-            rollbackCommitted();
-            return false;
-        }
-        if (!saveFile.commit())
-        {
-            if (errorMessage)
-            {
-                *errorMessage = QStringLiteral("Failed to commit safe write: %1").arg(it.key());
-            }
-            rollbackCommitted();
-            return false;
-        }
-        committedFiles.append(it.key());
-    }
-
     AnalysisResult verified;
-    QString verifyError;
-    if (!analyzeFolder(rootFolder, whitelistIds, &verified, &verifyError)) {
-        if (errorMessage) *errorMessage = QStringLiteral("Post-delete analysis failed: %1").arg(verifyError);
-        rollbackCommitted();
+    const auto validateCommitted = [&](QString *validationError) {
+        QString verifyError;
+        if (!analyzeFolder(rootFolder, whitelistIds, &verified, &verifyError)) {
+            if (validationError) *validationError = QStringLiteral("Post-delete analysis failed: %1").arg(verifyError);
+            return false;
+        }
+        if (verified.completeness != AnalysisCompleteness::Complete) {
+            if (validationError) *validationError = QStringLiteral("Post-delete verification was incomplete: %1.")
+                                                        .arg(analysisCompletenessName(verified.completeness));
+            return false;
+        }
+        for (const DataNode &node : verified.nodes) {
+            if (removedIds.contains(node.id)) {
+                if (validationError) *validationError = QStringLiteral("Post-delete verification failed: ID %1 still exists.").arg(node.id);
+                return false;
+            }
+            for (const QString &reference : node.referencedIds) if (removedIds.contains(reference)) {
+                if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive))
+                    continue;
+                if (validationError) *validationError = QStringLiteral("Post-delete verification failed: %1 still references %2.").arg(node.id, reference);
+                return false;
+            }
+        }
+        QSet<QString> verifiedReachableIds;
+        for (const UnusedCandidateInfo &info : verified.unusedCandidates) {
+            if (info.nodeIndex < 0 || info.nodeIndex >= verified.nodes.size()) continue;
+            if (info.usageState == UsageState::Used || info.usageState == UsageState::Blocked)
+                verifiedReachableIds.insert(verified.nodes[info.nodeIndex].id);
+        }
+        for (const UnusedCandidateInfo &info : result.unusedCandidates) {
+            if (info.nodeIndex < 0 || info.nodeIndex >= result.nodes.size()) continue;
+            const QString id = result.nodes[info.nodeIndex].id;
+            if ((info.usageState == UsageState::Used || info.usageState == UsageState::Blocked)
+                && !info.usagePath.isEmpty()
+                && !removedIds.contains(id) && !verifiedReachableIds.contains(id)) {
+                if (validationError) *validationError = QStringLiteral("Post-delete verification failed: preserved object %1 lost its usage path.").arg(id);
+                return false;
+            }
+        }
+        return true;
+    };
+
+    QVector<TransactionalFileChange> transactionChanges;
+    for (auto it = rewrittenFiles.cbegin(); it != rewrittenFiles.cend(); ++it) {
+        TransactionalFileChange change;
+        change.relativePath = relativePath(rootFolder, it.key());
+        change.contents = it.value();
+        transactionChanges.append(change);
+    }
+    const auto validateStaged = [&](const QString &stagingFolder, QString *validationError) {
+        XmlLoader stagedLoader;
+        for (const TransactionalFileChange &change : transactionChanges) {
+            QFile file(QDir(stagingFolder).absoluteFilePath(change.relativePath));
+            if (!file.open(QIODevice::ReadOnly)) {
+                if (validationError) *validationError = QStringLiteral("Cannot reopen staged XML: %1").arg(change.relativePath);
+                return false;
+            }
+            QVector<DataNode> stagedNodes;
+            QString parseError;
+            if (!stagedLoader.extractNodes(change.relativePath, file.readAll(), &stagedNodes, &parseError)) {
+                if (validationError) *validationError = QStringLiteral("Staged XML validation failed for %1: %2")
+                                                            .arg(change.relativePath, parseError);
+                return false;
+            }
+        }
+        return true;
+    };
+
+    const FolderSaveTransactionResult transaction = BackupManager().applyFolderTransaction(
+        rootFolder, transactionChanges, analysisReport, plannedChanges, validateStaged, validateCommitted);
+    if (!transaction.success) {
+        if (errorMessage) *errorMessage = QStringLiteral("[%1] %2")
+                                              .arg(operationErrorCodeName(transaction.errorCode), transaction.error);
         return false;
     }
-    for (const DataNode &node : verified.nodes) {
-        if (removedIds.contains(node.id)) {
-            if (errorMessage) *errorMessage = QStringLiteral("Post-delete verification failed: ID %1 still exists.").arg(node.id);
-            rollbackCommitted();
-            return false;
-        }
-        for (const QString &reference : node.referencedIds) if (removedIds.contains(reference)) {
-            if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive))
-                continue;
-            if (errorMessage) *errorMessage = QStringLiteral("Post-delete verification failed: %1 still references %2.").arg(node.id, reference);
-            rollbackCommitted();
-            return false;
-        }
-    }
-    QSet<QString> verifiedReachableIds;
-    for (const UnusedCandidateInfo &info : verified.unusedCandidates) {
-        if (info.nodeIndex < 0 || info.nodeIndex >= verified.nodes.size()) continue;
-        if (info.usageState == UsageState::Used || info.usageState == UsageState::Blocked)
-            verifiedReachableIds.insert(verified.nodes[info.nodeIndex].id);
-    }
-    for (const UnusedCandidateInfo &info : result.unusedCandidates) {
-        if (info.nodeIndex < 0 || info.nodeIndex >= result.nodes.size()) continue;
-        const QString id = result.nodes[info.nodeIndex].id;
-        if ((info.usageState == UsageState::Used || info.usageState == UsageState::Blocked)
-            && !info.usagePath.isEmpty()
-            && !removedIds.contains(id) && !verifiedReachableIds.contains(id)) {
-            if (errorMessage) *errorMessage = QStringLiteral("Post-delete verification failed: preserved object %1 lost its usage path.").arg(id);
-            rollbackCommitted();
-            return false;
-        }
-    }
+    if (backupFolder)
+        *backupFolder = transaction.backupFolder;
 
     if (changedFiles)
     {
-        *changedFiles = changedFileList;
+        *changedFiles = transaction.changedFiles;
     }
     if (removedNodes)
     {

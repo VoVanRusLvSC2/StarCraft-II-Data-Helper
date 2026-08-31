@@ -23,6 +23,7 @@ inline void applyExternalConsumerSafety(AnalysisResult *analysis)
         if (candidate.state != CandidateState::Safe)
             continue;
         candidate.state = CandidateState::Blocked;
+        candidate.removalSafety = RemovalSafety::Unsafe;
         candidate.usageState = UsageState::Blocked;
         candidate.protectedObject = true;
         candidate.reason = QStringLiteral("The object can be referenced by external maps/mods that were not analyzed together.");

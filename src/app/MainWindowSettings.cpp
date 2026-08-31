@@ -4,6 +4,7 @@
 #include "app/AppSettings.h"
 #include "app/MainWindow.h"
 #include "app/ModalBackdrop.h"
+#include "app/TranslationManager.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -68,7 +69,22 @@ namespace
     QT_TRANSLATE_NOOP("Settings", "GRAPHICS AND PREVIEW SETTINGS"),
     QT_TRANSLATE_NOOP("Settings", "OPTIMIZATION SETTINGS"),
     QT_TRANSLATE_NOOP("Settings", "Restart required"),
-    QT_TRANSLATE_NOOP("Settings", "Language, rendering mode and cursor changes will be fully applied after restarting SC2 Data Helper.")
+    QT_TRANSLATE_NOOP("Settings", "Rendering mode and cursor changes will be fully applied after restarting SC2 Data Helper."),
+    QT_TRANSLATE_NOOP("Settings", "OPTIONS // SYSTEM CONFIGURATION"),
+    QT_TRANSLATE_NOOP("Settings", "X"),
+    QT_TRANSLATE_NOOP("Settings", "Shows animated soft blue background glows behind the main interface."),
+    QT_TRANSLATE_NOOP("Settings", "Draws SC2 frames, scanlines and background texture layers. This never disables map texture analysis."),
+    QT_TRANSLATE_NOOP("Settings", "Music volume: %1%"),
+    QT_TRANSLATE_NOOP("Settings", "Enable Duplicate Merge in Optimization"),
+    QT_TRANSLATE_NOOP("Settings", "Enabled by default. When enabled, Optimization adds the Duplicate Merge review step."),
+    QT_TRANSLATE_NOOP("Settings", "Create backup files before applying changes"),
+    QT_TRANSLATE_NOOP("Settings", "When disabled, SC2 archives and folders are edited without creating persistent .bak or backup_ copies."),
+    QT_TRANSLATE_NOOP("Settings", "Closed Project / Aggressive standardization"),
+    QT_TRANSLATE_NOOP("Settings", "Allows public SC2Mod/SC2Campaign IDs and imports to change. Enable only when every consuming map/mod is included in your project and will be updated together."),
+    QT_TRANSLATE_NOOP("Settings", "WARNING: this mode can break external maps that depend on renamed catalog IDs or removed imports. A backup is strongly recommended."),
+    QT_TRANSLATE_NOOP("Settings", " MiB"),
+    QT_TRANSLATE_NOOP("Settings", "Enable Closed Project mode?"),
+    QT_TRANSLATE_NOOP("Settings", "This allows public SC2Mod/SC2Campaign IDs and imports to change. External maps that are not updated together can break. Enable aggressive standardization?")
 };
 
 QString settingsText(const char *source)
@@ -439,11 +455,11 @@ void MainWindowSettings::show()
     titleTextLayout->setContentsMargins(0, 0, 0, 0);
     titleTextLayout->setSpacing(0);
     titleTextLayout->addWidget(windowTitle);
-    auto *windowContext = new QLabel(QStringLiteral("OPTIONS // SYSTEM CONFIGURATION"), titleBar);
+    auto *windowContext = new QLabel(settingsText("OPTIONS // SYSTEM CONFIGURATION"), titleBar);
     windowContext->setObjectName(QStringLiteral("settingsWindowContext"));
     addTextGlow(windowContext, QColor(22, 215, 255, 190), 9.0);
     titleTextLayout->addWidget(windowContext);
-    auto *closeButton = new QPushButton(QStringLiteral("X"), titleBar);
+    auto *closeButton = new QPushButton(settingsText("X"), titleBar);
     closeButton->setObjectName(QStringLiteral("settingsCloseButton"));
     closeButton->setFixedSize(38, 32);
     closeButton->setFocusPolicy(Qt::NoFocus);
@@ -471,11 +487,11 @@ void MainWindowSettings::show()
     auto *backgroundGlowCheck = checkBoxRow(
         settingsText("Blue background glow effects"),
         settings.value(QStringLiteral("ui/backgroundGlows"), true).toBool(),
-        QStringLiteral("Shows animated soft blue background glows behind the main interface."));
+        settingsText("Shows animated soft blue background glows behind the main interface."));
     auto *decorativeTexturesCheck = checkBoxRow(
         settingsText("Decorative interface textures"),
         settings.value(QStringLiteral("ui/decorativeTextures"), true).toBool(),
-        QStringLiteral("Draws SC2 frames, scanlines and background texture layers. This never disables map texture analysis."));
+        settingsText("Draws SC2 frames, scanlines and background texture layers. This never disables map texture analysis."));
     auto *customCursorCheck = checkBoxRow(settingsText("SC2 custom cursor"),
                                           settings.value(QStringLiteral("ui/customCursor"), true).toBool());
     auto *musicCheck = checkBoxRow(settingsText("Background music"), AudioManager::isMusicEnabled());
@@ -487,23 +503,23 @@ void MainWindowSettings::show()
     musicSlider->setValue(int(AudioManager::musicVolume() * 100.0));
     musicSlider->setFocusPolicy(Qt::NoFocus);
     QObject::connect(musicSlider, &QSlider::valueChanged, &dialog, [musicValue](int value)
-                     { musicValue->setText(QStringLiteral("Music volume: %1%").arg(value)); });
-    musicValue->setText(QStringLiteral("Music volume: %1%").arg(musicSlider->value()));
+                     { musicValue->setText(settingsText("Music volume: %1%").arg(value)); });
+    musicValue->setText(settingsText("Music volume: %1%").arg(musicSlider->value()));
     auto *duplicatesCheck = checkBoxRow(
-        QStringLiteral("Enable Duplicate Merge in Optimization"),
+        settingsText("Enable Duplicate Merge in Optimization"),
         settings.value(QStringLiteral("optimization/duplicateMergeEnabled"), true).toBool(),
-        QStringLiteral("Enabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
+        settingsText("Enabled by default. When enabled, Optimization adds the Duplicate Merge review step."));
     auto *backupCheck = checkBoxRow(
-        QStringLiteral("Create backup files before applying changes"),
+        settingsText("Create backup files before applying changes"),
         settings.value(QStringLiteral("backup/enabled"), true).toBool(),
-        QStringLiteral("When disabled, SC2 archives and folders are edited without creating persistent .bak or backup_ copies."));
+        settingsText("When disabled, SC2 archives and folders are edited without creating persistent .bak or backup_ copies."));
     const bool savedClosedProjectMode = settings.value(QStringLiteral("optimization/closedProjectMode"), false).toBool();
     auto *closedProjectCheck = checkBoxRow(
-        QStringLiteral("Closed Project / Aggressive standardization"),
+        settingsText("Closed Project / Aggressive standardization"),
         savedClosedProjectMode,
-        QStringLiteral("Allows public SC2Mod/SC2Campaign IDs and imports to change. Enable only when every consuming map/mod is included in your project and will be updated together."));
+        settingsText("Allows public SC2Mod/SC2Campaign IDs and imports to change. Enable only when every consuming map/mod is included in your project and will be updated together."));
     auto *closedProjectWarning = new QLabel(
-        QStringLiteral("WARNING: this mode can break external maps that depend on renamed catalog IDs or removed imports. A backup is strongly recommended."),
+        settingsText("WARNING: this mode can break external maps that depend on renamed catalog IDs or removed imports. A backup is strongly recommended."),
         &dialog);
     closedProjectWarning->setObjectName(QStringLiteral("inspectorSubtitle"));
     closedProjectWarning->setWordWrap(true);
@@ -547,7 +563,7 @@ void MainWindowSettings::show()
     auto *previewLimitSpin = new QSpinBox(&dialog);
     previewLimitSpin->setRange(1, 512);
     previewLimitSpin->setValue(AppSettings::previewLimitMiB());
-    previewLimitSpin->setSuffix(QStringLiteral(" MiB"));
+    previewLimitSpin->setSuffix(settingsText(" MiB"));
     auto *body = new QHBoxLayout;
     body->setContentsMargins(0, 0, 0, 0);
     body->setSpacing(12);
@@ -657,8 +673,8 @@ void MainWindowSettings::show()
             {
         if (!savedClosedProjectMode && closedProjectCheck->isChecked()
             && QMessageBox::warning(&dialog,
-                                    QStringLiteral("Enable Closed Project mode?"),
-                                    QStringLiteral("This allows public SC2Mod/SC2Campaign IDs and imports to change. External maps that are not updated together can break. Enable aggressive standardization?"),
+                                     settingsText("Enable Closed Project mode?"),
+                                     settingsText("This allows public SC2Mod/SC2Campaign IDs and imports to change. External maps that are not updated together can break. Enable aggressive standardization?"),
                                     QMessageBox::Yes | QMessageBox::No,
                                     QMessageBox::No) != QMessageBox::Yes)
             return;
@@ -674,9 +690,10 @@ void MainWindowSettings::show()
         settings.setValue(QStringLiteral("preview/maxFileMiB"), previewLimitSpin->value());
         const QString newLanguage = languageCombo->currentData().toString();
         const QString newRenderer = rendererCombo->currentData().toString();
-        restartRequired = newLanguage != selectedLanguage || newRenderer != AppSettings::renderer()
+        restartRequired = newRenderer != AppSettings::renderer()
             || customCursorCheck->isChecked() != savedCustomCursor;
         settings.setValue(QStringLiteral("ui/language"), newLanguage);
+        TranslationManager::instance().setLanguage(newLanguage, false);
         settings.setValue(QStringLiteral("graphics/renderer"), newRenderer);
         settings.setValue(QStringLiteral("optimization/duplicateMergeEnabled"), duplicatesCheck->isChecked());
         settings.setValue(QStringLiteral("optimization/closedProjectMode"), closedProjectCheck->isChecked());
@@ -705,7 +722,7 @@ void MainWindowSettings::show()
     dialog.exec();
     if (restartRequired)
         QMessageBox::information(&m_window, settingsText("Restart required"),
-                                 settingsText("Language, rendering mode and cursor changes will be fully applied after restarting SC2 Data Helper."));
+                                 settingsText("Rendering mode and cursor changes will be fully applied after restarting SC2 Data Helper."));
     if (reanalyzeAfterSave)
         m_window.loadPathAndAnalyze(m_window.m_currentSourcePath);
 }

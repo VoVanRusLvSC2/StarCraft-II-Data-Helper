@@ -1,7 +1,7 @@
 ; Inno Setup script for maintainers. Build the Release binaries first.
 #define AppName "SC2 Data Helper"
 #ifndef AppVersion
-  #define AppVersion "2.1.0"
+  #define AppVersion "3.0.0"
 #endif
 #define AppPublisher "VoVanRusLvSC2"
 #define AppExeName "SC2DataHelper.exe"
@@ -22,7 +22,7 @@ ArchitecturesAllowed=x64compatible
 LicenseFile=..\LICENSE
 
 [Files]
-Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Excludes: "vc_redist.x64.exe"
+Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Excludes: "vc_redist.x64.exe,logs\*,scripts\__pycache__\*,*.pyc"
 Source: "..\dist\SC2DataHelper-{#AppVersion}-win64\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]

@@ -9,6 +9,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
 #include <QSaveFile>
 #include <QSet>
 #include <QTextStream>
@@ -19,8 +20,10 @@
 using sc2dh::decor::DecorOptimizedMapRequest;
 using sc2dh::decor::DecorOptimizedMapResult;
 using sc2dh::decor::DecorationMapCopyService;
+using sc2dh::decor::DecorationOptimizationMode;
 using sc2dh::decor::DecorationStreamingPlan;
 using sc2dh::decor::DecorationStreamingPlanner;
+using sc2dh::decor::DecorationVisibilityPlan;
 using sc2dh::decor::DecorZone;
 using sc2dh::decor::DoodadPlacement;
 using sc2dh::decor::GalaxyGenerationOptions;
@@ -317,19 +320,37 @@ QJsonObject zoneJson(const DecorZone &zone)
     };
 }
 
-QJsonArray zonesJson(const QVector<DecorZone> &zones, const DecorationStreamingPlan &plan)
+QJsonArray zonesJson(const QVector<DecorZone> &zones,
+                     const QVector<ZoneAssignment> &assignments,
+                     const QString &countKey)
 {
     QHash<int, int> dynamicCounts;
-    for (const ZoneAssignment &assignment : plan.zones)
+    for (const ZoneAssignment &assignment : assignments)
         dynamicCounts.insert(assignment.zoneId, assignment.doodadIndices.size());
 
     QJsonArray array;
     for (const DecorZone &zone : zones) {
         QJsonObject object = zoneJson(zone);
-        object.insert(QStringLiteral("dynamicDoodads"), dynamicCounts.value(zone.id));
+        object.insert(countKey, dynamicCounts.value(zone.id));
         array.append(object);
     }
     return array;
+}
+
+QJsonObject visibilityStaticReasonCounts(const DecorationVisibilityPlan &plan)
+{
+    QMap<QString, int> counts;
+    for (int index : plan.staticOnlyDoodads) {
+        if (index < 0 || index >= plan.doodads.size())
+            continue;
+        const QString reason = plan.doodads.at(index).visibilityStaticOnlyReason.trimmed();
+        ++counts[reason.isEmpty() ? QStringLiteral("Static-only: unspecified safety reason.") : reason];
+    }
+
+    QJsonObject object;
+    for (auto it = counts.cbegin(); it != counts.cend(); ++it)
+        object.insert(it.key(), it.value());
+    return object;
 }
 
 QJsonObject reportObject(const QString &sourcePath,
@@ -343,6 +364,11 @@ QJsonObject reportObject(const QString &sourcePath,
     report.insert(QStringLiteral("source"), QDir::toNativeSeparators(sourcePath));
     report.insert(QStringLiteral("output"), QDir::toNativeSeparators(result.outputArchivePath));
     report.insert(QStringLiteral("removedDoodads"), result.removedDoodads);
+    report.insert(QStringLiteral("visibilityControlledDoodads"), result.visibilityControlledDoodads);
+    report.insert(QStringLiteral("objectsPreserved"), result.objectsPreserved);
+    report.insert(QStringLiteral("mode"), request.mode == DecorationOptimizationMode::VisibilityOnly
+                                        ? QStringLiteral("visibility-only")
+                                        : QStringLiteral("recreate-actors"));
     report.insert(QStringLiteral("warnings"), stringArray(result.warnings));
     report.insert(QStringLiteral("functionPrefix"), request.galaxyOptions.functionPrefix);
     report.insert(QStringLiteral("batchLimit"), request.galaxyOptions.batchLimit);
@@ -352,12 +378,29 @@ QJsonObject reportObject(const QString &sourcePath,
     if (!autoGridReport.isEmpty())
         report.insert(QStringLiteral("autoGrid"), autoGridReport);
 
-    if (result.success) {
-        const DecorationStreamingPlan &plan = result.patch.artifacts.plan;
+    // A visibility plan is available even when safety validation blocks the
+    // write. Include its immutable diagnostics so a caller can see why a
+    // fail-closed request did not select any actors.
+    if (request.mode == DecorationOptimizationMode::VisibilityOnly
+        && !result.patch.visibilityArtifacts.plan.doodads.isEmpty()) {
+        const DecorationVisibilityPlan &plan = result.patch.visibilityArtifacts.plan;
         report.insert(QStringLiteral("totalDoodads"), plan.doodads.size());
         report.insert(QStringLiteral("staticOnlyDoodads"), plan.staticOnlyDoodads.size());
-        report.insert(QStringLiteral("unassignedDynamicDoodads"), plan.unassignedDoodads.size());
-        report.insert(QStringLiteral("zones"), zonesJson(zones, plan));
+        report.insert(QStringLiteral("unassignedVisibilityDoodads"), plan.unassignedDoodads.size());
+        report.insert(QStringLiteral("visibilitySafetyReasons"), visibilityStaticReasonCounts(plan));
+        report.insert(QStringLiteral("zones"), zonesJson(zones, plan.zones,
+                                                           QStringLiteral("visibilityControlledDoodads")));
+    }
+
+    if (result.success) {
+        if (request.mode != DecorationOptimizationMode::VisibilityOnly) {
+            const DecorationStreamingPlan &plan = result.patch.artifacts.plan;
+            report.insert(QStringLiteral("totalDoodads"), plan.doodads.size());
+            report.insert(QStringLiteral("staticOnlyDoodads"), plan.staticOnlyDoodads.size());
+            report.insert(QStringLiteral("unassignedDynamicDoodads"), plan.unassignedDoodads.size());
+            report.insert(QStringLiteral("zones"), zonesJson(zones, plan.zones,
+                                                               QStringLiteral("dynamicDoodads")));
+        }
         QStringList entries = result.patch.replacementEntries.keys();
         report.insert(QStringLiteral("patchedEntries"), stringArray(entries, true));
     } else {
@@ -375,6 +418,7 @@ struct CliOptions
     bool help = false;
     bool version = false;
     bool overwrite = false;
+    bool visibilityOnly = false;
     QString sourcePath;
     QString outputPath;
     QString zonesPath;
@@ -398,9 +442,10 @@ QString usageText()
         "Options:\n"
         "  --zones <file>              JSON array/object with zones: id/name/xMin/yMin/xMax/yMax.\n"
         "  --auto-grid <COLSxROWS>     Build zones from current runtime-safe doodad bounds, e.g. 4x3.\n"
+        "  --visibility-only            Keep Objects unchanged; add hide/restore actor visibility API (requires --zones).\n"
         "  --padding <tiles>           Non-negative auto-grid padding. Default: 0.\n"
         "  --prefix <name>             Generated public function prefix. Default: NAME_OUT_FUNK.\n"
-        "  --batch <count>             Actor creation batch size before Wait(0.0). Default: 64.\n"
+        "  --batch <count>             Actor work batch size before Wait(0.0). Default: 64.\n"
         "  --report <file>             Write JSON report.\n"
         "  --overwrite                 Replace existing output archive.\n"
         "  --objects-entry <entry>     Placement entry. Default: Objects.\n"
@@ -462,13 +507,16 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
             suppliedValue = argument.mid(equals + 1);
         }
 
-        if (name == QStringLiteral("--overwrite")) {
+        if (name == QStringLiteral("--overwrite") || name == QStringLiteral("--visibility-only")) {
             if (equals >= 0) {
                 if (error)
-                    *error = QStringLiteral("--overwrite does not accept a value.");
+                    *error = QStringLiteral("%1 does not accept a value.").arg(name);
                 return false;
             }
-            options->overwrite = true;
+            if (name == QStringLiteral("--overwrite"))
+                options->overwrite = true;
+            else
+                options->visibilityOnly = true;
         } else if (name == QStringLiteral("--zones")) {
             if (!consumeOptionValue(args, &i, suppliedValue, &options->zonesPath, error))
                 return false;
@@ -515,6 +563,11 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
             *error = QStringLiteral("Specify exactly one of --zones or --auto-grid.");
         return false;
     }
+    if (options->visibilityOnly && options->zonesPath.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("--visibility-only requires explicit --zones; --auto-grid is for actor recreation only.");
+        return false;
+    }
     options->sourcePath = positional.at(0);
     options->outputPath = positional.at(1);
     return true;
@@ -532,7 +585,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("SC2DecorOptimizeMap"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("1.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(SC2DH_VERSION_NUMBER));
 
     CliOptions cli;
     QString error;
@@ -543,7 +596,9 @@ int main(int argc, char *argv[])
         return 0;
     }
     if (cli.version) {
-        QTextStream(stdout) << QStringLiteral("SC2DecorOptimizeMap 1.0\n");
+        QTextStream(stdout) << QStringLiteral("SC2DecorOptimizeMap %1 (%2)\n")
+                                  .arg(QStringLiteral(SC2DH_VERSION_LABEL),
+                                       QStringLiteral(SC2DH_VERSION_NUMBER));
         return 0;
     }
 
@@ -580,6 +635,8 @@ int main(int argc, char *argv[])
     request.objectsEntry = cli.objectsEntry;
     request.mapScriptEntry = cli.mapScriptEntry;
     request.runtimeEntry = cli.runtimeEntry;
+    request.mode = cli.visibilityOnly ? DecorationOptimizationMode::VisibilityOnly
+                                      : DecorationOptimizationMode::RecreateActors;
     request.overwriteExisting = cli.overwrite;
 
     const DecorOptimizedMapResult result = DecorationMapCopyService().createOptimizedCopy(request);

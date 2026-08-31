@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <pugixml.hpp>
 
 namespace
 {
@@ -134,6 +135,46 @@ QVector<MapPlacement> MapPerformanceAnalyzer::parseObjectsPlacements(const QByte
         warnings->clear();
     const QString text = QString::fromUtf8(objectsBytes);
     QVector<MapPlacement> placements;
+
+    if (text.contains(QRegularExpression(QStringLiteral("<\\s*PlacedObjects\\b"),
+                                         QRegularExpression::CaseInsensitiveOption))) {
+        pugi::xml_document document;
+        const pugi::xml_parse_result parsed = document.load_buffer(
+            objectsBytes.constData(), size_t(objectsBytes.size()), pugi::parse_default, pugi::encoding_utf8);
+        const pugi::xml_node root = document.child("PlacedObjects");
+        if (!parsed || !root) {
+            if (warnings)
+                *warnings << QStringLiteral("PlacedObjects XML parse failed at byte %1: %2")
+                                 .arg(parsed.offset)
+                                 .arg(QString::fromUtf8(parsed.description()));
+            return placements;
+        }
+        for (pugi::xml_node element : root.children()) {
+            const QString kind = QString::fromUtf8(element.name());
+            if (kind.compare(QStringLiteral("ObjectDoodad"), Qt::CaseInsensitive) != 0
+                && kind.compare(QStringLiteral("ObjectUnit"), Qt::CaseInsensitive) != 0
+                && kind.compare(QStringLiteral("ObjectDestructible"), Qt::CaseInsensitive) != 0)
+                continue;
+            const auto attribute = [&](const char *name) {
+                return QString::fromUtf8(element.attribute(name).value());
+            };
+            MapPlacement placement;
+            placement.kind = kind;
+            placement.id = attribute("Id");
+            placement.name = attribute("Name");
+            placement.type = kind.compare(QStringLiteral("ObjectUnit"), Qt::CaseInsensitive) == 0
+                ? attribute("UnitType") : attribute("Type");
+            const QVector<double> position = numbersFrom(attribute("Position"));
+            if (position.size() >= 2) {
+                placement.x = position.at(0);
+                placement.y = position.at(1);
+                placement.z = position.size() >= 3 ? position.at(2) : 0.0;
+                placement.hasPosition = true;
+                placements << placement;
+            }
+        }
+        return placements;
+    }
 
     static const QRegularExpression blockStart(QStringLiteral("\\b(ObjectDoodad|ObjectUnit|ObjectDestructible)\\b"),
                                                QRegularExpression::CaseInsensitiveOption);

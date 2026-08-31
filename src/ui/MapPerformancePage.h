@@ -10,8 +10,10 @@
 class QLabel;
 class QDoubleSpinBox;
 class QLineEdit;
+class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
+class QRadioButton;
 class QSpinBox;
 class QStandardItemModel;
 class QTableView;
@@ -25,6 +27,9 @@ public:
 
     void setAnalysisResult(const AnalysisResult &result);
 
+signals:
+    void operationFinished(const OperationResult &result);
+
 private:
     void rebuild();
     void populateTable();
@@ -36,10 +41,14 @@ private:
     void updateDecorPreview();
     void createDecorOptimizedMapCopy();
     bool readObjectsFile(QByteArray *objectsBytes, QString *sourceLabel) const;
+    bool readRegionsFile(QByteArray *regionsBytes, QString *sourceLabel) const;
     bool readMinimapImage(QImage *image, QString *sourceLabel) const;
     QString sourceArchivePath() const;
     QString defaultDecorOutputPath() const;
     QVector<sc2dh::decor::DecorZone> zonesFromModel() const;
+    QVector<sc2dh::decor::DecorZone> selectedRegionZones() const;
+    void populateRegionSelector();
+    void updateOptimizationScope();
     sc2dh::decor::DecorationSafetyContext decorationSafetyContextFromDoodadTable() const;
     void populateZoneTable(const QVector<sc2dh::decor::DecorZone> &zones);
     void populateDoodadTable(const QVector<sc2dh::decor::DoodadPlacement> &doodads);
@@ -52,6 +61,7 @@ private:
     QImage m_minimapImage;
     QString m_minimapSourceLabel;
     bool m_hasObjects = false;
+    sc2dh::region::RegionReadResult m_regionReadResult;
     sc2dh::perf::MapPerformanceReport m_report;
     QVector<sc2dh::decor::DecorZone> m_decorZones;
     sc2dh::decor::DecorationOptimizedArtifacts m_decorPreview;
@@ -62,6 +72,17 @@ private:
     QTableView *m_table = nullptr;
     QPlainTextEdit *m_details = nullptr;
     QLabel *m_decorSummaryLabel = nullptr;
+    QLabel *m_regionStatusLabel = nullptr;
+    QRadioButton *m_entireMapRadio = nullptr;
+    QRadioButton *m_selectedRegionsRadio = nullptr;
+    QRadioButton *m_customAreaRadio = nullptr;
+    QListWidget *m_regionList = nullptr;
+    QWidget *m_customAreaPanel = nullptr;
+    QLineEdit *m_customAreaName = nullptr;
+    QDoubleSpinBox *m_customX1 = nullptr;
+    QDoubleSpinBox *m_customY1 = nullptr;
+    QDoubleSpinBox *m_customX2 = nullptr;
+    QDoubleSpinBox *m_customY2 = nullptr;
     QSpinBox *m_gridColumnsSpin = nullptr;
     QSpinBox *m_gridRowsSpin = nullptr;
     QDoubleSpinBox *m_gridPaddingSpin = nullptr;

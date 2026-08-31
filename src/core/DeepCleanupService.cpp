@@ -6,6 +6,7 @@
 #include "core/AssetReferenceScanner.h"
 #include "core/BackupManager.h"
 #include "core/CatalogProtection.h"
+#include "core/FolderAnalyzer.h"
 #include "core/SemanticDuplicateAnalyzer.h"
 #include "core/TriggerPerformanceAnalyzer.h"
 #include "core/XmlCleanupUtils.h"
@@ -16,7 +17,6 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QRegularExpression>
-#include <QSaveFile>
 #include <QSet>
 
 #include <pugixml.hpp>
@@ -657,21 +657,19 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
         return result;
     }
 
-    QStringList backupFiles;
-    for (const DeepCleanupCandidate &candidate : candidates)
+    const DestructiveOperationPermission permission = canApplyDestructiveChanges(analysis);
+    if (!permission.allowed)
     {
-        const QString abs = absoluteCandidatePath(rootFolder, candidate.filePath);
-        const QString rel = relativePath(rootFolder, abs);
-        if (!backupFiles.contains(rel))
-            backupFiles.append(rel);
+        result.error = destructiveOperationPermissionText(permission);
+        return result;
     }
-    if (createBackup)
-    {
-        BackupManager backupManager;
-        if (!backupManager.createFolderBackup(rootFolder, backupFiles, analysis.analysisReportText,
-                                              analysis.plannedChangesReportText, &result.backupFolder, &result.error))
-            return result;
-    }
+
+    // Archive workspaces used to pass false here. They remain fully
+    // transactional too: a verified backup inside that disposable workspace
+    // is cheaper than allowing a partially changed workspace to reach archive
+    // commit. Direct destructive applies therefore cannot be weakened by the
+    // backup setting or this legacy flag.
+    Q_UNUSED(createBackup);
 
     QHash<QString, QVector<DeepCleanupCandidate>> lineEdits;
     QHash<QString, QVector<DeepCleanupCandidate>> xmlEdits;
@@ -698,6 +696,51 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
         }
     }
 
+    QHash<QString, QByteArray> plannedWrites;
+    QSet<QString> stagedXmlFiles;
+    QSet<QString> plannedDeletes;
+    int plannedTextLinesRemoved = 0;
+    int plannedXmlNodesRemoved = 0;
+    int plannedXmlAttributesRemoved = 0;
+    int plannedFilesDeleted = 0;
+
+    const auto safeRelativePath = [&](const QString &absolutePath, QString *relative) {
+        const QString normalized = QDir::cleanPath(relativePath(rootFolder, absolutePath)).replace('\\', '/');
+        if (normalized.isEmpty() || normalized == QStringLiteral(".") || normalized == QStringLiteral("..")
+            || normalized.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(normalized)) {
+            result.error = QStringLiteral("Unsafe deep-cleanup path: %1").arg(absolutePath);
+            return false;
+        }
+        if (relative)
+            *relative = normalized;
+        return true;
+    };
+    const auto addWrite = [&](const QString &absolutePath, const QByteArray &contents, bool xml) {
+        QString relative;
+        if (!safeRelativePath(absolutePath, &relative))
+            return false;
+        if (plannedDeletes.contains(relative) || plannedWrites.contains(relative)) {
+            result.error = QStringLiteral("Conflicting deep-cleanup changes for %1.").arg(relative);
+            return false;
+        }
+        plannedWrites.insert(relative, contents);
+        if (xml)
+            stagedXmlFiles.insert(relative);
+        return true;
+    };
+    const auto addDelete = [&](const QString &absolutePath) {
+        QString relative;
+        if (!safeRelativePath(absolutePath, &relative))
+            return false;
+        if (plannedWrites.contains(relative) || plannedDeletes.contains(relative)) {
+            result.error = QStringLiteral("Conflicting deep-cleanup changes for %1.").arg(relative);
+            return false;
+        }
+        plannedDeletes.insert(relative);
+        return true;
+    };
+
+    // Build every mutation before any source file is committed.
     for (auto it = lineEdits.cbegin(); it != lineEdits.cend(); ++it)
     {
         QFile file(it.key());
@@ -723,15 +766,9 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
         for (int line = 0; line < lines.size(); ++line)
             if (!removeLines.contains(line))
                 kept.append(lines.at(line));
-        QSaveFile save(it.key());
-        const QByteArray output = joinLines(kept, ending, trailingNewline);
-        if (!save.open(QIODevice::WriteOnly | QIODevice::Truncate) || save.write(output) != output.size() || !save.commit())
-        {
-            result.error = QStringLiteral("Unable to write cleaned text file: %1").arg(it.key());
+        if (!addWrite(it.key(), joinLines(kept, ending, trailingNewline), false))
             return result;
-        }
-        result.textLinesRemoved += removeLines.size();
-        result.changedFiles.append(relativePath(rootFolder, it.key()));
+        plannedTextLinesRemoved += removeLines.size();
     }
 
     for (auto it = xmlEdits.cbegin(); it != xmlEdits.cend(); ++it)
@@ -752,7 +789,6 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
             return result;
         }
 
-        QVector<pugi::xml_node> nodesToRemove;
         QVector<DeepCleanupCandidate> nodeCandidates;
         for (const DeepCleanupCandidate &candidate : it.value())
         {
@@ -768,12 +804,11 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
                 if (node.attribute(attributeName.constData()))
                 {
                     node.remove_attribute(attributeName.constData());
-                    ++result.xmlAttributesRemoved;
+                    ++plannedXmlAttributesRemoved;
                 }
             }
             else if (candidate.action == DeepCleanupAction::RemoveXmlNode)
             {
-                nodesToRemove.append(node);
                 nodeCandidates.append(candidate);
             }
         }
@@ -784,7 +819,7 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
             if (leftDepth != rightDepth)
                 return leftDepth > rightDepth;
             return left.xmlLocation > right.xmlLocation; });
-        nodesToRemove.clear();
+        QVector<pugi::xml_node> nodesToRemove;
         for (const DeepCleanupCandidate &candidate : nodeCandidates)
         {
             pugi::xml_node node = findNodeByLocation(document, candidate.xmlLocation);
@@ -794,36 +829,134 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
         for (const pugi::xml_node &node : nodesToRemove)
         {
             if (node.parent() && node.parent().remove_child(node))
-                ++result.xmlNodesRemoved;
+                ++plannedXmlNodesRemoved;
         }
 
         std::ostringstream stream;
         document.save(stream, "  ", pugi::format_default, pugi::encoding_utf8);
-        const QByteArray output = QByteArray::fromStdString(stream.str());
-        QSaveFile save(it.key());
-        if (!save.open(QIODevice::WriteOnly | QIODevice::Truncate) || save.write(output) != output.size() || !save.commit())
-        {
-            result.error = QStringLiteral("Unable to write cleaned XML file: %1").arg(it.key());
+        if (!addWrite(it.key(), QByteArray::fromStdString(stream.str()), true))
             return result;
-        }
-        result.changedFiles.append(relativePath(rootFolder, it.key()));
     }
 
     for (const QString &filePath : filesToDelete)
     {
         if (!QFileInfo::exists(filePath))
             continue;
-        if (!QFile::remove(filePath))
-        {
-            result.error = QStringLiteral("Unable to delete cleanup file: %1").arg(filePath);
+        if (!addDelete(filePath))
             return result;
-        }
-        ++result.filesDeleted;
-        result.removedFiles.append(relativePath(rootFolder, filePath));
+        ++plannedFilesDeleted;
     }
 
-    result.changedFiles.removeDuplicates();
-    result.removedFiles.removeDuplicates();
+    QVector<TransactionalFileChange> changes;
+    QStringList writePaths = plannedWrites.keys();
+    std::sort(writePaths.begin(), writePaths.end());
+    for (const QString &relative : writePaths)
+        changes.append({relative, plannedWrites.value(relative), false});
+    QStringList deletePaths = plannedDeletes.values();
+    std::sort(deletePaths.begin(), deletePaths.end());
+    for (const QString &relative : deletePaths)
+        changes.append({relative, {}, true});
+
+    if (changes.isEmpty())
+    {
+        result.success = true;
+        return result;
+    }
+
+    const auto stagedValidator = [stagedXmlFiles](const QString &stagingFolder, QString *validationError) {
+        for (const QString &relative : stagedXmlFiles)
+        {
+            QFile file(QDir(stagingFolder).absoluteFilePath(relative));
+            if (!file.open(QIODevice::ReadOnly))
+            {
+                if (validationError)
+                    *validationError = QStringLiteral("Unable to reopen staged XML: %1").arg(relative);
+                return false;
+            }
+            const QByteArray bytes = file.readAll();
+            pugi::xml_document document;
+            const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+            if (!parsed)
+            {
+                if (validationError)
+                    *validationError = QStringLiteral("Staged XML parse failed for %1: %2")
+                                           .arg(relative, parsed.description());
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto committedValidator = [rootFolder, stagedXmlFiles, plannedDeletes](QString *validationError) {
+        for (const QString &relative : stagedXmlFiles)
+        {
+            QFile file(QDir(rootFolder).absoluteFilePath(relative));
+            if (!file.open(QIODevice::ReadOnly))
+            {
+                if (validationError)
+                    *validationError = QStringLiteral("Unable to reopen committed XML: %1").arg(relative);
+                return false;
+            }
+            const QByteArray bytes = file.readAll();
+            pugi::xml_document document;
+            const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+            if (!parsed)
+            {
+                if (validationError)
+                    *validationError = QStringLiteral("Committed XML parse failed for %1: %2")
+                                           .arg(relative, parsed.description());
+                return false;
+            }
+        }
+        for (const QString &relative : plannedDeletes)
+        {
+            if (QFileInfo::exists(QDir(rootFolder).absoluteFilePath(relative)))
+            {
+                if (validationError)
+                    *validationError = QStringLiteral("Committed cleanup deletion remains: %1").arg(relative);
+                return false;
+            }
+        }
+
+        FolderAnalyzer analyzer;
+        AnalysisResult rebuilt;
+        QString reanalysisError;
+        if (!analyzer.analyzeFolder(rootFolder, {}, &rebuilt, &reanalysisError))
+        {
+            if (validationError)
+                *validationError = QStringLiteral("Post-cleanup analysis failed: %1").arg(reanalysisError);
+            return false;
+        }
+        if (rebuilt.completeness != AnalysisCompleteness::Complete)
+        {
+            if (validationError)
+                *validationError = QStringLiteral("Post-cleanup analysis is %1.")
+                                       .arg(analysisCompletenessName(rebuilt.completeness));
+            return false;
+        }
+        return true;
+    };
+
+    const FolderSaveTransactionResult transaction = BackupManager().applyFolderTransaction(
+        rootFolder, changes, analysis.analysisReportText, analysis.plannedChangesReportText,
+        stagedValidator, committedValidator);
+    result.backupFolder = transaction.backupFolder;
+    if (!transaction.success)
+    {
+        result.error = transaction.error;
+        if (result.error.isEmpty())
+            result.error = QStringLiteral("Deep cleanup transaction failed: %1")
+                               .arg(operationErrorCodeName(transaction.errorCode));
+        else if (transaction.errorCode != OperationErrorCode::None)
+            result.error.prepend(QStringLiteral("[%1] ").arg(operationErrorCodeName(transaction.errorCode)));
+        return result;
+    }
+
     result.success = true;
+    result.changedFiles = transaction.changedFiles;
+    result.removedFiles = transaction.removedFiles;
+    result.filesDeleted = plannedFilesDeleted;
+    result.textLinesRemoved = plannedTextLinesRemoved;
+    result.xmlNodesRemoved = plannedXmlNodesRemoved;
+    result.xmlAttributesRemoved = plannedXmlAttributesRemoved;
     return result;
 }

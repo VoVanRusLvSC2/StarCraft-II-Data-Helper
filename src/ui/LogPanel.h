@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/AnalysisModels.h"
+
 #include <QWidget>
 
 class QPlainTextEdit;
@@ -14,6 +16,7 @@ public:
 public slots:
     void appendMessage(const QString &message);
     void clearMessages();
+    void showOperationResult(const OperationResult &result);
 
 private:
     QPlainTextEdit *m_textEdit = nullptr;

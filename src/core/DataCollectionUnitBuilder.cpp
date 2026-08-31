@@ -8,7 +8,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QSaveFile>
 
 #include <pugixml.hpp>
 
@@ -805,16 +804,6 @@ bool readBytes(const QString &path, QByteArray *bytes, QString *error)
     *bytes = file.readAll(); return true;
 }
 
-bool restore(const QString &root, const QString &backup, const QString &relative, QString *error)
-{
-    const QString target = QDir(root).absoluteFilePath(relative);
-    QFile::remove(target);
-    if (!QFile::copy(QDir(backup).absoluteFilePath(relative), target)) {
-        *error += QStringLiteral(" Rollback failed for %1.").arg(target); return false;
-    }
-    return true;
-}
-
 } // namespace
 
 QString dataCollectionPatternStateName(DataCollectionPatternState state)
@@ -1213,6 +1202,11 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
                                                            bool transientWorkspace) const
 {
     DataCollectionApplyResult result;
+    const DestructiveOperationPermission permission = canApplyDestructiveChanges(analysis);
+    if (!permission.allowed) {
+        result.error = destructiveOperationPermissionText(permission);
+        return result;
+    }
     const DataCollectionPreviewReport plan = preview(analysis, request, knownFamilies);
     if (!plan.valid) { result.error = plan.warnings.join(QStringLiteral("; ")); return result; }
     QByteArray staged = plan.generatedXml.toUtf8();
@@ -1233,83 +1227,151 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
         listfileBytes.append(plan.archiveEntry.toUtf8());
         listfileBytes.append("\r\n");
     }
-    QStringList existingForBackup;
-    if (targetExisted) existingForBackup << relative;
-    if (listfileExisted) existingForBackup << listRelative;
-    BackupManager backup;
-    if (!transientWorkspace
-        && !backup.createFolderBackup(rootFolder, existingForBackup, analysis.analysisReportText, plan.reportText,
-                                      &result.backupFolder, &result.error)) return result;
-    if (m_failureInjectionStep == QStringLiteral("after-backup")) { result.error = QStringLiteral("Injected failure after backup."); return result; }
-    const auto rollback = [&]() {
-        if (transientWorkspace) return;
-        if (result.backupFolder.startsWith(QStringLiteral("disabled"), Qt::CaseInsensitive)) return;
-        if (targetExisted) restore(rootFolder, result.backupFolder, relative, &result.error); else QFile::remove(plan.targetFile);
-        if (listfileExisted) restore(rootFolder, result.backupFolder, listRelative, &result.error); else QFile::remove(plan.listfilePath);
+    const bool writesListfile = plan.listfileNeedsUpdate || !listfileExisted;
+    QVector<TransactionalFileChange> changes;
+    changes.append({relative, staged, false});
+    if (writesListfile)
+        changes.append({listRelative, listfileBytes, false});
+    const auto stagedValidator = [relative, listRelative, writesListfile, plan, request]
+        (const QString &stagingFolder, QString *validationError) {
+        const QString stagedTargetPath = QDir(stagingFolder).absoluteFilePath(relative);
+        QByteArray stagedBytes;
+        QString readError;
+        if (!readBytes(stagedTargetPath, &stagedBytes, &readError)) {
+            if (validationError)
+                *validationError = QStringLiteral("Cannot reopen staged Data Collection XML: %1").arg(readError);
+            return false;
+        }
+        pugi::xml_document stagedDocument;
+        const pugi::xml_parse_result parsed = stagedDocument.load_buffer(
+            stagedBytes.constData(), size_t(stagedBytes.size()));
+        if (!parsed || !stagedDocument.child("Catalog")) {
+            if (validationError)
+                *validationError = QStringLiteral("Staged Data Collection XML validation failed: %1")
+                                       .arg(parsed ? QStringLiteral("Catalog root is missing.")
+                                                   : QString::fromUtf8(parsed.description()));
+            return false;
+        }
+        if (!findByTypeAndId(stagedDocument, plan.collectionXmlTag, request.family.rootId)) {
+            if (validationError)
+                *validationError = QStringLiteral("Staged Data Collection XML validation failed: collection object is missing.");
+            return false;
+        }
+
+        const QString listfilePath = writesListfile
+            ? QDir(stagingFolder).absoluteFilePath(listRelative)
+            : plan.listfilePath;
+        if (!listfileContains(listfilePath, plan.archiveEntry)) {
+            if (validationError)
+                *validationError = QStringLiteral("Staged (listfile) validation failed: entry is missing.");
+            return false;
+        }
+        return true;
     };
-    QDir().mkpath(QFileInfo(plan.targetFile).absolutePath());
-    QSaveFile output(plan.targetFile);
-    if (!output.open(QIODevice::WriteOnly | QIODevice::Truncate)
-        || output.write(staged) != staged.size() || !output.commit()) {
-        result.error = QStringLiteral("Unable to commit Data Collection XML."); return result;
-    }
-    if (plan.listfileNeedsUpdate || !listfileExisted) {
-        QSaveFile listfile(plan.listfilePath);
-        if (!listfile.open(QIODevice::WriteOnly | QIODevice::Truncate)
-            || listfile.write(listfileBytes) != listfileBytes.size() || !listfile.commit()) {
-            result.error = QStringLiteral("Unable to update (listfile)."); rollback(); return result;
+
+    const auto committedValidator = [&](QString *validationError) {
+        QByteArray verifiedBytes;
+        QString verifyError;
+        if (!readBytes(plan.targetFile, &verifiedBytes, &verifyError)) {
+            if (validationError)
+                *validationError = QStringLiteral("Collection verification failed: %1").arg(verifyError);
+            return false;
         }
-    }
-    if (m_failureInjectionStep == QStringLiteral("after-commit")) {
-        result.error = QStringLiteral("Injected failure after commit."); rollback(); return result;
-    }
-    Q_UNUSED(whitelistIds);
-    QByteArray verifiedBytes;
-    QString verifyError;
-    if (!readBytes(plan.targetFile, &verifiedBytes, &verifyError)) {
-        result.error = QStringLiteral("Collection verification failed: %1").arg(verifyError); rollback(); return result;
-    }
-    pugi::xml_document verifiedDocument;
-    const auto parsed = verifiedDocument.load_buffer(verifiedBytes.constData(), size_t(verifiedBytes.size()));
-    if (!parsed) {
-        result.error = QStringLiteral("Collection verification failed: %1").arg(parsed.description()); rollback(); return result;
-    }
-    const pugi::xml_node verified = findByTypeAndId(verifiedDocument, plan.collectionXmlTag, request.family.rootId);
-    if (!verified) { result.error = QStringLiteral("Collection verification failed: object missing."); rollback(); return result; }
-    QStringList verifyDuplicates; const QStringList verifiedEntries = existingEntries(verified, &verifyDuplicates);
-    for (const QString &entry : plan.recordsToAdd) if (!verifiedEntries.contains(entry)) {
-        result.error = QStringLiteral("Collection verification failed: %1 missing.").arg(entry); rollback(); return result;
-    }
-    for (const QString &entry : plan.recordsToRemove) if (verifiedEntries.contains(entry)) {
-        result.error = QStringLiteral("Collection verification failed: unrelated record %1 remains.").arg(entry); rollback(); return result;
-    }
-    for (const QString &move : plan.recordsToMove) {
-        const QString entry = move.section(QStringLiteral(" -> "), 0, 0);
-        const QString targetId = move.section(QStringLiteral(" -> "), 1).section(QStringLiteral(" ("), 0, 0).trimmed();
-        const pugi::xml_node target = findCollectionById(verifiedDocument, targetId);
-        if (!target || !existingEntries(target).contains(entry)) {
-            result.error = QStringLiteral("Collection verification failed: migration target %1 does not contain %2.").arg(targetId, entry);
-            rollback(); return result;
+        pugi::xml_document verifiedDocument;
+        const pugi::xml_parse_result parsed = verifiedDocument.load_buffer(
+            verifiedBytes.constData(), size_t(verifiedBytes.size()));
+        if (!parsed) {
+            if (validationError)
+                *validationError = QStringLiteral("Collection verification failed: %1")
+                                       .arg(QString::fromUtf8(parsed.description()));
+            return false;
         }
-    }
-    Q_UNUSED(verifyDuplicates);
-    if (!listfileContains(plan.listfilePath, plan.archiveEntry)) {
-        result.error = QStringLiteral("Collection verification failed: (listfile) entry is missing."); rollback(); return result;
-    }
-    if (verifyWithFullReanalysis) {
+        const pugi::xml_node verified = findByTypeAndId(verifiedDocument, plan.collectionXmlTag, request.family.rootId);
+        if (!verified) {
+            if (validationError)
+                *validationError = QStringLiteral("Collection verification failed: object missing.");
+            return false;
+        }
+        QStringList verifyDuplicates;
+        const QStringList verifiedEntries = existingEntries(verified, &verifyDuplicates);
+        for (const QString &entry : plan.recordsToAdd) {
+            if (!verifiedEntries.contains(entry)) {
+                if (validationError)
+                    *validationError = QStringLiteral("Collection verification failed: %1 missing.").arg(entry);
+                return false;
+            }
+        }
+        for (const QString &entry : plan.recordsToRemove) {
+            if (verifiedEntries.contains(entry)) {
+                if (validationError)
+                    *validationError = QStringLiteral("Collection verification failed: unrelated record %1 remains.").arg(entry);
+                return false;
+            }
+        }
+        for (const QString &move : plan.recordsToMove) {
+            const QString entry = move.section(QStringLiteral(" -> "), 0, 0);
+            const QString targetId = move.section(QStringLiteral(" -> "), 1)
+                                         .section(QStringLiteral(" ("), 0, 0).trimmed();
+            const pugi::xml_node target = findCollectionById(verifiedDocument, targetId);
+            if (!target || !existingEntries(target).contains(entry)) {
+                if (validationError)
+                    *validationError = QStringLiteral("Collection verification failed: migration target %1 does not contain %2.")
+                                           .arg(targetId, entry);
+                return false;
+            }
+        }
+        Q_UNUSED(verifyDuplicates);
+        if (!listfileContains(plan.listfilePath, plan.archiveEntry)) {
+            if (validationError)
+                *validationError = QStringLiteral("Collection verification failed: (listfile) entry is missing.");
+            return false;
+        }
+        if (!verifyWithFullReanalysis)
+            return true;
+
         AnalysisResult reanalyzed;
         QString reanalysisError;
         if (!FolderAnalyzer().analyzeFolder(rootFolder, whitelistIds, &reanalyzed, &reanalysisError)) {
-            result.error = QStringLiteral("Post-apply analysis failed: %1").arg(reanalysisError); rollback(); return result;
+            if (validationError)
+                *validationError = QStringLiteral("Post-apply analysis failed: %1").arg(reanalysisError);
+            return false;
         }
+        if (reanalyzed.completeness != AnalysisCompleteness::Complete) {
+            if (validationError)
+                *validationError = QStringLiteral("Post-apply analysis is %1.")
+                                       .arg(analysisCompletenessName(reanalyzed.completeness));
+            return false;
+        }
+        return true;
+    };
+
+    QString transactionFailureInjection = m_failureInjectionStep;
+    // The legacy hook ran after local file commits. The shared transaction
+    // deliberately fails immediately after its first commit and rolls back all
+    // files, which proves the same no-partial-save guarantee.
+    if (transactionFailureInjection == QStringLiteral("after-commit"))
+        transactionFailureInjection = QStringLiteral("after-first-commit");
+    const FolderSaveTransactionResult transaction = BackupManager().applyFolderTransaction(
+        rootFolder, changes, analysis.analysisReportText, plan.reportText,
+        stagedValidator, committedValidator, transactionFailureInjection);
+    result.backupFolder = transaction.backupFolder;
+    if (!transaction.success) {
+        result.error = transaction.error;
+        if (result.error.isEmpty())
+            result.error = QStringLiteral("Data Collection transaction failed: %1")
+                               .arg(operationErrorCodeName(transaction.errorCode));
+        return result;
     }
-    result.success = true; result.changedFile = relative; result.recordsAdded = plan.recordsToAdd.size();
+
+    result.success = true;
+    result.changedFile = relative;
+    result.recordsAdded = plan.recordsToAdd.size();
     result.recordsRemoved = plan.recordsToRemove.size();
-    result.changedFiles << relative;
-    if (plan.listfileNeedsUpdate || !listfileExisted) result.changedFiles << listRelative;
+    result.changedFiles = transaction.changedFiles;
     result.duplicatesSkipped = plan.duplicateRecordsSkipped.size();
-    result.finalReport = plan.reportText + (transientWorkspace
-        ? QStringLiteral("\nFinal result after apply: success in temporary archive workspace\n")
-        : QStringLiteral("\nFinal result after apply: success\nBackup: %1\n").arg(result.backupFolder));
+    result.finalReport = plan.reportText + QStringLiteral("\nFinal result after apply: %1\nBackup: %2\n")
+        .arg(transientWorkspace ? QStringLiteral("success in temporary archive workspace")
+                                : QStringLiteral("success"),
+             result.backupFolder);
     return result;
 }

@@ -16,6 +16,7 @@
 #include <QTemporaryFile>
 #include <QThread>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -473,6 +474,33 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         return false;
     }
 
+    // Some SC2 archives contain mandatory root components whose loss is not
+    // detected by ordinary catalog analysis. Preserve and verify them by
+    // their canonical names even when an incomplete MPQ listfile prevents
+    // normal enumeration.
+    QHash<QString, QByteArray> criticalSourceEntries;
+    const QStringList criticalEntryNames{
+        QStringLiteral("ComponentList.SC2Components")
+    };
+    for (const QString &entry : criticalEntryNames) {
+        QByteArray bytes;
+        QString readError;
+        if (readEntry(entry, &bytes, &readError)) {
+            criticalSourceEntries.insert(entry, bytes);
+            continue;
+        }
+        const bool isEnumerated = std::any_of(m_allEntries.cbegin(), m_allEntries.cend(), [&](const QString &candidate) {
+            return candidate.compare(entry, Qt::CaseInsensitive) == 0;
+        });
+        if (isEnumerated) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Unable to read mandatory SC2 archive component %1 before saving: %2")
+                                    .arg(entry, readError);
+            }
+            return false;
+        }
+    }
+
     const QString tempPath = targetPath + QStringLiteral(".sc2dh.SC2Map");
     QFile::remove(tempPath);
     QFile::remove(targetPath);
@@ -525,12 +553,11 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         writeOk = false;
         writeError = QStringLiteral("StormLib could not flush the rewritten archive (error %1).").arg(GetLastError());
     }
-    if (writeOk && (!replacementEntries.isEmpty() || !removedEntries.isEmpty())) {
-        // Compact is best-effort: some legacy MPQs cannot be compacted when
-        // StormLib cannot prove all keys/listfile entries. Keeping the
-        // rewritten archive is safer than failing a valid cleanup apply.
-        SFileCompactArchive(archive, nullptr, false);
-    }
+    // Do not call SFileCompactArchive here. Legacy SC2 maps can contain
+    // mandatory or hashed entries which StormLib cannot safely carry through
+    // compaction. The replacement payloads are already ZLIB-compressed;
+    // preserving every source block is more important than reclaiming a few
+    // stale sectors in a user asset.
     if (!SFileCloseArchive(archive) && writeOk) {
         writeOk = false;
         writeError = QStringLiteral("StormLib could not close the rewritten archive (error %1).").arg(GetLastError());
@@ -562,6 +589,25 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         if (actual != it.value()) {
             QFile::remove(tempPath);
             if (errorMessage) *errorMessage = QStringLiteral("Rewritten entry verification failed: %1 (content mismatch)").arg(it.key());
+            return false;
+        }
+    }
+    for (auto it = criticalSourceEntries.cbegin(); it != criticalSourceEntries.cend(); ++it) {
+        QByteArray actual;
+        if (!verification.readEntry(it.key(), &actual, &verifyError)) {
+            QFile::remove(tempPath);
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Rewritten archive lost mandatory SC2 component %1: %2")
+                                    .arg(it.key(), verifyError);
+            }
+            return false;
+        }
+        if (actual != it.value()) {
+            QFile::remove(tempPath);
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("Rewritten mandatory SC2 component changed: %1")
+                                    .arg(it.key());
+            }
             return false;
         }
     }

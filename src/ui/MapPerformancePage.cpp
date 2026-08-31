@@ -18,12 +18,14 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -404,13 +406,14 @@ QString decorationPreviewText(const sc2dh::decor::DecorationOptimizedArtifacts &
 {
     const sc2dh::decor::DecorationStreamingPlan &plan = artifacts.plan;
     QString text;
-    text += QStringLiteral("DECORATION STREAMING PREVIEW / BETA\n");
+    text += QStringLiteral("DECORATION STREAMING PREVIEW / 3.0 BETA\n");
     text += QStringLiteral("Function prefix: %1\n").arg(options.functionPrefix);
     text += QStringLiteral("Batch per game tick: %1\n\n").arg(options.batchLimit);
     text += QStringLiteral("How to use in Galaxy:\n");
-    text += QStringLiteral("  - Create/load zone: %1_1(); or DecorOpt_CreateZone(1);\n").arg(options.functionPrefix);
-    text += QStringLiteral("  - Delete created actors from zone: DecorOpt_ClearZone(1);\n");
-    text += QStringLiteral("  - Delete all created dynamic actors: DecorOpt_ClearAll();\n");
+    text += QStringLiteral("  - Create/load zone: %1_Create_1(); or DecorOpt_CreateZone(1);\n").arg(options.functionPrefix);
+    text += QStringLiteral("  - Clear created actors from zone: %1_Clear_1(); or DecorOpt_ClearZone(1);\n").arg(options.functionPrefix);
+    text += QStringLiteral("  - Create all zones: %1_CreateAll(); or DecorOpt_CreateAll();\n").arg(options.functionPrefix);
+    text += QStringLiteral("  - Clear all created dynamic actors: %1_ClearAll(); or DecorOpt_ClearAll();\n").arg(options.functionPrefix);
     text += QStringLiteral("  - Check loaded state: DecorOpt_IsZoneLoaded(1);\n\n");
     text += QStringLiteral("Important:\n");
     text += QStringLiteral("  - Create Decor-Optimized Map Copy removes listed dynamic visual doodads from Objects in the COPY only.\n");
@@ -420,11 +423,15 @@ QString decorationPreviewText(const sc2dh::decor::DecorationOptimizedArtifacts &
     int assigned = 0;
     for (const sc2dh::decor::ZoneAssignment &zone : plan.zones)
         assigned += zone.doodadIndices.size();
-    text += QStringLiteral("Summary: %1 doodad(s), %2 will be moved to dynamic Galaxy actors, %3 static-only, %4 unassigned.\n\n")
+    text += QStringLiteral("Summary: %1 doodad(s), %2 will be moved to dynamic Galaxy actors, %3 static-only, %4 outside scope, %5 boundary/ambiguous.\n")
                 .arg(plan.doodads.size())
                 .arg(assigned)
                 .arg(plan.staticOnlyDoodads.size())
-                .arg(plan.unassignedDoodads.size());
+                .arg(plan.unassignedDoodads.size())
+                .arg(plan.boundaryDoodads.size());
+    text += QStringLiteral("Round-trip proof: %1 | Outside-scope preservation: %2\n\n")
+                .arg(artifacts.roundTripVerified ? QStringLiteral("PASS") : QStringLiteral("BLOCKED"),
+                     artifacts.outsideScopePreserved ? QStringLiteral("PASS") : QStringLiteral("BLOCKED"));
 
     text += QStringLiteral("ZONES / FUNCTIONS / DECOR THAT WILL BE REMOVED FROM OBJECTS\n");
     for (const sc2dh::decor::ZoneAssignment &zone : plan.zones) {
@@ -489,6 +496,15 @@ bool isObjectsEntry(const QString &rootFolder, const ScannedFileInfo &file)
     return QFileInfo(file.filePath).fileName().compare(QStringLiteral("Objects"), Qt::CaseInsensitive) == 0;
 }
 
+bool isRegionsEntry(const QString &rootFolder, const ScannedFileInfo &file)
+{
+    const QString relative = ScannedFileReader::relativePath(rootFolder, file.filePath);
+    const QString normalized = relative.trimmed().replace('\\', '/');
+    return normalized.compare(QStringLiteral("Regions"), Qt::CaseInsensitive) == 0
+        || normalized.endsWith(QStringLiteral("/Regions"), Qt::CaseInsensitive)
+        || QFileInfo(file.filePath).fileName().compare(QStringLiteral("Regions"), Qt::CaseInsensitive) == 0;
+}
+
 } // namespace
 
 MapPerformancePage::MapPerformancePage(QWidget *parent)
@@ -536,6 +552,53 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     m_decorSummaryLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
     m_decorSummaryLabel->setWordWrap(true);
     decorLayout->addWidget(m_decorSummaryLabel);
+
+    auto *scopeGroup = new QGroupBox(tr("Optimization Area"), decorGroup);
+    auto *scopeLayout = new QVBoxLayout(scopeGroup);
+    m_entireMapRadio = new QRadioButton(tr("Entire map"), scopeGroup);
+    m_selectedRegionsRadio = new QRadioButton(tr("Selected map regions"), scopeGroup);
+    m_customAreaRadio = new QRadioButton(tr("Custom area"), scopeGroup);
+    m_entireMapRadio->setChecked(true);
+    scopeLayout->addWidget(m_entireMapRadio);
+    scopeLayout->addWidget(m_selectedRegionsRadio);
+
+    m_regionStatusLabel = new QLabel(tr("No Regions component loaded."), scopeGroup);
+    m_regionStatusLabel->setWordWrap(true);
+    scopeLayout->addWidget(m_regionStatusLabel);
+    m_regionList = new QListWidget(scopeGroup);
+    m_regionList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_regionList->setMinimumHeight(100);
+    scopeLayout->addWidget(m_regionList);
+    auto *regionButtons = new QHBoxLayout();
+    auto *selectAllRegions = new QPushButton(tr("Select All"), scopeGroup);
+    auto *clearRegions = new QPushButton(tr("Clear"), scopeGroup);
+    regionButtons->addWidget(selectAllRegions);
+    regionButtons->addWidget(clearRegions);
+    regionButtons->addStretch(1);
+    scopeLayout->addLayout(regionButtons);
+
+    scopeLayout->addWidget(m_customAreaRadio);
+    m_customAreaPanel = new QWidget(scopeGroup);
+    auto *customForm = new QFormLayout(m_customAreaPanel);
+    customForm->setContentsMargins(24, 0, 0, 0);
+    m_customAreaName = new QLineEdit(tr("Custom Area"), m_customAreaPanel);
+    m_customX1 = new QDoubleSpinBox(m_customAreaPanel);
+    m_customY1 = new QDoubleSpinBox(m_customAreaPanel);
+    m_customX2 = new QDoubleSpinBox(m_customAreaPanel);
+    m_customY2 = new QDoubleSpinBox(m_customAreaPanel);
+    for (QDoubleSpinBox *spin : {m_customX1, m_customY1, m_customX2, m_customY2}) {
+        spin->setRange(-1000000.0, 1000000.0);
+        spin->setDecimals(4);
+    }
+    m_customX2->setValue(64.0);
+    m_customY2->setValue(64.0);
+    customForm->addRow(tr("Name"), m_customAreaName);
+    customForm->addRow(tr("Min X"), m_customX1);
+    customForm->addRow(tr("Min Y"), m_customY1);
+    customForm->addRow(tr("Max X"), m_customX2);
+    customForm->addRow(tr("Max Y"), m_customY2);
+    scopeLayout->addWidget(m_customAreaPanel);
+    decorLayout->addWidget(scopeGroup);
 
     auto *decorControls = new QHBoxLayout();
     m_gridColumnsSpin = new QSpinBox(decorGroup);
@@ -645,6 +708,25 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     connect(m_batchSpin, &QSpinBox::valueChanged, this, &MapPerformancePage::updateDecorPreview);
     connect(m_zoneModel, &QStandardItemModel::itemChanged, this, &MapPerformancePage::updateDecorPreview);
     connect(m_doodadModel, &QStandardItemModel::itemChanged, this, &MapPerformancePage::updateDecorPreview);
+    connect(m_entireMapRadio, &QRadioButton::toggled, this, &MapPerformancePage::updateOptimizationScope);
+    connect(m_selectedRegionsRadio, &QRadioButton::toggled, this, &MapPerformancePage::updateOptimizationScope);
+    connect(m_customAreaRadio, &QRadioButton::toggled, this, &MapPerformancePage::updateOptimizationScope);
+    connect(m_regionList, &QListWidget::itemChanged, this, &MapPerformancePage::updateOptimizationScope);
+    connect(selectAllRegions, &QPushButton::clicked, this, [this] {
+        for (int row = 0; row < m_regionList->count(); ++row) {
+            QListWidgetItem *item = m_regionList->item(row);
+            if (item->flags().testFlag(Qt::ItemIsEnabled))
+                item->setCheckState(Qt::Checked);
+        }
+    });
+    connect(clearRegions, &QPushButton::clicked, this, [this] {
+        for (int row = 0; row < m_regionList->count(); ++row)
+            m_regionList->item(row)->setCheckState(Qt::Unchecked);
+    });
+    for (QDoubleSpinBox *spin : {m_customX1, m_customY1, m_customX2, m_customY2})
+        connect(spin, &QDoubleSpinBox::valueChanged, this, &MapPerformancePage::updateOptimizationScope);
+    connect(m_customAreaName, &QLineEdit::textChanged, this, &MapPerformancePage::updateOptimizationScope);
+    updateOptimizationScope();
 
     layout->addWidget(decorGroup, 2);
 
@@ -697,6 +779,17 @@ void MapPerformancePage::setAnalysisResult(const AnalysisResult &result)
 
 void MapPerformancePage::rebuild()
 {
+    QByteArray regionsBytes;
+    QString regionsSource;
+    if (readRegionsFile(&regionsBytes, &regionsSource))
+        m_regionReadResult = sc2dh::region::MapRegionRepository().parse(regionsBytes, regionsSource);
+    else {
+        m_regionReadResult = {};
+        m_regionReadResult.sourceLabel = QStringLiteral("Regions");
+        m_regionReadResult.warnings << tr("The map has no readable Regions component.");
+    }
+    populateRegionSelector();
+
     if (readMinimapImage(&m_minimapImage, &m_minimapSourceLabel)) {
         static_cast<MapHeatmapWidget *>(m_heatmap)->setBackgroundImage(m_minimapImage, m_minimapSourceLabel);
     } else {
@@ -767,7 +860,7 @@ void MapPerformancePage::rebuild()
     if (!m_report.warnings.isEmpty())
         warning += QStringLiteral(" Warnings: %1").arg(m_report.warnings.join(QStringLiteral(" | ")));
     m_warningLabel->setText(warning);
-    populateZoneTable(m_decorZones);
+    updateOptimizationScope();
     sc2dh::decor::DecorationStreamingPlanner decorPlanner;
     populateDoodadTable(decorPlanner.parseObjects(m_objectsBytes));
     updateDecorPreview();
@@ -786,6 +879,25 @@ bool MapPerformancePage::readObjectsFile(QByteArray *objectsBytes, QString *sour
         if (!reader.readBytes(file, MaxObjectsBytes, &bytes))
             return false;
         *objectsBytes = bytes;
+        if (sourceLabel)
+            *sourceLabel = ScannedFileReader::relativePath(m_result.rootFolder, file.filePath);
+        return true;
+    }
+    return false;
+}
+
+bool MapPerformancePage::readRegionsFile(QByteArray *regionsBytes, QString *sourceLabel) const
+{
+    if (!regionsBytes)
+        return false;
+    ScannedFileReader reader(m_result);
+    for (const ScannedFileInfo &file : m_result.scannedFiles) {
+        if (!isRegionsEntry(m_result.rootFolder, file))
+            continue;
+        QByteArray bytes;
+        if (!reader.readBytes(file, MaxObjectsBytes, &bytes))
+            return false;
+        *regionsBytes = bytes;
         if (sourceLabel)
             *sourceLabel = ScannedFileReader::relativePath(m_result.rootFolder, file.filePath);
         return true;
@@ -871,6 +983,10 @@ void MapPerformancePage::selectCellIndex(int cellIndex)
 
 QVector<sc2dh::decor::DecorZone> MapPerformancePage::zonesFromModel() const
 {
+    if (m_selectedRegionsRadio && m_selectedRegionsRadio->isChecked())
+        return selectedRegionZones();
+    if (m_customAreaRadio && m_customAreaRadio->isChecked())
+        return m_decorZones;
     QVector<sc2dh::decor::DecorZone> zones;
     if (!m_zoneModel)
         return zones;
@@ -885,9 +1001,139 @@ QVector<sc2dh::decor::DecorZone> MapPerformancePage::zonesFromModel() const
         zone.yMax = m_zoneModel->item(row, 5) ? m_zoneModel->item(row, 5)->text().toDouble() : 0.0;
         if (zone.name.isEmpty())
             zone.name = QStringLiteral("Zone_%1").arg(zone.id);
+        if (row < m_decorZones.size()) {
+            const sc2dh::decor::DecorZone &source = m_decorZones.at(row);
+            const bool unchanged = source.id == zone.id && source.name == zone.name
+                && qFuzzyCompare(source.xMin + 1.0, zone.xMin + 1.0)
+                && qFuzzyCompare(source.yMin + 1.0, zone.yMin + 1.0)
+                && qFuzzyCompare(source.xMax + 1.0, zone.xMax + 1.0)
+                && qFuzzyCompare(source.yMax + 1.0, zone.yMax + 1.0);
+            if (unchanged)
+                zone.geometry = source.geometry;
+        }
         zones << zone;
     }
     return zones;
+}
+
+QVector<sc2dh::decor::DecorZone> MapPerformancePage::selectedRegionZones() const
+{
+    QVector<sc2dh::decor::DecorZone> zones;
+    if (!m_regionList)
+        return zones;
+    int zoneId = 1;
+    for (int row = 0; row < m_regionList->count(); ++row) {
+        const QListWidgetItem *item = m_regionList->item(row);
+        if (item->checkState() != Qt::Checked)
+            continue;
+        const int regionIndex = item->data(Qt::UserRole).toInt();
+        if (regionIndex < 0 || regionIndex >= m_regionReadResult.regions.size())
+            continue;
+        const sc2dh::region::MapRegion &region = m_regionReadResult.regions.at(regionIndex);
+        if (!region.geometry.supported || !region.geometry.bounds.valid)
+            continue;
+        sc2dh::decor::DecorZone zone;
+        zone.id = zoneId++;
+        zone.name = region.name;
+        zone.xMin = region.geometry.bounds.xMin;
+        zone.yMin = region.geometry.bounds.yMin;
+        zone.xMax = region.geometry.bounds.xMax;
+        zone.yMax = region.geometry.bounds.yMax;
+        zone.geometry = region.geometry;
+        zones << zone;
+    }
+    return zones;
+}
+
+void MapPerformancePage::populateRegionSelector()
+{
+    if (!m_regionList || !m_regionStatusLabel)
+        return;
+    const QSignalBlocker blocker(m_regionList);
+    m_regionList->clear();
+    for (int index = 0; index < m_regionReadResult.regions.size(); ++index) {
+        const sc2dh::region::MapRegion &region = m_regionReadResult.regions.at(index);
+        QString label = QStringLiteral("%1 [#%2] — %3")
+                            .arg(region.name, region.id,
+                                 sc2dh::region::regionShapeName(region.geometry.kind));
+        if (region.geometry.bounds.valid)
+            label += QStringLiteral(" | x %1..%2, y %3..%4")
+                         .arg(region.geometry.bounds.xMin, 0, 'f', 2)
+                         .arg(region.geometry.bounds.xMax, 0, 'f', 2)
+                         .arg(region.geometry.bounds.yMin, 0, 'f', 2)
+                         .arg(region.geometry.bounds.yMax, 0, 'f', 2);
+        auto *item = new QListWidgetItem(label, m_regionList);
+        item->setData(Qt::UserRole, index);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Unchecked);
+        if (!region.geometry.supported) {
+            item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+            item->setToolTip(region.geometry.unsupportedReason);
+        }
+    }
+    if (!m_regionReadResult.success) {
+        m_regionStatusLabel->setText(tr("Regions unavailable: %1")
+                                         .arg((m_regionReadResult.errors + m_regionReadResult.warnings)
+                                                  .join(QStringLiteral(" | "))));
+    } else {
+        const int supported = std::count_if(
+            m_regionReadResult.regions.cbegin(), m_regionReadResult.regions.cend(),
+            [](const sc2dh::region::MapRegion &region) { return region.geometry.supported; });
+        m_regionStatusLabel->setText(tr("Loaded %1 region(s), %2 usable as exact optimization scopes. Source: %3")
+                                         .arg(m_regionReadResult.regions.size())
+                                         .arg(supported)
+                                         .arg(m_regionReadResult.sourceLabel));
+    }
+    m_selectedRegionsRadio->setEnabled(!m_regionReadResult.regions.isEmpty());
+    updateOptimizationScope();
+}
+
+void MapPerformancePage::updateOptimizationScope()
+{
+    if (!m_regionList || !m_customAreaPanel || !m_zoneModel)
+        return;
+    const bool regionsMode = m_selectedRegionsRadio->isChecked();
+    const bool customMode = m_customAreaRadio->isChecked();
+    m_regionList->setEnabled(regionsMode);
+    m_customAreaPanel->setEnabled(customMode);
+
+    QVector<sc2dh::decor::DecorZone> zones;
+    if (regionsMode) {
+        zones = selectedRegionZones();
+    } else if (customMode) {
+        sc2dh::decor::DecorZone zone;
+        zone.id = 1;
+        zone.name = m_customAreaName->text().trimmed();
+        if (zone.name.isEmpty())
+            zone.name = tr("Custom Area");
+        zone.xMin = std::min(m_customX1->value(), m_customX2->value());
+        zone.yMin = std::min(m_customY1->value(), m_customY2->value());
+        zone.xMax = std::max(m_customX1->value(), m_customX2->value());
+        zone.yMax = std::max(m_customY1->value(), m_customY2->value());
+        zone.geometry.kind = sc2dh::region::RegionShapeKind::Rectangle;
+        zone.geometry.rawType = QStringLiteral("custom-rectangle");
+        zone.geometry.bounds = {zone.xMin, zone.yMin, zone.xMax, zone.yMax, true};
+        zone.geometry.supported = zone.xMin < zone.xMax && zone.yMin < zone.yMax;
+        if (zone.geometry.supported)
+            zones << zone;
+    } else if (!m_report.placements.isEmpty()) {
+        sc2dh::decor::DecorZone zone;
+        zone.id = 1;
+        zone.name = tr("Entire Map");
+        zone.xMin = m_report.xMin;
+        zone.yMin = m_report.yMin;
+        zone.xMax = m_report.xMax;
+        zone.yMax = m_report.yMax;
+        // Expand slightly so placements on measured extrema are inside, not ambiguous.
+        const double epsilon = 0.001;
+        zone.xMin -= epsilon;
+        zone.yMin -= epsilon;
+        zone.xMax += epsilon;
+        zone.yMax += epsilon;
+        zones << zone;
+    }
+    populateZoneTable(zones);
+    updateDecorPreview();
 }
 
 void MapPerformancePage::populateZoneTable(const QVector<sc2dh::decor::DecorZone> &zones)
@@ -1255,10 +1501,19 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
     const sc2dh::decor::DecorOptimizedMapResult result =
         sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
     if (!result.success) {
-        QMessageBox::critical(this,
-                              QStringLiteral("Create Decor-Optimized Map Copy"),
-                              QStringLiteral("Failed to create optimized copy:\n%1").arg(result.error));
         m_decorSummaryLabel->setText(QStringLiteral("Create copy failed: %1").arg(result.error));
+        m_galaxyPreview->appendPlainText(QStringLiteral("\n\nSAVE ERROR\nOriginal source changed: no\nReason: %1")
+                                             .arg(result.error));
+        OperationResult operation;
+        operation.outcome = OperationOutcome::Failed;
+        operation.errorCode = OperationErrorCode::SaveFailed;
+        operation.title = tr("Create decor-optimized map copy");
+        operation.summary = tr("No output was committed. The original map was not changed.");
+        operation.outputPath = selectedOutput;
+        operation.originalChanged = false;
+        operation.error = result.error;
+        operation.details = result.warnings;
+        emit operationFinished(operation);
         return;
     }
 
@@ -1269,10 +1524,18 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
                           .arg(result.verifiedDataNodes);
     if (!result.warnings.isEmpty())
         message += QStringLiteral("\n\nWarnings:\n%1").arg(result.warnings.join(QStringLiteral("\n")));
-    QMessageBox::information(this,
-                             QStringLiteral("Create Decor-Optimized Map Copy"),
-                             message);
     m_decorSummaryLabel->setText(message);
+    OperationResult operation;
+    operation.outcome = OperationOutcome::Succeeded;
+    operation.title = tr("Create decor-optimized map copy");
+    operation.selected = m_decorPreview.plan.doodads.size();
+    operation.applied = result.removedDoodads;
+    operation.skipped = m_decorPreview.plan.unassignedDoodads.size();
+    operation.blocked = m_decorPreview.plan.staticOnlyDoodads.size();
+    operation.outputPath = result.outputArchivePath;
+    operation.originalChanged = false;
+    operation.details = result.warnings;
+    emit operationFinished(operation);
 }
 
 QString MapPerformancePage::detailTextForCell(const sc2dh::perf::MapPerformanceCell &cell) const

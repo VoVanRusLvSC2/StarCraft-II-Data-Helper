@@ -51,7 +51,11 @@ QString buildSummaryText(const AnalysisResult &result)
         else if (group.mergeCandidate) ++manualMergeReviews;
         else ++allowedBodies;
     }
-    return QStringLiteral("%1 files scanned | %2 XML files | %3 objects | %4 automatic merges | %5 manual duplicate reviews | %6 allowed body matches | %7 cleanup candidates")
+    const QString destructiveState = result.completeness == AnalysisCompleteness::Complete
+        ? QStringLiteral("AVAILABLE")
+        : QStringLiteral("BLOCKED");
+    return QStringLiteral("Analysis: %1 | Destructive optimization: %2 | %3 files scanned | %4 XML files | %5 objects | %6 automatic merges | %7 manual duplicate reviews | %8 allowed body matches | %9 cleanup candidates")
+        .arg(analysisCompletenessName(result.completeness), destructiveState)
         .arg(result.totalFilesScanned())
         .arg(result.totalXmlFiles())
         .arg(result.totalDataNodes())

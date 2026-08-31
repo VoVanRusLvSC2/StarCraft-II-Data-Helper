@@ -9,7 +9,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QSaveFile>
+#include <QTemporaryDir>
 
 #include <pugixml.hpp>
 
@@ -112,11 +112,6 @@ bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, 
             return false;
     }
     return true;
-}
-
-QString relativePath(const QString &root, const QString &file)
-{
-    return QDir(root).relativeFilePath(file);
 }
 
 QStringList nonXmlReferenceFiles(const AnalysisResult &analysis)
@@ -245,23 +240,6 @@ void rewriteNode(pugi::xml_node node,
     }
 }
 
-bool restoreBackup(const QString &root, const QString &backup, const QStringList &relativeFiles, QString *error)
-{
-    if (backup.startsWith(QStringLiteral("disabled"), Qt::CaseInsensitive))
-        return false;
-    bool ok = true;
-    for (const QString &relative : relativeFiles) {
-        const QString source = QDir(backup).absoluteFilePath(relative);
-        const QString target = QDir(root).absoluteFilePath(relative);
-        QFile::remove(target);
-        if (!QFile::copy(source, target)) {
-            ok = false;
-            if (error) *error += QStringLiteral(" Rollback failed for %1.").arg(target);
-        }
-    }
-    return ok;
-}
-
 QString mergeNodeLabel(const DataNode &node)
 {
     return QStringLiteral("%1(%2)").arg(node.elementName.isEmpty() ? QStringLiteral("Unknown") : node.elementName,
@@ -290,6 +268,207 @@ bool postMergeStrongReferenceAudit(const AnalysisResult &rebuilt,
         }
     }
     return true;
+}
+
+bool normalizedTransactionPath(const QString &rootFolder,
+                               const QString &path,
+                               QString *relativePathOut,
+                               QString *error)
+{
+    QString relative = path;
+    if (QDir::isAbsolutePath(relative))
+        relative = QDir(rootFolder).relativeFilePath(relative);
+    relative = QDir::cleanPath(relative).replace('\\', '/');
+
+    const QString root = QDir::cleanPath(QFileInfo(rootFolder).absoluteFilePath()).replace('\\', '/');
+    const QString absolute = QDir::cleanPath(QDir(root).absoluteFilePath(relative)).replace('\\', '/');
+    if (relative.isEmpty() || relative == QStringLiteral(".") || relative == QStringLiteral("..")
+        || relative.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(relative)
+        || absolute == root || !absolute.startsWith(root + QLatin1Char('/'), Qt::CaseInsensitive)) {
+        if (error)
+            *error = QStringLiteral("Unsafe merge transaction path: %1").arg(path);
+        return false;
+    }
+    if (relativePathOut)
+        *relativePathOut = relative;
+    return true;
+}
+
+struct PreparedMergeTransaction
+{
+    QVector<TransactionalFileChange> changes;
+    QStringList changedFiles;
+    QSet<QString> xmlFiles;
+    int archiveReferencesRedirected = 0;
+};
+
+bool prepareMergeTransaction(const QString &rootFolder,
+                             const QHash<QString, QByteArray> &stagedXml,
+                             const QStringList &archiveFiles,
+                             const QHash<QString, QString> &archiveRedirects,
+                             PreparedMergeTransaction *prepared,
+                             QString *error)
+{
+    if (!prepared) {
+        if (error)
+            *error = QStringLiteral("Missing prepared merge transaction output.");
+        return false;
+    }
+    *prepared = {};
+
+    sc2dh::ArchiveReferenceRewriteReport archivePreview;
+    if (!sc2dh::previewArchiveReferenceFileRewrites(rootFolder,
+                                                     archiveFiles,
+                                                     archiveRedirects,
+                                                     &archivePreview,
+                                                     error)) {
+        return false;
+    }
+
+    QHash<QString, QByteArray> contentsByKey;
+    QHash<QString, QString> pathsByKey;
+    QSet<QString> xmlKeys;
+    const auto appendChange = [&](const QString &path, const QByteArray &contents, bool isXml) {
+        QString relative;
+        if (!normalizedTransactionPath(rootFolder, path, &relative, error))
+            return false;
+        const QString key = relative.toCaseFolded();
+        if (contentsByKey.contains(key)) {
+            if (error)
+                *error = QStringLiteral("Duplicate merge transaction path: %1").arg(relative);
+            return false;
+        }
+        contentsByKey.insert(key, contents);
+        pathsByKey.insert(key, relative);
+        if (isXml)
+            xmlKeys.insert(key);
+        return true;
+    };
+
+    QStringList xmlSourceFiles = stagedXml.keys();
+    std::sort(xmlSourceFiles.begin(), xmlSourceFiles.end());
+    for (const QString &file : xmlSourceFiles) {
+        if (!appendChange(file, stagedXml.value(file), true))
+            return false;
+    }
+
+    if (!archivePreview.changedFiles.isEmpty()) {
+        QTemporaryDir rewriteStaging(QDir::tempPath() + QStringLiteral("/sc2dh-merge-rewrite-XXXXXX"));
+        if (!rewriteStaging.isValid()) {
+            if (error)
+                *error = QStringLiteral("Unable to create archive rewrite staging directory.");
+            return false;
+        }
+
+        for (const QString &archiveFile : archivePreview.changedFiles) {
+            QString relative;
+            if (!normalizedTransactionPath(rootFolder, archiveFile, &relative, error))
+                return false;
+            const QString source = QDir(rootFolder).absoluteFilePath(relative);
+            const QString staged = QDir(rewriteStaging.path()).absoluteFilePath(relative);
+            if (!QDir().mkpath(QFileInfo(staged).absolutePath()) || !QFile::copy(source, staged)) {
+                if (error)
+                    *error = QStringLiteral("Unable to stage archive reference file: %1").arg(source);
+                return false;
+            }
+        }
+
+        sc2dh::ArchiveReferenceRewriteReport archiveRewrite;
+        if (!sc2dh::rewriteArchiveReferenceFiles(rewriteStaging.path(),
+                                                  archivePreview.changedFiles,
+                                                  archiveRedirects,
+                                                  &archiveRewrite,
+                                                  error)) {
+            return false;
+        }
+
+        for (const QString &archiveFile : archiveRewrite.changedFiles) {
+            QString relative;
+            if (!normalizedTransactionPath(rootFolder, archiveFile, &relative, error))
+                return false;
+            QByteArray contents;
+            if (!loadFile(QDir(rewriteStaging.path()).absoluteFilePath(relative), &contents, error))
+                return false;
+            if (!appendChange(relative, contents, false))
+                return false;
+        }
+        prepared->archiveReferencesRedirected = archiveRewrite.replacements;
+    }
+
+    QStringList keys = pathsByKey.keys();
+    std::sort(keys.begin(), keys.end(), [&pathsByKey](const QString &left, const QString &right) {
+        return pathsByKey.value(left).compare(pathsByKey.value(right), Qt::CaseInsensitive) < 0;
+    });
+    prepared->changes.reserve(keys.size());
+    for (const QString &key : keys) {
+        const QString &relative = pathsByKey.value(key);
+        prepared->changes.push_back({relative, contentsByKey.value(key), false});
+        prepared->changedFiles << relative;
+        if (xmlKeys.contains(key))
+            prepared->xmlFiles.insert(relative);
+    }
+    return true;
+}
+
+bool validateStagedMergeXml(const QString &stagingFolder,
+                            const QSet<QString> &xmlFiles,
+                            QString *error)
+{
+    QStringList files = xmlFiles.values();
+    std::sort(files.begin(), files.end());
+    for (const QString &relative : files) {
+        QByteArray bytes;
+        const QString stagedPath = QDir(stagingFolder).absoluteFilePath(relative);
+        if (!loadFile(stagedPath, &bytes, error))
+            return false;
+        pugi::xml_document document;
+        const auto parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+        if (!parsed) {
+            if (error)
+                *error = QStringLiteral("Staged merge XML does not parse: %1: %2")
+                             .arg(relative, QString::fromUtf8(parsed.description()));
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validateCommittedMerge(const QString &rootFolder,
+                            const QSet<QString> &whitelistIds,
+                            const QHash<QString, QSet<QString>> &removedScopesById,
+                            const QString &failureInjectionStep,
+                            QString *error)
+{
+    if (failureInjectionStep == QStringLiteral("after-commit")) {
+        if (error)
+            *error = QStringLiteral("Injected failure after commit.");
+        return false;
+    }
+
+    FolderAnalyzer analyzer;
+    AnalysisResult rebuilt;
+    QString analysisError;
+    if (!analyzer.analyzeFolder(rootFolder, whitelistIds, &rebuilt, &analysisError)) {
+        if (error)
+            *error = QStringLiteral("Registry rebuild failed: %1").arg(analysisError);
+        return false;
+    }
+    if (rebuilt.completeness != AnalysisCompleteness::Complete) {
+        if (error) {
+            *error = QStringLiteral("Post-merge verification analysis is %1.")
+                         .arg(analysisCompletenessName(rebuilt.completeness));
+        }
+        return false;
+    }
+    return postMergeStrongReferenceAudit(rebuilt, removedScopesById, error);
+}
+
+QString mergeTransactionError(const FolderSaveTransactionResult &transaction)
+{
+    if (!transaction.error.isEmpty())
+        return transaction.error;
+    return QStringLiteral("Merge transaction failed: %1.")
+        .arg(operationErrorCodeName(transaction.errorCode));
 }
 
 } // namespace
@@ -432,8 +611,12 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
                                      const QString &rootFolder,
                                      const QSet<QString> &whitelistIds) const
 {
-    Q_UNUSED(whitelistIds);
     MergeApplyResult result;
+    const DestructiveOperationPermission permission = canApplyDestructiveChanges(analysis);
+    if (!permission.allowed) {
+        result.error = destructiveOperationPermissionText(permission);
+        return result;
+    }
     const MergePreview plan = preview(analysis, request);
     if (!plan.valid) { result.error = plan.warnings.join(QStringLiteral("; ")); return result; }
 
@@ -493,71 +676,44 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     }
     if (staged.isEmpty()) { result.error = QStringLiteral("Merge produced no file changes."); return result; }
 
-    sc2dh::ArchiveReferenceRewriteReport externalPreview;
-    if (!sc2dh::previewArchiveReferenceFileRewrites(rootFolder,
-                                                   nonXmlReferenceFiles(analysis),
-                                                   externalRedirects,
-                                                   &externalPreview,
-                                                   &error)) {
+    PreparedMergeTransaction prepared;
+    if (!prepareMergeTransaction(rootFolder,
+                                 staged,
+                                 nonXmlReferenceFiles(analysis),
+                                 externalRedirects,
+                                 &prepared,
+                                 &error)) {
         result.error = error;
         return result;
     }
 
-    QStringList relativeFiles;
-    for (const QString &file : staged.keys()) relativeFiles << relativePath(rootFolder, file);
-    for (const QString &file : externalPreview.changedFiles) relativeFiles << file;
-    relativeFiles.removeDuplicates();
-    std::sort(relativeFiles.begin(), relativeFiles.end());
     BackupManager backups;
-    if (!backups.createFolderBackup(rootFolder, relativeFiles, analysis.analysisReportText,
-                                     plan.reportText, &result.backupFolder, &result.error)) return result;
-    if (m_failureInjectionStep == QStringLiteral("after-backup")) {
-        result.error = QStringLiteral("Injected failure after backup.");
+    const QString failureInjectionStep = m_failureInjectionStep;
+    const FolderSaveTransactionResult transaction = backups.applyFolderTransaction(
+        rootFolder,
+        prepared.changes,
+        analysis.analysisReportText,
+        plan.reportText,
+        [&prepared](const QString &stagingFolder, QString *validationError) {
+            return validateStagedMergeXml(stagingFolder, prepared.xmlFiles, validationError);
+        },
+        [rootFolder, whitelistIds, removedScopesById, failureInjectionStep](QString *validationError) {
+            return validateCommittedMerge(rootFolder,
+                                          whitelistIds,
+                                          removedScopesById,
+                                          failureInjectionStep,
+                                          validationError);
+        },
+        failureInjectionStep);
+    result.backupFolder = transaction.backupFolder;
+    if (!transaction.success) {
+        result.error = mergeTransactionError(transaction);
         return result;
     }
 
-    QStringList committed;
-    for (auto it = staged.cbegin(); it != staged.cend(); ++it) {
-        QSaveFile file(it.key());
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
-            || file.write(it.value()) != it.value().size() || !file.commit()) {
-            result.error = QStringLiteral("Failed to commit %1.").arg(it.key());
-            restoreBackup(rootFolder, result.backupFolder, committed, &result.error);
-            return result;
-        }
-        committed << relativePath(rootFolder, it.key());
-    }
-    sc2dh::ArchiveReferenceRewriteReport externalRewrite;
-    if (!externalPreview.changedFiles.isEmpty()
-        && !sc2dh::rewriteArchiveReferenceFiles(rootFolder,
-                                                externalPreview.changedFiles,
-                                                externalRedirects,
-                                                &externalRewrite,
-                                                &result.error)) {
-        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
-    }
-    if (m_failureInjectionStep == QStringLiteral("after-commit")) {
-        result.error = QStringLiteral("Injected failure after commit.");
-        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
-    }
-
-    FolderAnalyzer analyzer;
-    AnalysisResult rebuilt;
-    if (!analyzer.analyzeFolder(rootFolder, whitelistIds, &rebuilt, &error)) {
-        result.error = QStringLiteral("Registry rebuild failed: %1").arg(error);
-        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
-    }
-    if (!postMergeStrongReferenceAudit(rebuilt, removedScopesById, &error)) {
-        result.error = error;
-        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
-    }
     result.success = true;
-    result.changedFiles = relativeFiles;
-    result.referencesRedirected = totals.references + externalRewrite.replacements;
+    result.changedFiles = transaction.changedFiles;
+    result.referencesRedirected = totals.references + prepared.archiveReferencesRedirected;
     result.nodesDeleted = plan.nodesDeleted;
     return result;
 }
@@ -569,6 +725,11 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
                                           const std::function<void(int, int, const QString &)> &progress) const
 {
     MergeApplyResult result;
+    const DestructiveOperationPermission permission = canApplyDestructiveChanges(analysis);
+    if (!permission.allowed) {
+        result.error = destructiveOperationPermissionText(permission);
+        return result;
+    }
     if (requests.isEmpty()) {
         result.error = QStringLiteral("No duplicate merge requests selected.");
         return result;
@@ -719,82 +880,49 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
         return result;
     }
 
-    sc2dh::ArchiveReferenceRewriteReport externalPreview;
-    if (!sc2dh::previewArchiveReferenceFileRewrites(rootFolder,
-                                                   nonXmlReferenceFiles(analysis),
-                                                   externalRedirects,
-                                                   &externalPreview,
-                                                   &error)) {
+    PreparedMergeTransaction prepared;
+    if (!prepareMergeTransaction(rootFolder,
+                                 staged,
+                                 nonXmlReferenceFiles(analysis),
+                                 externalRedirects,
+                                 &prepared,
+                                 &error)) {
         result.error = error;
         return result;
     }
-
-    QStringList relativeFiles;
-    for (const QString &file : staged.keys())
-        relativeFiles << relativePath(rootFolder, file);
-    for (const QString &file : externalPreview.changedFiles)
-        relativeFiles << file;
-    relativeFiles.removeDuplicates();
-    std::sort(relativeFiles.begin(), relativeFiles.end());
 
     QString reportText = QStringLiteral("Batch Merge Apply\nRemoved objects: %1\nReferences redirected: %2\nFiles changed: %3\nWarnings: %4\n")
                              .arg(removedIds.size())
-                             .arg(totals.references)
-                             .arg(relativeFiles.size())
+                             .arg(totals.references + prepared.archiveReferencesRedirected)
+                             .arg(prepared.changedFiles.size())
                              .arg(result.warnings.isEmpty() ? QStringLiteral("none") : result.warnings.join(QStringLiteral("; ")));
     BackupManager backups;
-    if (!backups.createFolderBackup(rootFolder, relativeFiles, analysis.analysisReportText,
-                                    reportText, &result.backupFolder, &result.error))
-        return result;
-    if (m_failureInjectionStep == QStringLiteral("after-backup")) {
-        result.error = QStringLiteral("Injected failure after backup.");
-        return result;
-    }
-
-    QStringList committed;
-    for (auto it = staged.cbegin(); it != staged.cend(); ++it) {
-        QSaveFile file(it.key());
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
-            || file.write(it.value()) != it.value().size()
-            || !file.commit()) {
-            result.error = QStringLiteral("Failed to commit %1.").arg(it.key());
-            restoreBackup(rootFolder, result.backupFolder, committed, &result.error);
-            return result;
-        }
-        committed << relativePath(rootFolder, it.key());
-    }
-    sc2dh::ArchiveReferenceRewriteReport externalRewrite;
-    if (!externalPreview.changedFiles.isEmpty()
-        && !sc2dh::rewriteArchiveReferenceFiles(rootFolder,
-                                                externalPreview.changedFiles,
-                                                externalRedirects,
-                                                &externalRewrite,
-                                                &result.error)) {
-        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
-    }
-    if (m_failureInjectionStep == QStringLiteral("after-commit")) {
-        result.error = QStringLiteral("Injected failure after commit.");
-        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
-    }
-
-    FolderAnalyzer analyzer;
-    AnalysisResult rebuilt;
-    if (!analyzer.analyzeFolder(rootFolder, whitelistIds, &rebuilt, &error)) {
-        result.error = QStringLiteral("Registry rebuild failed: %1").arg(error);
-        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
-    }
-    if (!postMergeStrongReferenceAudit(rebuilt, removedScopesById, &error)) {
-        result.error = error;
-        restoreBackup(rootFolder, result.backupFolder, relativeFiles, &result.error);
+    const QString failureInjectionStep = m_failureInjectionStep;
+    const FolderSaveTransactionResult transaction = backups.applyFolderTransaction(
+        rootFolder,
+        prepared.changes,
+        analysis.analysisReportText,
+        reportText,
+        [&prepared](const QString &stagingFolder, QString *validationError) {
+            return validateStagedMergeXml(stagingFolder, prepared.xmlFiles, validationError);
+        },
+        [rootFolder, whitelistIds, removedScopesById, failureInjectionStep](QString *validationError) {
+            return validateCommittedMerge(rootFolder,
+                                          whitelistIds,
+                                          removedScopesById,
+                                          failureInjectionStep,
+                                          validationError);
+        },
+        failureInjectionStep);
+    result.backupFolder = transaction.backupFolder;
+    if (!transaction.success) {
+        result.error = mergeTransactionError(transaction);
         return result;
     }
 
     result.success = true;
-    result.changedFiles = relativeFiles;
-    result.referencesRedirected = totals.references + externalRewrite.replacements;
+    result.changedFiles = transaction.changedFiles;
+    result.referencesRedirected = totals.references + prepared.archiveReferencesRedirected;
     result.nodesDeleted = removedIds.size();
     return result;
 }

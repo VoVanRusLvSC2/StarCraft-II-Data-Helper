@@ -1,5 +1,7 @@
 #include "ui/ObjectTableModel.h"
 
+#include "app/TranslationManager.h"
+
 #include <QBrush>
 #include <QColor>
 #include <QLinearGradient>
@@ -11,6 +13,11 @@
 #include <QStringList>
 
 namespace {
+
+QString uiText(const char *source)
+{
+    return sc2dh::app::TranslationManager::translateDynamicUi(source);
+}
 
 QString badgeTextForElement(const QString &elementName)
 {
@@ -78,23 +85,23 @@ QColor statusColor(const DataNode &node)
 QString statusTextForNode(const DataNode &node)
 {
     if (node.candidateUnused) {
-        return QStringLiteral("Unused candidate");
+        return uiText("Unused candidate");
     }
     if (node.duplicateId && node.duplicateContent) {
-        return QStringLiteral("ID collision + duplicate body");
+        return uiText("ID collision + duplicate body");
     }
     if (node.duplicateId) {
-        return QStringLiteral("ID collision");
+        return uiText("ID collision");
     }
     if (node.duplicateContent) {
-        return QStringLiteral("Identical body");
+        return uiText("Identical body");
     }
 
     const QString trimmed = node.serializedXml.trimmed();
     if (trimmed.endsWith(QStringLiteral("/>")) || trimmed.contains(QStringLiteral("></"))) {
-        return QStringLiteral("Suspicious empty");
+        return uiText("Suspicious empty");
     }
-    return QStringLiteral("PASS");
+    return uiText("PASS");
 }
 
 }
@@ -102,6 +109,16 @@ QString statusTextForNode(const DataNode &node)
 ObjectTableModel::ObjectTableModel(QObject *parent)
     : QAbstractTableModel(parent)
 {
+    connect(&sc2dh::app::TranslationManager::instance(),
+            &sc2dh::app::TranslationManager::languageChanged,
+            this,
+            [this](const QString &) {
+                emit headerDataChanged(Qt::Horizontal, IdColumn, StatusColumn);
+                if (!m_nodes.isEmpty()) {
+                    emit dataChanged(index(0, IdColumn), index(m_nodes.size() - 1, StatusColumn),
+                                     {Qt::DisplayRole, Qt::ToolTipRole});
+                }
+            });
 }
 
 void ObjectTableModel::setNodes(QVector<DataNode> nodes)
@@ -204,12 +221,12 @@ QVariant ObjectTableModel::data(const QModelIndex &index, int role) const
         if (role == Qt::ForegroundRole) return QColor(QStringLiteral("#fff6d8"));
         if (role == Qt::ToolTipRole) {
             if (node.candidateUnused) {
-                return QStringLiteral("No incoming XML references. Safe candidate only.");
+                return uiText("No incoming XML references. Safe candidate only.");
             }
             if (node.duplicateId || node.duplicateContent) {
-                return QStringLiteral("Identical object body or an ID collision was detected.");
+                return uiText("Identical object body or an ID collision was detected.");
             }
-            return QStringLiteral("PASS. No strong warnings detected.");
+            return uiText("PASS. No strong warnings detected.");
         }
         break;
     default:
@@ -229,13 +246,13 @@ QVariant ObjectTableModel::headerData(int section, Qt::Orientation orientation, 
     }
 
     switch (section) {
-    case IdColumn: return QStringLiteral("ID");
-    case ParentColumn: return QStringLiteral("Parent");
-    case ElementColumn: return QStringLiteral("Element");
-    case LocationColumn: return QStringLiteral("XML Location");
-    case FileColumn: return QStringLiteral("File");
-    case HashColumn: return QStringLiteral("Hash");
-    case StatusColumn: return QStringLiteral("Status");
+    case IdColumn: return uiText("ID");
+    case ParentColumn: return uiText("Parent");
+    case ElementColumn: return uiText("Element");
+    case LocationColumn: return uiText("XML Location");
+    case FileColumn: return uiText("File");
+    case HashColumn: return uiText("Hash");
+    case StatusColumn: return uiText("Status");
     default: return {};
     }
 }

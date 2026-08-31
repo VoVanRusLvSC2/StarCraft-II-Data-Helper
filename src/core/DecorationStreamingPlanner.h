@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/MapRegionRepository.h"
+
 #include <QByteArray>
 #include <QHash>
 #include <QSet>
@@ -28,9 +30,21 @@ struct DoodadPlacement
     QString tintColor;
     QString teamColor;
     QString flags;
+    QHash<QString, QString> placementFlags;
+    QString rawSource;
+    QHash<QString, QString> otherAttributes;
+    bool hasUnsupportedChildren = false;
+    bool losslessRoundTripSupported = false;
     QStringList safetyReferenceFiles;
     bool hasPosition = false;
     bool dynamicCandidate = false;
+    // Visibility-only streaming keeps this original placement in Objects and
+    // controls its existing actor by Doodad ID. It deliberately has a
+    // separate safety classification from dynamic recreation: height,
+    // variation and editor-only fields stay intact because nothing is
+    // serialized or recreated.
+    bool visibilityCandidate = false;
+    QString visibilityStaticOnlyReason;
     bool userExcluded = false;
     int forcedZoneId = 0;
     QString staticOnlyReason;
@@ -46,6 +60,7 @@ struct DecorZone
     double yMin = 0.0;
     double xMax = 0.0;
     double yMax = 0.0;
+    sc2dh::region::RegionGeometry geometry;
 };
 
 struct ZoneAssignment
@@ -60,6 +75,17 @@ struct DecorationStreamingPlan
     QVector<ZoneAssignment> zones;
     QVector<int> staticOnlyDoodads;
     QVector<int> unassignedDoodads;
+    QVector<int> boundaryDoodads;
+    QStringList warnings;
+};
+
+struct DecorationVisibilityPlan
+{
+    QVector<DoodadPlacement> doodads;
+    QVector<ZoneAssignment> zones;
+    QVector<int> staticOnlyDoodads;
+    QVector<int> unassignedDoodads;
+    QVector<int> boundaryDoodads;
     QStringList warnings;
 };
 
@@ -83,13 +109,35 @@ struct DecorationOptimizedArtifacts
     QByteArray optimizedObjectsBytes;
     QString galaxySource;
     QVector<int> removedDoodadIndices;
+    bool roundTripVerified = false;
+    bool outsideScopePreserved = false;
     bool valid = false;
     QStringList warnings;
 };
 
+struct DecorationVisibilityArtifacts
+{
+    DecorationVisibilityPlan plan;
+    QString galaxySource;
+    QVector<int> controlledDoodadIndices;
+    // The visibility mode never adds an Objects replacement entry. The map
+    // copy service also verifies this against the staged archive.
+    bool objectsPreserved = false;
+    bool valid = false;
+    QStringList warnings;
+};
+
+enum class DecorationOptimizationMode
+{
+    RecreateActors,
+    VisibilityOnly
+};
+
 struct DecorationArchivePatch
 {
+    DecorationOptimizationMode mode = DecorationOptimizationMode::RecreateActors;
     DecorationOptimizedArtifacts artifacts;
+    DecorationVisibilityArtifacts visibilityArtifacts;
     QHash<QString, QByteArray> replacementEntries;
     QString objectsEntry = QStringLiteral("Objects");
     QString mapScriptEntry = QStringLiteral("MapScript.galaxy");
@@ -103,6 +151,10 @@ class DecorationStreamingPlanner
 {
 public:
     QVector<DoodadPlacement> parseObjects(const QByteArray &objectsBytes, QStringList *warnings = nullptr) const;
+    QByteArray serializePlacementLosslessly(const DoodadPlacement &placement,
+                                            QString *errorMessage = nullptr) const;
+    bool verifyPlacementRoundTrip(const DoodadPlacement &placement,
+                                  QString *errorMessage = nullptr) const;
     DecorationStreamingPlan buildPlan(const QByteArray &objectsBytes,
                                       const QVector<DecorZone> &zones,
                                       const DecorationSafetyContext &safetyContext,
@@ -110,9 +162,20 @@ public:
     DecorationStreamingPlan buildPlan(const QByteArray &objectsBytes,
                                       const QVector<DecorZone> &zones,
                                       QStringList *warnings = nullptr) const;
+    DecorationVisibilityPlan buildVisibilityPlan(const QByteArray &objectsBytes,
+                                                 const QVector<DecorZone> &zones,
+                                                 const DecorationSafetyContext &safetyContext,
+                                                 QStringList *warnings = nullptr) const;
+    DecorationVisibilityPlan buildVisibilityPlan(const QByteArray &objectsBytes,
+                                                 const QVector<DecorZone> &zones,
+                                                 QStringList *warnings = nullptr) const;
     QString generateGalaxy(const DecorationStreamingPlan &plan,
                            const GalaxyGenerationOptions &options = {}) const;
     bool validateGeneratedGalaxy(const QString &galaxySource, QStringList *errors = nullptr) const;
+    QString generateVisibilityGalaxy(const DecorationVisibilityPlan &plan,
+                                     const GalaxyGenerationOptions &options = {}) const;
+    bool validateGeneratedVisibilityGalaxy(const QString &galaxySource,
+                                           QStringList *errors = nullptr) const;
     bool injectGalaxyInclude(const QByteArray &mapScriptBytes,
                              const QString &scriptEntry,
                              QByteArray *rewrittenMapScriptBytes,
@@ -128,6 +191,13 @@ public:
     DecorationOptimizedArtifacts createOptimizedArtifacts(const QByteArray &objectsBytes,
                                                           const QVector<DecorZone> &zones,
                                                           const GalaxyGenerationOptions &options = {}) const;
+    DecorationVisibilityArtifacts createVisibilityArtifacts(const QByteArray &objectsBytes,
+                                                            const QVector<DecorZone> &zones,
+                                                            const DecorationSafetyContext &safetyContext,
+                                                            const GalaxyGenerationOptions &options = {}) const;
+    DecorationVisibilityArtifacts createVisibilityArtifacts(const QByteArray &objectsBytes,
+                                                            const QVector<DecorZone> &zones,
+                                                            const GalaxyGenerationOptions &options = {}) const;
     DecorationArchivePatch prepareArchivePatch(const QByteArray &objectsBytes,
                                                const QByteArray &mapScriptBytes,
                                                const QVector<DecorZone> &zones,
@@ -143,6 +213,21 @@ public:
                                                const QString &objectsEntry = QStringLiteral("Objects"),
                                                const QString &mapScriptEntry = QStringLiteral("MapScript.galaxy"),
                                                const QString &runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy")) const;
+    DecorationArchivePatch prepareVisibilityArchivePatch(const QByteArray &objectsBytes,
+                                                         const QByteArray &mapScriptBytes,
+                                                         const QVector<DecorZone> &zones,
+                                                         const DecorationSafetyContext &safetyContext,
+                                                         const GalaxyGenerationOptions &options = {},
+                                                         const QString &objectsEntry = QStringLiteral("Objects"),
+                                                         const QString &mapScriptEntry = QStringLiteral("MapScript.galaxy"),
+                                                         const QString &runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy")) const;
+    DecorationArchivePatch prepareVisibilityArchivePatch(const QByteArray &objectsBytes,
+                                                         const QByteArray &mapScriptBytes,
+                                                         const QVector<DecorZone> &zones,
+                                                         const GalaxyGenerationOptions &options = {},
+                                                         const QString &objectsEntry = QStringLiteral("Objects"),
+                                                         const QString &mapScriptEntry = QStringLiteral("MapScript.galaxy"),
+                                                         const QString &runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy")) const;
 };
 
 } // namespace sc2dh::decor

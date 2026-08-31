@@ -33,6 +33,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QColor>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDebug>
 #include <QDialog>
@@ -49,6 +50,7 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSaveFile>
+#include <QSet>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -56,6 +58,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -166,6 +169,217 @@ namespace
                 return true;
         }
         return false;
+    }
+
+    bool archiveFileSha256(const QString &path, QByteArray *digest, QString *errorMessage)
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to read archive for byte verification: %1").arg(path);
+            return false;
+        }
+
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        while (!file.atEnd()) {
+            const QByteArray bytes = file.read(1024 * 1024);
+            if (bytes.isEmpty() && file.error() != QFileDevice::NoError) {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Unable to read archive completely for byte verification: %1").arg(path);
+                return false;
+            }
+            hash.addData(bytes);
+        }
+
+        if (digest)
+            *digest = hash.result();
+        return true;
+    }
+
+    bool reserveIsolatedPendingArchivePath(const QString &sourceArchivePath,
+                                           QString *pendingPath,
+                                           QString *errorMessage)
+    {
+        const QFileInfo sourceInfo(sourceArchivePath);
+        const QDir parent(sourceInfo.absolutePath());
+        if (!parent.exists()) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Archive parent folder does not exist: %1").arg(sourceInfo.absolutePath());
+            return false;
+        }
+
+        QTemporaryFile reservation(parent.absoluteFilePath(
+            sourceInfo.fileName() + QStringLiteral(".sc2dh.pending-XXXXXX")));
+        reservation.setAutoRemove(false);
+        if (!reservation.open()) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to reserve an isolated archive staging path beside the source archive.");
+            return false;
+        }
+        const QString path = reservation.fileName();
+        reservation.close();
+        if (!QFile::remove(path)) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to prepare isolated archive staging path: %1").arg(path);
+            return false;
+        }
+        if (pendingPath)
+            *pendingPath = path;
+        return true;
+    }
+
+    bool atomicallyCopyArchiveAndVerify(const QString &sourcePath,
+                                        const QString &destinationPath,
+                                        const QByteArray &expectedHash,
+                                        QString *errorMessage)
+    {
+        QByteArray sourceHash;
+        if (!archiveFileSha256(sourcePath, &sourceHash, errorMessage))
+            return false;
+        if (sourceHash != expectedHash) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Source archive changed before atomic copy: %1").arg(sourcePath);
+            return false;
+        }
+
+        QFile source(sourcePath);
+        if (!source.open(QIODevice::ReadOnly)) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to reopen archive copy source: %1").arg(sourcePath);
+            return false;
+        }
+
+        QSaveFile destination(destinationPath);
+        // Never fall back to a direct overwrite: a failed save must leave the
+        // original archive intact so the verified backup remains a true rollback.
+        destination.setDirectWriteFallback(false);
+        if (!destination.open(QIODevice::WriteOnly)) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to begin atomic archive replacement: %1").arg(destinationPath);
+            return false;
+        }
+
+        while (!source.atEnd()) {
+            const QByteArray bytes = source.read(1024 * 1024);
+            if (bytes.isEmpty() && source.error() != QFileDevice::NoError) {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Unable to read staged archive during atomic replacement: %1").arg(sourcePath);
+                return false;
+            }
+            if (!bytes.isEmpty() && destination.write(bytes) != bytes.size()) {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Unable to write staged archive during atomic replacement: %1").arg(destinationPath);
+                return false;
+            }
+        }
+        if (!destination.commit()) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to commit atomic archive replacement: %1").arg(destinationPath);
+            return false;
+        }
+
+        QByteArray destinationHash;
+        if (!archiveFileSha256(destinationPath, &destinationHash, errorMessage))
+            return false;
+        if (destinationHash != expectedHash) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Atomic archive replacement did not pass byte verification: %1").arg(destinationPath);
+            return false;
+        }
+        return true;
+    }
+
+    bool verifyCommittedArchiveEntries(const Sc2Archive &archive,
+                                       const QHash<QString, QByteArray> &replacements,
+                                       const QStringList &removedEntries,
+                                       QString *errorMessage)
+    {
+        QSet<QString> normalizedEntries;
+        for (const QString &entry : archive.allEntries())
+            normalizedEntries.insert(normalizedArchiveName(entry));
+
+        for (auto it = replacements.cbegin(); it != replacements.cend(); ++it) {
+            if (isRemovedArchiveEntry(removedEntries, it.key())) {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Archive transaction has contradictory replacement/removal entry: %1").arg(it.key());
+                return false;
+            }
+
+            QByteArray actual;
+            QString readError;
+            if (!archive.readEntry(it.key(), &actual, &readError)) {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Committed archive is missing replacement entry %1: %2").arg(it.key(), readError);
+                return false;
+            }
+            if (actual != it.value()) {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Committed archive replacement byte verification failed for %1.").arg(it.key());
+                return false;
+            }
+        }
+
+        for (const QString &removedEntry : removedEntries) {
+            if (normalizedEntries.contains(normalizedArchiveName(removedEntry))) {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Committed archive still contains removed entry: %1").arg(removedEntry);
+                return false;
+            }
+
+            QByteArray unexpected;
+            QString readError;
+            if (archive.readEntry(removedEntry, &unexpected, &readError)) {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Committed archive still exposes removed entry: %1").arg(removedEntry);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    enum class ArchiveRestoreStatus
+    {
+        OriginalAlreadyIntact,
+        Restored,
+        Failed
+    };
+
+    ArchiveRestoreStatus restoreArchiveFromVerifiedBackup(const QString &backupPath,
+                                                           const QString &archivePath,
+                                                           const QByteArray &expectedBackupHash,
+                                                           QString *errorMessage)
+    {
+        QByteArray backupHash;
+        if (!archiveFileSha256(backupPath, &backupHash, errorMessage))
+            return ArchiveRestoreStatus::Failed;
+        if (backupHash != expectedBackupHash) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Verified backup changed before restoration: %1").arg(backupPath);
+            return ArchiveRestoreStatus::Failed;
+        }
+
+        QByteArray currentHash;
+        QString currentHashError;
+        if (archiveFileSha256(archivePath, &currentHash, &currentHashError)
+            && currentHash == expectedBackupHash) {
+            return ArchiveRestoreStatus::OriginalAlreadyIntact;
+        }
+
+        QString restoreError;
+        if (!atomicallyCopyArchiveAndVerify(backupPath, archivePath, expectedBackupHash, &restoreError)) {
+            if (errorMessage)
+                *errorMessage = restoreError;
+            return ArchiveRestoreStatus::Failed;
+        }
+
+        Sc2Archive restoredArchive;
+        QString reopenError;
+        if (!restoredArchive.load(archivePath, &reopenError)) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Restored archive did not reopen successfully: %1").arg(reopenError);
+            return ArchiveRestoreStatus::Failed;
+        }
+        return ArchiveRestoreStatus::Restored;
     }
 
     bool addCatalogEnumRepairs(const Sc2Archive &archive,
@@ -363,14 +577,10 @@ namespace
         return archives;
     }
 
-    bool persistentBackupsEnabledForUi()
-    {
-        return QSettings().value(QStringLiteral("backup/enabled"), true).toBool();
-    }
-
     QString backupPrompt(const QString &withBackup, const QString &withoutBackup)
     {
-        return persistentBackupsEnabledForUi() ? withBackup : withoutBackup;
+        Q_UNUSED(withoutBackup);
+        return withBackup;
     }
 
     QString archiveFolderReadOnlyMessage()
@@ -454,6 +664,10 @@ void MainWindow::redoFocusedEditor()
 void MainWindow::changeEvent(QEvent *event)
 {
     QMainWindow::changeEvent(event);
+    if (event && event->type() == QEvent::LanguageChange)
+    {
+        MainWindowUiBuilder::retranslate(*this);
+    }
     if (event && event->type() == QEvent::WindowStateChange)
     {
         updateFullscreenActionText();
@@ -569,15 +783,21 @@ bool MainWindow::validateArchiveCatalogSchema(const QString &archivePath, QStrin
     const QString scriptPath = schemaValidatorScriptPath();
     if (scriptPath.isEmpty())
     {
-        logLine(QStringLiteral("XSD validation skipped: scripts/validate_sc2_catalogs.py was not found."));
-        return true;
+        const QString error = QStringLiteral("XSD validation prerequisite is missing: scripts/validate_sc2_catalogs.py was not found.");
+        logLine(error);
+        if (errorMessage)
+            *errorMessage = error;
+        return false;
     }
 
     const QString xsdPath = catalogXsdPath();
     if (xsdPath.isEmpty())
     {
-        logLine(QStringLiteral("XSD validation skipped: resources/catalogsData.xsd was not found."));
-        return true;
+        const QString error = QStringLiteral("XSD validation prerequisite is missing: resources/catalogsData.xsd was not found.");
+        logLine(error);
+        if (errorMessage)
+            *errorMessage = error;
+        return false;
     }
 
     QProcess process;
@@ -598,24 +818,38 @@ bool MainWindow::validateArchiveCatalogSchema(const QString &archivePath, QStrin
 
     if (!process.waitForStarted(5000))
     {
-        logLine(QStringLiteral("XSD validation skipped: Python could not be started."));
-        return true;
+        const QString error = QStringLiteral("XSD validation could not start Python: %1").arg(process.errorString());
+        logLine(error);
+        if (errorMessage)
+            *errorMessage = error;
+        return false;
     }
 
     if (!process.waitForFinished(180000))
     {
         process.kill();
         process.waitForFinished(5000);
-        logLine(QStringLiteral("XSD validation warning: timed out before archive save; saving anyway."));
-        return true;
+        const QString output = compactProcessOutput(QString::fromUtf8(process.readAll()));
+        const QString error = QStringLiteral("XSD validation timed out after 180 seconds for %1%2")
+                                  .arg(archivePath,
+                                       output.isEmpty() ? QString() : QStringLiteral(": %1").arg(output));
+        logLine(error);
+        if (errorMessage)
+            *errorMessage = error;
+        return false;
     }
 
     const QString output = compactProcessOutput(QString::fromUtf8(process.readAll()));
     if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
     {
-        Q_UNUSED(errorMessage);
-        logLine(QStringLiteral("XSD validation warning: failed before archive save; saving anyway.\n%1").arg(output));
-        return true;
+        const QString error = QStringLiteral("XSD catalog validation failed for %1 (exit %2): %3")
+                                  .arg(archivePath)
+                                  .arg(process.exitCode())
+                                  .arg(output.isEmpty() ? process.errorString() : output);
+        logLine(error);
+        if (errorMessage)
+            *errorMessage = error;
+        return false;
     }
 
     logLine(output.isEmpty()
@@ -641,8 +875,10 @@ void MainWindow::setCurrentSourcePath(const QString &path)
     m_currentSourcePath = path;
     if (m_pathEdit)
     {
-        m_pathEdit->setText(path);
-        m_pathEdit->setCursorPosition(0);
+        if (m_pathEdit->text() != path) {
+            m_pathEdit->setText(path);
+            m_pathEdit->setCursorPosition(0);
+        }
     }
     if (!path.isEmpty())
     {
@@ -695,6 +931,34 @@ bool MainWindow::analyzeFolderPath(const QString &folderPath, QString *errorMess
     return analyzed;
 }
 
+void MainWindow::showOperationResult(const OperationResult &result, bool focusPanel)
+{
+    if (m_logPanel)
+        m_logPanel->showOperationResult(result);
+    statusBar()->showMessage(result.outcome == OperationOutcome::Succeeded
+                                 ? tr("%1 completed").arg(result.title)
+                                 : tr("%1 failed: %2").arg(result.title, result.error),
+                             result.outcome == OperationOutcome::Succeeded ? 8000 : 20000);
+    if (focusPanel && m_tabs && m_logPanel)
+        m_tabs->setCurrentWidget(m_logPanel);
+}
+
+void MainWindow::showSaveFailure(const QString &title, const QString &error,
+                                 const QString &backupPath, const QString &outputPath,
+                                 bool originalChanged, OperationErrorCode code)
+{
+    OperationResult result;
+    result.outcome = OperationOutcome::Failed;
+    result.errorCode = code;
+    result.title = title;
+    result.summary = tr("Changes were not committed to the original source.");
+    result.backupPath = backupPath;
+    result.outputPath = outputPath;
+    result.originalChanged = originalChanged;
+    result.error = error;
+    showOperationResult(result);
+}
+
 bool MainWindow::analyzeArchiveFolderPath(const QString &folderPath, QString *errorMessage)
 {
     m_archiveReferencedIds.clear();
@@ -742,6 +1006,13 @@ bool MainWindow::analyzeArchiveFolderPath(const QString &folderPath, QString *er
                 *errorMessage = QStringLiteral("%1: %2").arg(archivePath, archiveError);
             return false;
         }
+
+        QString revisionError;
+        const SourceRevision revision = captureSourceRevision(archivePath, &revisionError);
+        if (!revisionError.isEmpty())
+            m_result.unreadableSources.append(revisionError);
+        else
+            m_result.sourceRevisions.append(revision);
 
         const QStringList entries = archive.allEntries();
         entriesByArchive.insert(archivePath, entries);
@@ -816,6 +1087,8 @@ bool MainWindow::analyzeArchiveFolderPath(const QString &folderPath, QString *er
         return false;
     }
 
+    m_result.sourceDiscoveryComplete = true;
+
     if (!m_analyzer.finalizeAnalysisResult(&m_result, m_whitelistIds, errorMessage, [this]
                                            {
             if (!m_activeProgressDialog)
@@ -875,8 +1148,9 @@ bool MainWindow::analyzeArchiveFolderPath(const QString &folderPath, QString *er
             QString readError;
             if (!archive.readEntry(entry, &bytes, &readError))
             {
-                if (strength == ArchiveReferenceStrength::Strong)
-                    m_archiveReferenceScanComplete = false;
+                m_archiveReferenceScanComplete = false;
+                m_result.incompleteSources.append(
+                    QStringLiteral("%1::%2: %3").arg(archiveRelative, entry, readError));
                 logLine(QStringLiteral("Archive reference scan failed for %1::%2: %3").arg(archiveRelative, entry, readError));
                 continue;
             }
@@ -971,7 +1245,18 @@ bool MainWindow::analyzeXmlFile(const QString &filePath, QString *errorMessage)
     }
 
     m_result.nodes = nodes;
-    m_analyzer.populateReferenceIds(&m_result);
+    QString revisionError;
+    const SourceRevision revision = captureSourceRevision(filePath, &revisionError);
+    if (!revisionError.isEmpty())
+        m_result.unreadableSources.append(revisionError);
+    else
+        m_result.sourceRevisions.append(revision);
+    m_result.sourceDiscoveryComplete = true;
+    m_result.referenceExtractionComplete = m_analyzer.populateReferenceIds(&m_result);
+    m_result.dependencyGraphComplete = false;
+    m_result.incompleteSources.append(
+        QStringLiteral("Standalone XML analysis cannot prove references from the containing map or mod."));
+    updateAnalysisCompleteness(&m_result);
     m_result.analysisReportText = m_analyzer.buildAnalysisReport(m_result);
     m_result.plannedChangesReportText = m_analyzer.buildDryRunReport(m_result, QVector<int>{});
     return true;
@@ -995,7 +1280,6 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
         }
         return false;
     }
-
     QStringList xmlEntries;
     for (const QString &entry : archive.allEntries())
         if (entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive))
@@ -1013,6 +1297,12 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
 
     m_result = AnalysisResult{};
     m_result.rootFolder = filePath;
+    QString revisionError;
+    const SourceRevision revision = captureSourceRevision(filePath, &revisionError);
+    if (!revisionError.isEmpty())
+        m_result.unreadableSources.append(revisionError);
+    else
+        m_result.sourceRevisions.append(revision);
     XmlLoader loader;
 
     for (int entryIndex = 0; entryIndex < xmlEntries.size(); ++entryIndex)
@@ -1034,11 +1324,11 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
         QString readError;
         if (!archive.readEntry(entryName, &xmlBytes, &readError))
         {
-            if (errorMessage)
-            {
-                *errorMessage = QStringLiteral("%1: %2").arg(entryName, readError);
-            }
-            return false;
+            ParseErrorInfo error;
+            error.filePath = entryName;
+            error.message = readError;
+            m_result.parseErrors.append(error);
+            continue;
         }
 
         ScannedFileInfo scanned;
@@ -1074,6 +1364,8 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
         scanned.size = 0;
         m_result.scannedFiles.append(scanned);
     }
+
+    m_result.sourceDiscoveryComplete = true;
 
     if (!m_analyzer.finalizeAnalysisResult(&m_result, m_whitelistIds, errorMessage, [this]
                                            {
@@ -1118,8 +1410,8 @@ bool MainWindow::analyzeArchiveFile(const QString &filePath, QString *errorMessa
         QString readError;
         if (!archive.readEntry(entry, &bytes, &readError))
         {
-            if (strength == ArchiveReferenceStrength::Strong)
-                m_archiveReferenceScanComplete = false;
+            m_archiveReferenceScanComplete = false;
+            m_result.incompleteSources.append(QStringLiteral("%1: %2").arg(entry, readError));
             logLine(QStringLiteral("Archive reference scan failed for %1: %2").arg(entry, readError));
             continue;
         }
@@ -1177,8 +1469,17 @@ void MainWindow::normalizeArchiveAnalysis(AnalysisResult *analysis, const QStrin
     analysis->rootFolder = archivePath;
     const bool closedProjectMode = QSettings().value(QStringLiteral("optimization/closedProjectMode"), false).toBool();
     analysis->externalConsumersUnknown = sourceMayHaveExternalConsumers(archivePath) && !closedProjectMode;
+    if (!m_archiveReferenceScanComplete)
+    {
+        const QString diagnostic = QStringLiteral("Archive reference scan was incomplete; one or more possible reference sources were not analyzed.");
+        if (!analysis->incompleteSources.contains(diagnostic))
+            analysis->incompleteSources.append(diagnostic);
+    }
+    updateAnalysisCompleteness(analysis);
+    enforceAnalysisCompletenessSafety(analysis);
     applyArchiveReferenceSafety(analysis);
     applyExternalConsumerSafety(analysis);
+    enforceAnalysisCompletenessSafety(analysis);
     analysis->analysisReportText = m_analyzer.buildAnalysisReport(*analysis);
     analysis->plannedChangesReportText = m_analyzer.buildDryRunReport(*analysis, QVector<int>{});
 }
@@ -1206,6 +1507,9 @@ void MainWindow::applyArchiveReferenceSafety(AnalysisResult *analysis) const
         if (!m_archiveReferenceScanComplete || !strongSources.isEmpty())
         {
             candidate.state = CandidateState::Blocked;
+            candidate.removalSafety = !m_archiveReferenceScanComplete
+                                          ? RemovalSafety::BlockedIncompleteAnalysis
+                                          : RemovalSafety::Unsafe;
             candidate.usageState = UsageState::Blocked;
             candidate.protectedObject = true;
             candidate.reason = !m_archiveReferenceScanComplete
@@ -1322,6 +1626,8 @@ bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList
                                       QString *backupPath, QString *errorMessage,
                                       const QStringList &removedFiles) const
 {
+    if (backupPath)
+        backupPath->clear();
     if (changedFiles.isEmpty() && removedFiles.isEmpty())
     {
         if (errorMessage)
@@ -1394,43 +1700,138 @@ bool MainWindow::commitArchiveChanges(const QString &tempRoot, const QStringList
 
     BackupManager backupManager;
     QString backup;
-    if (!backupManager.createBackup(m_currentSourcePath, &backup, errorMessage))
+    if (!backupManager.createBackup(m_currentSourcePath, &backup, errorMessage, true))
         return false;
-    const QString pending = m_currentSourcePath + QStringLiteral(".sc2dh.pending");
-    QFile::remove(pending);
-    if (!archive.saveCopy(pending, replacements, removedEntries, errorMessage))
-        return false;
-    if (!validateArchiveCatalogSchema(pending, errorMessage))
-    {
-        QFile::remove(pending);
-        return false;
-    }
 
-    QFile pendingFile(pending);
-    if (!pendingFile.open(QIODevice::ReadOnly))
-    {
-        if (errorMessage)
-            *errorMessage = QStringLiteral("Unable to read verified archive copy.");
-        QFile::remove(pending);
-        return false;
-    }
-    QSaveFile destination(m_currentSourcePath);
-    const QByteArray archiveBytes = pendingFile.readAll();
-    pendingFile.close();
-    if (!destination.open(QIODevice::WriteOnly) || destination.write(archiveBytes) != archiveBytes.size() || !destination.commit())
-    {
-        if (errorMessage)
-            *errorMessage = QStringLiteral("Unable to atomically replace the archive; original file was preserved.");
-        QFile::remove(pending);
-        return false;
-    }
-    QFile::remove(pending);
-
-    // saveCopy already verifies every rewritten entry before returning. The
-    // final QSaveFile write is a byte-for-byte atomic copy of that verified
-    // archive, so reopening and extracting every entry here was redundant.
+    // Expose the durable rollback location immediately. Every later failure
+    // therefore reaches the caller with the path needed for manual recovery.
     if (backupPath)
         *backupPath = backup;
+
+    QByteArray backupHash;
+    if (!archiveFileSha256(backup, &backupHash, errorMessage))
+        return false;
+    QByteArray currentSourceHash;
+    if (!archiveFileSha256(m_currentSourcePath, &currentSourceHash, errorMessage))
+        return false;
+    if (currentSourceHash != backupHash)
+    {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Source archive changed while its backup was being verified; archive commit was not attempted. "
+                                           "Verified backup: %1")
+                                .arg(backup);
+        }
+        return false;
+    }
+
+    QString pending;
+    if (!reserveIsolatedPendingArchivePath(m_currentSourcePath, &pending, errorMessage))
+        return false;
+    const auto discardPending = [&]() {
+        if (!pending.isEmpty())
+            QFile::remove(pending);
+    };
+
+    // Sc2Archive::saveCopy can remove its target while producing an archive,
+    // so it must only ever receive this isolated, unique staging path.
+    if (!archive.saveCopy(pending, replacements, removedEntries, errorMessage))
+    {
+        discardPending();
+        return false;
+    }
+
+    Sc2Archive stagedArchive;
+    QString verificationError;
+    if (!stagedArchive.load(pending, &verificationError))
+    {
+        discardPending();
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Staged archive could not be reopened; original archive was not changed: %1").arg(verificationError);
+        return false;
+    }
+    if (!validateArchiveCatalogSchema(pending, &verificationError))
+    {
+        discardPending();
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Staged archive schema validation failed; original archive was not changed: %1").arg(verificationError);
+        return false;
+    }
+    if (!verifyCommittedArchiveEntries(stagedArchive, replacements, removedEntries, &verificationError))
+    {
+        discardPending();
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Staged archive content verification failed; original archive was not changed: %1").arg(verificationError);
+        return false;
+    }
+
+    QByteArray pendingHash;
+    if (!archiveFileSha256(pending, &pendingHash, &verificationError))
+    {
+        discardPending();
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Staged archive byte verification failed; original archive was not changed: %1").arg(verificationError);
+        return false;
+    }
+
+    currentSourceHash.clear();
+    if (!archiveFileSha256(m_currentSourcePath, &currentSourceHash, &verificationError)
+        || currentSourceHash != backupHash)
+    {
+        discardPending();
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Source archive changed after staging; refusing to overwrite it. "
+                                           "Verified backup remains at %1%2")
+                                .arg(backup,
+                                     verificationError.isEmpty()
+                                         ? QString()
+                                         : QStringLiteral(": %1").arg(verificationError));
+        }
+        return false;
+    }
+
+    const auto failAndRestore = [&](const QString &failure) -> bool {
+        QString restoreError;
+        const ArchiveRestoreStatus restoreStatus = restoreArchiveFromVerifiedBackup(
+            backup, m_currentSourcePath, backupHash, &restoreError);
+        if (errorMessage) {
+            switch (restoreStatus) {
+            case ArchiveRestoreStatus::OriginalAlreadyIntact:
+                *errorMessage = QStringLiteral("%1 Original archive is already byte-identical to its verified backup; no restoration was needed. "
+                                               "Backup: %2")
+                                    .arg(failure, backup);
+                break;
+            case ArchiveRestoreStatus::Restored:
+                *errorMessage = QStringLiteral("%1 Original archive was restored successfully from its verified backup: %2")
+                                    .arg(failure, backup);
+                break;
+            case ArchiveRestoreStatus::Failed:
+                *errorMessage = QStringLiteral("%1 RESTORE FAILED: %2. The verified backup remains at %3.")
+                                    .arg(failure, restoreError, backup);
+                break;
+            }
+        }
+        return false;
+    };
+
+    QString commitError;
+    if (!atomicallyCopyArchiveAndVerify(pending, m_currentSourcePath, pendingHash, &commitError))
+    {
+        discardPending();
+        return failAndRestore(QStringLiteral("Atomic archive replacement failed: %1").arg(commitError));
+    }
+    discardPending();
+
+    // Reopen the committed source rather than trusting the staging copy. The
+    // final schema and payload checks are the commit proof; any failure below
+    // rolls the source back byte-for-byte from the verified backup.
+    Sc2Archive committedArchive;
+    if (!committedArchive.load(m_currentSourcePath, &verificationError))
+        return failAndRestore(QStringLiteral("Post-commit archive reopen failed: %1").arg(verificationError));
+    if (!validateArchiveCatalogSchema(m_currentSourcePath, &verificationError))
+        return failAndRestore(QStringLiteral("Post-commit schema validation failed: %1").arg(verificationError));
+    if (!verifyCommittedArchiveEntries(committedArchive, replacements, removedEntries, &verificationError))
+        return failAndRestore(QStringLiteral("Post-commit content verification failed: %1").arg(verificationError));
+
     return true;
 }
 
@@ -1469,6 +1870,14 @@ void MainWindow::applySelectedChanges()
         return;
     }
 
+    const DestructiveOperationPermission permission = canApplyDestructiveChanges(m_result);
+    if (!permission.allowed)
+    {
+        QMessageBox::warning(this, QStringLiteral("Optimization unavailable"),
+                             destructiveOperationPermissionText(permission));
+        return;
+    }
+
     const QString planned = m_analyzer.buildPlannedChangesReport(m_result, selectedRows);
     m_dryRunPage->setPreview(planned);
     showDryRunTab();
@@ -1497,7 +1906,7 @@ void MainWindow::applySelectedChanges()
                                          &removedNodes,
                                          &skippedNodes))
     {
-        QMessageBox::critical(this, QStringLiteral("Apply failed"), errorMessage);
+        showSaveFailure(tr("Apply selected changes"), errorMessage, backupFolder, m_rootFolder);
         logLine(QStringLiteral("Apply failed: %1").arg(errorMessage));
         return;
     }
@@ -1526,12 +1935,17 @@ void MainWindow::applySelectedChanges()
 
     analyzeFolder();
     logLine(QStringLiteral("Save result: success"));
-    QMessageBox::information(this, QStringLiteral("Apply complete"),
-                             QStringLiteral("Backup: %1\nChanged files: %2\nRemoved nodes: %3\nSkipped nodes: %4")
-                                 .arg(backupFolder)
-                                 .arg(changedFiles.size())
-                                 .arg(removedNodes)
-                                 .arg(skippedNodes));
+    OperationResult operation;
+    operation.outcome = OperationOutcome::Succeeded;
+    operation.title = tr("Apply selected changes");
+    operation.selected = selectedRows.size();
+    operation.applied = removedNodes;
+    operation.skipped = skippedNodes;
+    operation.backupPath = backupFolder;
+    operation.outputPath = m_rootFolder;
+    operation.originalChanged = true;
+    operation.details = changedFiles;
+    showOperationResult(operation);
 }
 
 void MainWindow::previewMerge(const MergeRequest &request)
@@ -1604,13 +2018,13 @@ void MainWindow::applyMerge(const MergeRequest &request)
         const MergeApplyResult result = m_mergeService.apply(materialized, request, workspace.path(), m_whitelistIds);
         if (!result.success)
         {
-            QMessageBox::critical(this, QStringLiteral("Merge failed"), result.error + QStringLiteral("\nThe archive was not changed."));
+            showSaveFailure(tr("Merge duplicates"), result.error, {}, m_currentSourcePath);
             return;
         }
         QString archiveBackup;
         if (!commitArchiveChanges(workspace.path(), result.changedFiles, &archiveBackup, &error))
         {
-            QMessageBox::critical(this, QStringLiteral("Merge failed"), error + QStringLiteral("\nNo partial archive change was retained."));
+            showSaveFailure(tr("Merge duplicates"), error, archiveBackup, m_currentSourcePath);
             return;
         }
         m_mergePreviewValid = false;
@@ -1620,19 +2034,23 @@ void MainWindow::applyMerge(const MergeRequest &request)
             return;
         }
         m_dryRunPage->recordMergeResult(result.nodesDeleted, result.referencesRedirected);
-        QMessageBox::information(this, QStringLiteral("Merge complete"),
-                                 QStringLiteral("Archive backup: %1\nFiles changed: %2\nReferences redirected: %3\nNodes deleted: %4")
-                                     .arg(archiveBackup)
-                                     .arg(result.changedFiles.size())
-                                     .arg(result.referencesRedirected)
-                                     .arg(result.nodesDeleted));
+        OperationResult operation;
+        operation.outcome = OperationOutcome::Succeeded;
+        operation.title = tr("Merge duplicates");
+        operation.selected = request.removeNodeIndices.size();
+        operation.applied = result.nodesDeleted;
+        operation.backupPath = archiveBackup;
+        operation.outputPath = m_currentSourcePath;
+        operation.originalChanged = true;
+        operation.details << tr("Files changed: %1").arg(result.changedFiles.size())
+                          << tr("References redirected: %1").arg(result.referencesRedirected);
+        showOperationResult(operation);
         return;
     }
     const MergeApplyResult result = m_mergeService.apply(m_result, request, m_rootFolder, m_whitelistIds);
     if (!result.success)
     {
-        QMessageBox::critical(this, QStringLiteral("Merge failed"),
-                              result.error + QStringLiteral("\nNo partial merge was retained."));
+        showSaveFailure(tr("Merge duplicates"), result.error, result.backupFolder, m_rootFolder);
         logLine(QStringLiteral("Merge failed: %1").arg(result.error));
         return;
     }
@@ -1643,12 +2061,17 @@ void MainWindow::applyMerge(const MergeRequest &request)
                 .arg(result.nodesDeleted));
     loadPathAndAnalyze(m_currentSourcePath);
     m_dryRunPage->recordMergeResult(result.nodesDeleted, result.referencesRedirected);
-    QMessageBox::information(this, QStringLiteral("Merge complete"),
-                             QStringLiteral("Backup: %1\nFiles changed: %2\nReferences redirected: %3\nNodes deleted: %4")
-                                 .arg(result.backupFolder)
-                                 .arg(result.changedFiles.size())
-                                 .arg(result.referencesRedirected)
-                                 .arg(result.nodesDeleted));
+    OperationResult operation;
+    operation.outcome = OperationOutcome::Succeeded;
+    operation.title = tr("Merge duplicates");
+    operation.selected = request.removeNodeIndices.size();
+    operation.applied = result.nodesDeleted;
+    operation.backupPath = result.backupFolder;
+    operation.outputPath = m_rootFolder;
+    operation.originalChanged = true;
+    operation.details << tr("Files changed: %1").arg(result.changedFiles.size())
+                      << tr("References redirected: %1").arg(result.referencesRedirected);
+    showOperationResult(operation);
 }
 
 void MainWindow::previewUnusedDeletion(const QVector<int> &rows)
@@ -1668,6 +2091,13 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
     {
         QMessageBox::warning(this, QStringLiteral("Delete Unused Data Objects"),
                              QStringLiteral("Preview this exact selection before deletion."));
+        return;
+    }
+    const DestructiveOperationPermission permission = canApplyDestructiveChanges(m_result);
+    if (!permission.allowed)
+    {
+        QMessageBox::warning(this, QStringLiteral("Delete Unused Data Objects"),
+                             destructiveOperationPermissionText(permission));
         return;
     }
     if (m_sourceKind == SourceKind::ArchiveFile)
@@ -1718,23 +2148,28 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
         if (!m_analyzer.applySelectedChanges(materialized, refreshedRows, workspace.path(), m_whitelistIds,
                                              &workspaceBackup, &error, &changedFiles, &removed, &skipped))
         {
-            QMessageBox::critical(this, QStringLiteral("Deletion failed"), error);
+            showSaveFailure(tr("Delete unused data objects"), error, workspaceBackup, m_currentSourcePath);
             return;
         }
         QString archiveBackup;
         if (!commitArchiveChanges(workspace.path(), changedFiles, &archiveBackup, &error))
         {
-            QMessageBox::critical(this, QStringLiteral("Deletion failed"), error + QStringLiteral("\nThe original archive was preserved."));
+            showSaveFailure(tr("Delete unused data objects"), error, archiveBackup, m_currentSourcePath);
             return;
         }
         m_previewedUnusedRows.clear();
         loadPathAndAnalyze(m_currentSourcePath);
         m_dryRunPage->recordUnusedResult(removed);
-        QMessageBox::information(this, QStringLiteral("Deletion complete"),
-                                 QStringLiteral("Archive backup: %1\nDeleted: %2\nSkipped: %3")
-                                     .arg(archiveBackup)
-                                     .arg(removed)
-                                     .arg(skipped));
+        OperationResult operation;
+        operation.outcome = OperationOutcome::Succeeded;
+        operation.title = tr("Delete unused data objects");
+        operation.selected = rows.size();
+        operation.applied = removed;
+        operation.skipped = skipped;
+        operation.backupPath = archiveBackup;
+        operation.outputPath = m_currentSourcePath;
+        operation.originalChanged = true;
+        showOperationResult(operation);
         return;
     }
     QString backupFolder, error;
@@ -1748,17 +2183,22 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
     if (!m_analyzer.applySelectedChanges(m_result, rows, m_rootFolder, m_whitelistIds,
                                          &backupFolder, &error, &changedFiles, &removed, &skipped))
     {
-        QMessageBox::critical(this, QStringLiteral("Deletion failed"), error);
+        showSaveFailure(tr("Delete unused data objects"), error, backupFolder, m_rootFolder);
         return;
     }
     m_previewedUnusedRows.clear();
     loadPathAndAnalyze(m_currentSourcePath);
     m_dryRunPage->recordUnusedResult(removed);
-    QMessageBox::information(this, QStringLiteral("Deletion complete"),
-                             QStringLiteral("Backup: %1\nDeleted: %2\nSkipped: %3")
-                                 .arg(backupFolder)
-                                 .arg(removed)
-                                 .arg(skipped));
+    OperationResult operation;
+    operation.outcome = OperationOutcome::Succeeded;
+    operation.title = tr("Delete unused data objects");
+    operation.selected = rows.size();
+    operation.applied = removed;
+    operation.skipped = skipped;
+    operation.backupPath = backupFolder;
+    operation.outputPath = m_rootFolder;
+    operation.originalChanged = true;
+    showOperationResult(operation);
 }
 
 void MainWindow::previewStandardRename(const RenamePlan &plan)
@@ -1835,7 +2275,7 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
         const RenameApplyResult result = m_referenceRenamer.apply(materialized, plan, workspace.path(), m_whitelistIds);
         if (!result.success)
         {
-            QMessageBox::critical(this, QStringLiteral("Rename failed"), result.error + QStringLiteral("\nThe archive was not changed."));
+            showSaveFailure(tr("Rename to standard"), result.error, {}, m_currentSourcePath);
             return;
         }
         QStringList changedFiles = result.changedFiles;
@@ -1849,7 +2289,7 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
                                                  &archiveRewrite,
                                                  &error))
         {
-            QMessageBox::critical(this, QStringLiteral("Rename failed"), error + QStringLiteral("\nThe archive was not changed."));
+            showSaveFailure(tr("Rename to standard"), error, {}, m_currentSourcePath);
             return;
         }
         changedFiles.append(archiveRewrite.changedFiles);
@@ -1857,33 +2297,43 @@ void MainWindow::applyStandardRename(const RenamePlan &plan)
         QString archiveBackup;
         if (!commitArchiveChanges(workspace.path(), changedFiles, &archiveBackup, &error))
         {
-            QMessageBox::critical(this, QStringLiteral("Rename failed"), error + QStringLiteral("\nNo partial archive change was retained."));
+            showSaveFailure(tr("Rename to standard"), error, archiveBackup, m_currentSourcePath);
             return;
         }
         m_renamePreviewValid = false;
         loadPathAndAnalyze(m_currentSourcePath);
         m_dryRunPage->recordRenameResult(result.identitiesRenamed);
-        QMessageBox::information(this, QStringLiteral("Rename complete"),
-                                 QStringLiteral("Archive backup: %1\nObjects renamed: %2\nReferences updated: %3")
-                                     .arg(archiveBackup)
-                                     .arg(result.identitiesRenamed)
-                                     .arg(result.referencesUpdated + archiveRewrite.replacements));
+        OperationResult operation;
+        operation.outcome = OperationOutcome::Succeeded;
+        operation.title = tr("Rename to standard");
+        operation.selected = plan.items.size();
+        operation.applied = result.identitiesRenamed;
+        operation.backupPath = archiveBackup;
+        operation.outputPath = m_currentSourcePath;
+        operation.originalChanged = true;
+        operation.details << tr("References updated: %1").arg(result.referencesUpdated + archiveRewrite.replacements);
+        showOperationResult(operation);
         return;
     }
     const RenameApplyResult result = m_referenceRenamer.apply(m_result, plan, m_rootFolder, m_whitelistIds);
     if (!result.success)
     {
-        QMessageBox::critical(this, QStringLiteral("Rename failed"), result.error + QStringLiteral("\nChanges were rolled back."));
+        showSaveFailure(tr("Rename to standard"), result.error, result.backupFolder, m_rootFolder);
         return;
     }
     m_renamePreviewValid = false;
     loadPathAndAnalyze(m_currentSourcePath);
     m_dryRunPage->recordRenameResult(result.identitiesRenamed);
-    QMessageBox::information(this, QStringLiteral("Rename complete"),
-                             QStringLiteral("Backup: %1\nObjects renamed: %2\nReferences updated: %3")
-                                 .arg(result.backupFolder)
-                                 .arg(result.identitiesRenamed)
-                                 .arg(result.referencesUpdated));
+    OperationResult operation;
+    operation.outcome = OperationOutcome::Succeeded;
+    operation.title = tr("Rename to standard");
+    operation.selected = plan.items.size();
+    operation.applied = result.identitiesRenamed;
+    operation.backupPath = result.backupFolder;
+    operation.outputPath = m_rootFolder;
+    operation.originalChanged = true;
+    operation.details << tr("References updated: %1").arg(result.referencesUpdated);
+    showOperationResult(operation);
 }
 
 void MainWindow::exportStandardRenameReport(const QString &reportText)
@@ -1979,38 +2429,51 @@ void MainWindow::applyDataCollection(const DataCollectionBuildRequest &request)
         const DataCollectionApplyResult result = m_dataCollectionBuilder.apply(materialized, request, workspace.path(), m_whitelistIds);
         if (!result.success)
         {
-            QMessageBox::critical(this, QStringLiteral("Collection failed"), result.error + QStringLiteral("\nThe archive was not changed."));
+            showSaveFailure(tr("Build data collection"), result.error, {}, m_currentSourcePath);
             return;
         }
         QString archiveBackup;
         if (!commitArchiveChanges(workspace.path(), result.changedFiles, &archiveBackup, &error))
         {
-            QMessageBox::critical(this, QStringLiteral("Collection failed"), error + QStringLiteral("\nNo partial archive change was retained."));
+            showSaveFailure(tr("Build data collection"), error, archiveBackup, m_currentSourcePath);
             return;
         }
         m_collectionPreviewValid = false;
         loadPathAndAnalyze(m_currentSourcePath);
         m_dryRunPage->recordCollectionResult(result.recordsAdded, result.recordsRemoved);
-        QMessageBox::information(this, QStringLiteral("Collection complete"),
-                                 QStringLiteral("Archive backup: %1\nDataCollectionData.xml and (listfile) saved.\nRecords added: %2")
-                                     .arg(archiveBackup)
-                                     .arg(result.recordsAdded));
+        OperationResult operation;
+        operation.outcome = OperationOutcome::Succeeded;
+        operation.title = tr("Build data collection");
+        operation.selected = request.includedNodeIndices.size();
+        operation.applied = result.recordsAdded;
+        operation.skipped = result.duplicatesSkipped;
+        operation.backupPath = archiveBackup;
+        operation.outputPath = m_currentSourcePath;
+        operation.originalChanged = true;
+        operation.details << tr("Records removed: %1").arg(result.recordsRemoved);
+        showOperationResult(operation);
         return;
     }
     const DataCollectionApplyResult result = m_dataCollectionBuilder.apply(m_result, request, m_rootFolder, m_whitelistIds);
     if (!result.success)
     {
-        QMessageBox::critical(this, QStringLiteral("Collection failed"), result.error + QStringLiteral("\nChanges were rolled back."));
+        showSaveFailure(tr("Build data collection"), result.error, result.backupFolder, m_rootFolder);
         return;
     }
     m_collectionPreviewValid = false;
     loadPathAndAnalyze(m_currentSourcePath);
     m_dryRunPage->recordCollectionResult(result.recordsAdded, result.recordsRemoved);
-    QMessageBox::information(this, QStringLiteral("Collection complete"),
-                             QStringLiteral("Backup: %1\nRecords added: %2\nDuplicate records skipped: %3")
-                                 .arg(result.backupFolder)
-                                 .arg(result.recordsAdded)
-                                 .arg(result.duplicatesSkipped));
+    OperationResult operation;
+    operation.outcome = OperationOutcome::Succeeded;
+    operation.title = tr("Build data collection");
+    operation.selected = request.includedNodeIndices.size();
+    operation.applied = result.recordsAdded;
+    operation.skipped = result.duplicatesSkipped;
+    operation.backupPath = result.backupFolder;
+    operation.outputPath = m_rootFolder;
+    operation.originalChanged = true;
+    operation.details << tr("Records removed: %1").arg(result.recordsRemoved);
+    showOperationResult(operation);
 }
 
 void MainWindow::exportDataCollectionReport(const QString &reportText)

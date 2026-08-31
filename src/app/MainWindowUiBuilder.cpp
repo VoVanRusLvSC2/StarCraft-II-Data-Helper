@@ -3,6 +3,7 @@
 #include "app/AudioManager.h"
 #include "app/MainWindow.h"
 #include "app/MainWindowUiSupport.h"
+#include "app/TranslationManager.h"
 
 #include "ui/DataCollectionPage.h"
 #include "ui/DependenciesPage.h"
@@ -49,6 +50,7 @@ namespace sc2dh::app
 namespace
 {
 [[maybe_unused]] const char *const mainWindowTranslationSources[] = {
+    QT_TRANSLATE_NOOP("MainWindow", "SC2 Data Helper"),
     QT_TRANSLATE_NOOP("MainWindow", "Open SC2 File"),
     QT_TRANSLATE_NOOP("MainWindow", "Open Folder"),
     QT_TRANSLATE_NOOP("MainWindow", "Analyze"),
@@ -80,6 +82,23 @@ QString mainText(const char *source)
 {
     return QCoreApplication::translate("MainWindow", source);
 }
+
+void setWorkspaceTabTitle(QTabWidget *tabs, QWidget *page, const char *source)
+{
+    if (!tabs || !page)
+        return;
+    const int index = tabs->indexOf(page);
+    if (index < 0)
+        return;
+
+    const QString title = mainText(source);
+    tabs->setTabToolTip(index, title);
+    auto *label = qobject_cast<QLabel *>(tabs->tabBar()->tabButton(index, QTabBar::LeftSide));
+    if (!label)
+        return;
+    label->setText(title);
+    label->setFixedWidth(label->fontMetrics().horizontalAdvance(title) + 52);
+}
 }
 
 MainWindowUiBuilder::MainWindowUiBuilder(MainWindow &window)
@@ -90,7 +109,7 @@ MainWindowUiBuilder::MainWindowUiBuilder(MainWindow &window)
 void MainWindowUiBuilder::build()
 {
     MainWindow *window = &m_window;
-    window->setWindowTitle(QStringLiteral("SC2 Data Helper"));
+    window->setWindowTitle(QStringLiteral(SC2DH_GUI_TITLE));
     window->setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
     QSize initialSize(1550, 980);
     if (const QScreen *screen = QApplication::primaryScreen())
@@ -197,6 +216,10 @@ void MainWindowUiBuilder::build()
     window->m_dependenciesPage = new DependenciesPage(window->m_tabs);
     window->m_graphPage = new GraphPage(window->m_tabs);
     window->m_mapPerformancePage = new MapPerformancePage(window->m_tabs);
+    QObject::connect(window->m_mapPerformancePage, &MapPerformancePage::operationFinished,
+                     window, [window](const OperationResult &result) {
+                         window->showOperationResult(result);
+                     });
     window->m_propertiesPage = new PropertiesPage(window->m_tabs);
     window->m_dataCollectionPage = new DataCollectionPage(window->m_tabs);
     window->m_renameIdsPage = new RenameIdsPage(window->m_tabs);
@@ -395,6 +418,13 @@ void MainWindowUiBuilder::build()
     for (QLabel *label : window->findChildren<QLabel *>())
     {
         const QString name = label->objectName();
+        if (name != QStringLiteral("workspaceTabLabel")
+            && name != QStringLiteral("panelTitle")
+            && (label->wordWrap() || name == QStringLiteral("inspectorValue")
+                || name == QStringLiteral("objectContextLabel"))) {
+            label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+            label->setFocusPolicy(Qt::ClickFocus);
+        }
         if (name == QStringLiteral("panelTitle") || name == QStringLiteral("modeBadge"))
         {
             auto *glow = new QGraphicsDropShadowEffect(label);
@@ -406,6 +436,53 @@ void MainWindowUiBuilder::build()
             label->setGraphicsEffect(glow);
         }
     }
+    TranslationManager::captureWidgetTree(window);
+}
+
+void MainWindowUiBuilder::retranslate(MainWindow &window)
+{
+    window.setWindowTitle(QStringLiteral(SC2DH_GUI_TITLE));
+
+    if (window.m_openFileAction)
+        window.m_openFileAction->setText(mainText("Open SC2 File"));
+    if (window.m_openFolderAction)
+        window.m_openFolderAction->setText(mainText("Open Folder"));
+    if (window.m_analyzeAction) {
+        window.m_analyzeAction->setText(mainText("Analyze"));
+        window.m_analyzeAction->setToolTip(mainText("Analyze / refresh the current project (F5)"));
+    }
+    if (window.m_dryRunAction)
+        window.m_dryRunAction->setText(mainText("Optimization"));
+    if (window.m_applyAction)
+        window.m_applyAction->setText(mainText("Review Optimization Plan"));
+    if (window.m_settingsAction)
+        window.m_settingsAction->setText(mainText("Settings"));
+    if (window.m_exitAction)
+        window.m_exitAction->setText(mainText("Exit"));
+    if (window.m_pathEdit)
+        window.m_pathEdit->setPlaceholderText(mainText("Selected source path"));
+
+    if (auto *discordButton = window.findChild<QToolButton *>(QStringLiteral("discordPromoButton")))
+        discordButton->setToolTip(mainText("Join Discord"));
+    if (auto *boostyButton = window.findChild<QToolButton *>(QStringLiteral("boostyPromoButton")))
+        boostyButton->setToolTip(mainText("Support on Boosty"));
+
+    if (window.m_tabs) {
+        setWorkspaceTabTitle(window.m_tabs, window.m_analysisPage, "Objects");
+        setWorkspaceTabTitle(window.m_tabs, window.m_dependenciesPage, "Dependencies");
+        setWorkspaceTabTitle(window.m_tabs, window.m_graphPage, "Graph");
+        setWorkspaceTabTitle(window.m_tabs, window.m_mapPerformancePage, "Map Performance");
+        setWorkspaceTabTitle(window.m_tabs, window.m_propertiesPage, "Properties");
+        setWorkspaceTabTitle(window.m_tabs, window.m_dataCollectionPage, "Data Collection");
+        setWorkspaceTabTitle(window.m_tabs, window.m_renameIdsPage, "Rename To Standard");
+        setWorkspaceTabTitle(window.m_tabs, window.m_duplicatesPage, "Duplicate Merge");
+        setWorkspaceTabTitle(window.m_tabs, window.m_cleanupPage, "Unused Data Objects");
+        setWorkspaceTabTitle(window.m_tabs, window.m_logPanel, "Logs");
+        setWorkspaceTabTitle(window.m_tabs, window.m_xmlSourcePage, "XML Source");
+    }
+
+    window.updateFullscreenActionText();
+    TranslationManager::retranslateWidgetTree(&window);
 }
 }
 

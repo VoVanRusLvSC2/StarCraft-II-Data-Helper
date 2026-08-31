@@ -1,6 +1,21 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(SC2DataHelper VERSION 2.1.0 LANGUAGES CXX)
+project(SC2DataHelper VERSION 3.0.0 LANGUAGES CXX)
+
+# Keep the machine-readable version separate from the display label.
+# Consumers that compare versions must use SC2DH_VERSION_NUMBER, which remains
+# a valid QVersionNumber / installer / release-tag value.
+set(SC2DH_VERSION_NUMBER "${PROJECT_VERSION}")
+set(SC2DH_VERSION_LABEL "3.0 BETA")
+set(SC2DH_GUI_TITLE "StarCraft-II-Data-Helper ${SC2DH_VERSION_LABEL}")
+
+function(sc2dh_apply_version_definitions target)
+    target_compile_definitions(${target} PRIVATE
+        SC2DH_VERSION_NUMBER=\"${SC2DH_VERSION_NUMBER}\"
+        SC2DH_VERSION_LABEL=\"${SC2DH_VERSION_LABEL}\"
+        SC2DH_GUI_TITLE=\"${SC2DH_GUI_TITLE}\"
+    )
+endfunction()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,6 +84,8 @@ target_sources(SC2DataHelper PRIVATE
     src/app/AudioManager.cpp
     src/app/AppSettings.h
     src/app/AppSettings.cpp
+    src/app/TranslationManager.h
+    src/app/TranslationManager.cpp
     src/app/ThemeManager.h
     src/app/ThemeManager.cpp
     src/core/Sc2Archive.h
@@ -112,6 +129,8 @@ target_sources(SC2DataHelper PRIVATE
     src/core/TriggerPerformanceAnalyzer.cpp
     src/core/DecorationStreamingPlanner.h
     src/core/DecorationStreamingPlanner.cpp
+    src/core/MapRegionRepository.h
+    src/core/MapRegionRepository.cpp
     src/core/DecorationMapCopyService.h
     src/core/DecorationMapCopyService.cpp
     src/core/XmlCleanupUtils.h
@@ -188,21 +207,56 @@ target_sources(SC2DataHelper PRIVATE
     resources/resources.qrc
 )
 
+set(SC2DH_TS_FILES
+    translations/SC2DataHelper_ru_RU.ts
+    translations/SC2DataHelper_de_DE.ts
+    translations/SC2DataHelper_es_MX.ts
+    translations/SC2DataHelper_es_ES.ts
+    translations/SC2DataHelper_fr_FR.ts
+    translations/SC2DataHelper_it_IT.ts
+    translations/SC2DataHelper_pl_PL.ts
+    translations/SC2DataHelper_pt_BR.ts
+    translations/SC2DataHelper_ko_KR.ts
+    translations/SC2DataHelper_zh_CN.ts
+    translations/SC2DataHelper_zh_TW.ts
+)
+
 qt_add_lrelease(SC2DataHelper
-    TS_FILES
-        translations/SC2DataHelper_ru_RU.ts
-        translations/SC2DataHelper_de_DE.ts
-        translations/SC2DataHelper_es_MX.ts
-        translations/SC2DataHelper_es_ES.ts
-        translations/SC2DataHelper_fr_FR.ts
-        translations/SC2DataHelper_it_IT.ts
-        translations/SC2DataHelper_pl_PL.ts
-        translations/SC2DataHelper_pt_BR.ts
-        translations/SC2DataHelper_ko_KR.ts
-        translations/SC2DataHelper_zh_CN.ts
-        translations/SC2DataHelper_zh_TW.ts
+    TS_FILES ${SC2DH_TS_FILES}
     QM_FILES_OUTPUT_VARIABLE SC2DH_QM_FILES
 )
+
+# DynamicUI is TranslationManager's context for generic widgets and values
+# created outside a dedicated QObject::tr() context.  The catalog is generated
+# only for the explicit lupdate target; normal application builds do not write
+# source or translation files.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+    set(SC2DH_DYNAMIC_UI_CATALOG "${CMAKE_CURRENT_BINARY_DIR}/generated/DynamicUI_catalog.cpp")
+    file(GLOB_RECURSE SC2DH_DYNAMIC_UI_CATALOG_INPUTS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+    )
+    add_custom_command(
+        OUTPUT "${SC2DH_DYNAMIC_UI_CATALOG}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_dynamic_ui_catalog.py"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}/src"
+                --output "${SC2DH_DYNAMIC_UI_CATALOG}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_dynamic_ui_catalog.py"
+                ${SC2DH_DYNAMIC_UI_CATALOG_INPUTS}
+        VERBATIM
+    )
+    add_custom_target(SC2DHGenerateDynamicUICatalog DEPENDS "${SC2DH_DYNAMIC_UI_CATALOG}")
+    qt_add_lupdate(
+        SOURCE_TARGETS SC2DataHelper
+        TS_FILES ${SC2DH_TS_FILES}
+        SOURCES "${SC2DH_DYNAMIC_UI_CATALOG}"
+        LUPDATE_TARGET SC2DataHelper_lupdate
+    )
+    add_dependencies(SC2DataHelper_lupdate SC2DHGenerateDynamicUICatalog)
+else()
+    message(STATUS "Python3 not found: DynamicUI translation catalog target is unavailable.")
+endif()
 foreach(SC2DH_QM_FILE IN LISTS SC2DH_QM_FILES)
     get_filename_component(SC2DH_QM_NAME "${SC2DH_QM_FILE}" NAME)
     set_source_files_properties("${SC2DH_QM_FILE}" PROPERTIES QT_RESOURCE_ALIAS "${SC2DH_QM_NAME}")
@@ -229,6 +283,7 @@ target_link_libraries(SC2DataHelper PRIVATE
 )
 
 target_compile_definitions(SC2DataHelper PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
+sc2dh_apply_version_definitions(SC2DataHelper)
 
 if (WIN32)
     target_link_libraries(SC2DataHelper PRIVATE winmm)
@@ -269,6 +324,8 @@ enable_testing()
 
 add_executable(SC2DataHelperTests
     tests/test_core.cpp
+    src/app/AppSettings.cpp
+    src/app/TranslationManager.cpp
     src/core/AnalysisModels.cpp
     src/core/AnalysisIndex.cpp
     src/core/ScannedFileReader.cpp
@@ -280,6 +337,7 @@ add_executable(SC2DataHelperTests
     src/core/MapPerformanceAnalyzer.cpp
     src/core/TriggerPerformanceAnalyzer.cpp
     src/core/DecorationStreamingPlanner.cpp
+    src/core/MapRegionRepository.cpp
     src/core/DecorationMapCopyService.cpp
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
@@ -501,6 +559,7 @@ add_executable(SC2DecorOptimizeMap
     src/core/AssetOptimizationAnalyzer.cpp
     src/core/TriggerPerformanceAnalyzer.cpp
     src/core/DecorationStreamingPlanner.cpp
+    src/core/MapRegionRepository.cpp
     src/core/DecorationMapCopyService.cpp
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
@@ -519,6 +578,7 @@ target_link_libraries(SC2DecorOptimizeMap PRIVATE
     nlohmann_json::nlohmann_json
 )
 target_compile_definitions(SC2DecorOptimizeMap PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
+sc2dh_apply_version_definitions(SC2DecorOptimizeMap)
 
 if (SC2DH_HAVE_LIBZIP)
     target_compile_definitions(SC2DecorOptimizeMap PRIVATE SC2DH_USE_LIBZIP=1)

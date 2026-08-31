@@ -3,9 +3,82 @@
 #include "core/DataNode.h"
 
 #include <QHash>
+#include <QByteArray>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 #include <QVector>
+
+enum class AnalysisCompleteness
+{
+    Complete,
+    Partial,
+    Unknown
+};
+
+enum class RemovalSafety
+{
+    Safe,
+    Unsafe,
+    BlockedIncompleteAnalysis,
+    Unknown
+};
+
+enum class OperationErrorCode
+{
+    None,
+    ParseFailed,
+    AnalysisIncomplete,
+    SourceChanged,
+    BackupFailed,
+    SerializationFailed,
+    ValidationFailed,
+    SaveFailed,
+    AtomicReplaceFailed
+};
+
+enum class OperationOutcome
+{
+    Succeeded,
+    Failed,
+    Cancelled
+};
+
+struct OperationResult
+{
+    OperationOutcome outcome = OperationOutcome::Failed;
+    OperationErrorCode errorCode = OperationErrorCode::None;
+    QString title;
+    QString summary;
+    int selected = 0;
+    int applied = 0;
+    int skipped = 0;
+    int blocked = 0;
+    QString backupPath;
+    QString outputPath;
+    QString temporaryOutputPath;
+    bool originalChanged = false;
+    QString error;
+    QStringList skippedReasons;
+    QStringList blockedReasons;
+    QStringList details;
+};
+
+struct SourceRevision
+{
+    QString filePath;
+    qint64 size = -1;
+    QDateTime lastModifiedUtc;
+    QByteArray sha256;
+};
+
+struct DestructiveOperationPermission
+{
+    bool allowed = false;
+    OperationErrorCode errorCode = OperationErrorCode::AnalysisIncomplete;
+    QString reason;
+    QStringList details;
+};
 
 struct ScannedFileInfo
 {
@@ -73,6 +146,7 @@ struct UnusedCandidateInfo
     bool whitelisted = false;
     bool protectedObject = false;
     CandidateState state = CandidateState::Blocked;
+    RemovalSafety removalSafety = RemovalSafety::Unknown;
     UsageState usageState = UsageState::Blocked;
     QString reason;
     QString riskLevel;
@@ -107,6 +181,15 @@ struct AnalysisResult
     // mods that are not part of this analysis. Absence of a local reference is
     // not proof that an exported object or asset is unused.
     bool externalConsumersUnknown = false;
+    AnalysisCompleteness completeness = AnalysisCompleteness::Unknown;
+    bool sourceDiscoveryComplete = false;
+    bool referenceExtractionComplete = false;
+    bool dependencyGraphComplete = false;
+    bool sourceChangedDuringAnalysis = false;
+    QStringList unreadableSources;
+    QStringList unsupportedSources;
+    QStringList incompleteSources;
+    QVector<SourceRevision> sourceRevisions;
     QVector<ScannedFileInfo> scannedFiles;
     QVector<DataNode> nodes;
     QVector<ParseErrorInfo> parseErrors;
@@ -124,3 +207,12 @@ struct AnalysisResult
     int totalXmlFiles() const;
     int totalDataNodes() const { return nodes.size(); }
 };
+
+QString analysisCompletenessName(AnalysisCompleteness completeness);
+QString operationErrorCodeName(OperationErrorCode errorCode);
+QString destructiveOperationPermissionText(const DestructiveOperationPermission &permission);
+SourceRevision captureSourceRevision(const QString &filePath, QString *errorMessage = nullptr);
+bool sourceRevisionMatches(const SourceRevision &revision, QString *reason = nullptr);
+void updateAnalysisCompleteness(AnalysisResult *result);
+void enforceAnalysisCompletenessSafety(AnalysisResult *result);
+DestructiveOperationPermission canApplyDestructiveChanges(const AnalysisResult &analysis);

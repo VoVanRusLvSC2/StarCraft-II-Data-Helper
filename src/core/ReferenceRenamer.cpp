@@ -11,7 +11,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QSaveFile>
 
 #include <pugixml.hpp>
 
@@ -592,19 +591,228 @@ void rewrite(pugi::xml_node node, const QString &file, const QHash<QString, QStr
         rewrite(child, file, identityByLocation, renames, result, collectChanges);
 }
 
-bool restore(const QString &root, const QString &backup, const QStringList &files, QString *error)
+bool normalizeRenameTransactionPath(const QString &rootFolder,
+                                    const QString &path,
+                                    QString *relativePathOut,
+                                    QString *error)
 {
-    if (backup.startsWith(QStringLiteral("disabled"), Qt::CaseInsensitive))
+    QString relative = path;
+    if (QDir::isAbsolutePath(relative))
+        relative = QDir(rootFolder).relativeFilePath(relative);
+    relative = QDir::cleanPath(relative).replace('\\', '/');
+
+    const QString root = QDir::cleanPath(QFileInfo(rootFolder).absoluteFilePath()).replace('\\', '/');
+    const QString absolute = QDir::cleanPath(QDir(root).absoluteFilePath(relative)).replace('\\', '/');
+    if (relative.isEmpty() || relative == QStringLiteral(".") || relative == QStringLiteral("..")
+        || relative.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(relative)
+        || absolute == root || !absolute.startsWith(root + QLatin1Char('/'), Qt::CaseInsensitive)) {
+        if (error)
+            *error = QStringLiteral("Unsafe rename transaction path: %1").arg(path);
         return false;
-    bool ok = true;
+    }
+    if (relativePathOut)
+        *relativePathOut = relative;
+    return true;
+}
+
+struct PreparedRenameTransaction
+{
+    QVector<TransactionalFileChange> changes;
+    QSet<QString> xmlFiles;
+};
+
+bool prepareRenameTransaction(const QString &rootFolder,
+                              const AnalysisResult &analysis,
+                              const QHash<QString, QByteArray> &staged,
+                              PreparedRenameTransaction *prepared,
+                              QString *error)
+{
+    if (!prepared) {
+        if (error)
+            *error = QStringLiteral("Missing prepared rename transaction output.");
+        return false;
+    }
+    *prepared = {};
+
+    QSet<QString> xmlPathKeys;
+    for (const ScannedFileInfo &info : analysis.scannedFiles) {
+        if (!info.isXml)
+            continue;
+        QString relative;
+        if (!normalizeRenameTransactionPath(rootFolder, info.filePath, &relative, error))
+            return false;
+        xmlPathKeys.insert(relative.toCaseFolded());
+    }
+
+    struct StagedChange {
+        QString relativePath;
+        QByteArray contents;
+        bool isXml = false;
+    };
+    QVector<StagedChange> stagedChanges;
+    QSet<QString> uniquePathKeys;
+    QStringList stagedPaths = staged.keys();
+    std::sort(stagedPaths.begin(), stagedPaths.end(), [](const QString &left, const QString &right) {
+        const int insensitiveComparison = left.compare(right, Qt::CaseInsensitive);
+        return insensitiveComparison == 0 ? left < right : insensitiveComparison < 0;
+    });
+    for (const QString &path : stagedPaths) {
+        QString relative;
+        if (!normalizeRenameTransactionPath(rootFolder, path, &relative, error))
+            return false;
+        const QString key = relative.toCaseFolded();
+        if (uniquePathKeys.contains(key)) {
+            if (error)
+                *error = QStringLiteral("Duplicate rename transaction path: %1").arg(relative);
+            return false;
+        }
+        uniquePathKeys.insert(key);
+        stagedChanges.append({relative, staged.value(path), xmlPathKeys.contains(key)});
+    }
+    if (stagedChanges.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("Rename produced no staged file changes.");
+        return false;
+    }
+
+    std::sort(stagedChanges.begin(), stagedChanges.end(), [](const StagedChange &left, const StagedChange &right) {
+        const int insensitiveComparison = left.relativePath.compare(right.relativePath, Qt::CaseInsensitive);
+        return insensitiveComparison == 0 ? left.relativePath < right.relativePath
+                                          : insensitiveComparison < 0;
+    });
+    prepared->changes.reserve(stagedChanges.size());
+    for (const StagedChange &change : std::as_const(stagedChanges)) {
+        prepared->changes.append({change.relativePath, change.contents, false});
+        if (change.isXml)
+            prepared->xmlFiles.insert(change.relativePath);
+    }
+    return true;
+}
+
+bool validateStagedRenameXml(const QString &stagingFolder,
+                             const QSet<QString> &xmlFiles,
+                             QString *error)
+{
+    QStringList files = xmlFiles.values();
+    std::sort(files.begin(), files.end());
     for (const QString &relative : files) {
-        const QString target = QDir(root).absoluteFilePath(relative);
-        QFile::remove(target);
-        if (!QFile::copy(QDir(backup).absoluteFilePath(relative), target)) {
-            ok = false; *error += QStringLiteral(" Rollback failed for %1.").arg(target);
+        QByteArray bytes;
+        QString readError;
+        const QString stagedPath = QDir(stagingFolder).absoluteFilePath(relative);
+        if (!readFile(stagedPath, &bytes, &readError)) {
+            if (error)
+                *error = QStringLiteral("Cannot reopen staged rename XML %1: %2").arg(relative, readError);
+            return false;
+        }
+        pugi::xml_document document;
+        const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+        if (!parsed) {
+            if (error) {
+                *error = QStringLiteral("Staged rename XML does not parse: %1: %2")
+                             .arg(relative, QString::fromUtf8(parsed.description()));
+            }
+            return false;
         }
     }
-    return ok;
+    return true;
+}
+
+bool validateCommittedRename(const QString &rootFolder,
+                             const QSet<QString> &whitelistIds,
+                             const AnalysisResult &analysis,
+                             const RenamePlan &plan,
+                             const QHash<QString, QString> &appliedRenames,
+                             QString *error)
+{
+    FolderAnalyzer analyzer;
+    AnalysisResult rebuilt;
+    QString verifyError;
+    if (!analyzer.analyzeFolder(rootFolder, whitelistIds, &rebuilt, &verifyError)) {
+        if (error)
+            *error = QStringLiteral("Re-analysis failed: %1").arg(verifyError);
+        return false;
+    }
+    if (rebuilt.completeness != AnalysisCompleteness::Complete) {
+        if (error) {
+            *error = QStringLiteral("Post-rename verification analysis is %1.")
+                         .arg(analysisCompletenessName(rebuilt.completeness));
+        }
+        return false;
+    }
+
+    QSet<QString> newIds;
+    for (auto it = appliedRenames.cbegin(); it != appliedRenames.cend(); ++it)
+        newIds.insert(it.value());
+    QSet<QString> oldIdsToCheck;
+    QHash<QString, QSet<QString>> oldScopesById;
+    QHash<QString, QSet<QString>> newScopesById;
+    QStringList postErrors;
+    for (const RenamePlanItem &item : plan.items) {
+        if (appliedRenames.value(item.oldId) != item.newId)
+            continue;
+        if (item.nodeIndex < 0 || item.nodeIndex >= analysis.nodes.size())
+            continue;
+        const QString scope = sc2dh::catalogIdentityScope(analysis.nodes.at(item.nodeIndex).elementName);
+        newScopesById[item.newId].insert(scope);
+        if (!newIds.contains(item.oldId)) {
+            oldIdsToCheck.insert(item.oldId);
+            oldScopesById[item.oldId].insert(scope);
+        }
+    }
+    for (auto it = newScopesById.cbegin(); it != newScopesById.cend(); ++it) {
+        bool found = false;
+        for (const DataNode &node : rebuilt.nodes) {
+            if (node.id == it.key() && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            postErrors << QStringLiteral("Refreshed analysis did not expose renamed ID %1 in the expected catalog scope.")
+                              .arg(it.key());
+        }
+    }
+    for (auto it = oldScopesById.cbegin(); it != oldScopesById.cend(); ++it) {
+        for (const DataNode &node : rebuilt.nodes) {
+            if (node.id == it.key() && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
+                postErrors << QStringLiteral("Refreshed analysis still exposes old ID %1 in %2.")
+                                  .arg(it.key(), node.elementName);
+                break;
+            }
+        }
+    }
+    if (!oldIdsToCheck.isEmpty()) {
+        for (const DataNode &node : rebuilt.nodes) {
+            for (const QString &reference : node.referencedIds) {
+                if (oldIdsToCheck.contains(reference)) {
+                    if (isParentAttributeReferenceOnly(node, reference))
+                        continue;
+                    postErrors << QStringLiteral("A refreshed-analysis strong reference to old ID %1 remains in %2.")
+                                      .arg(reference, node.id);
+                    break;
+                }
+            }
+        }
+    }
+    if (postErrors.isEmpty())
+        return true;
+
+    if (postErrors.size() > 20)
+        postErrors = postErrors.mid(0, 20) << QStringLiteral("... %1 more post-rename verification error(s).")
+                                               .arg(postErrors.size() - 20);
+    if (error) {
+        *error = QStringLiteral("Post-rename verification failed:\n- %1")
+                     .arg(postErrors.join(QStringLiteral("\n- ")));
+    }
+    return false;
+}
+
+QString renameTransactionError(const FolderSaveTransactionResult &transaction)
+{
+    if (!transaction.error.isEmpty())
+        return transaction.error;
+    return QStringLiteral("Rename transaction failed: %1.")
+        .arg(operationErrorCodeName(transaction.errorCode));
 }
 
 QString buildReport(const AnalysisResult &analysis, const RenamePlan &plan, const RewriteResult &rewriteResult,
@@ -937,6 +1145,11 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
                                           const ProgressCallback &progress) const
 {
     RenameApplyResult result;
+    const DestructiveOperationPermission permission = canApplyDestructiveChanges(analysis);
+    if (!permission.allowed) {
+        result.error = destructiveOperationPermissionText(permission);
+        return result;
+    }
     if (!plan.valid) {
         result.error = plan.conflicts.join(QStringLiteral("; "));
         return result;
@@ -960,110 +1173,55 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
     const QString previewReportText = buildReport(analysis, plan, rewriteResult, absoluteFiles,
                                                   plan.warnings + warnings, plan.conflicts,
                                                   QStringLiteral("Apply staged; no files committed yet"));
-    QStringList relativeFiles;
-    for (const QString &file : absoluteFiles) relativeFiles << QDir(rootFolder).relativeFilePath(file);
-    std::sort(relativeFiles.begin(), relativeFiles.end());
-    BackupManager backup;
+    PreparedRenameTransaction prepared;
+    if (!prepareRenameTransaction(rootFolder, analysis, staged, &prepared, &result.error))
+        return result;
+
+    // Preparing staged bytes can take long enough for a source file to change.
+    // Recheck immediately before the transaction takes its verified backup.
+    const DestructiveOperationPermission commitPermission = canApplyDestructiveChanges(analysis);
+    if (!commitPermission.allowed) {
+        result.error = destructiveOperationPermissionText(commitPermission);
+        return result;
+    }
+
     if (progress)
         progress(QStringLiteral("backup"), 0, 1, QString());
-    if (!backup.createFolderBackup(rootFolder, relativeFiles, analysis.analysisReportText,
-                                   previewReportText, &result.backupFolder, &result.error)) return result;
-    if (m_failureInjectionStep == QStringLiteral("after-backup")) { result.error = QStringLiteral("Injected failure after backup."); return result; }
-    QStringList committed;
-    int writeIndex = 0;
-    const int writeTotal = staged.size();
-    for (auto it = staged.cbegin(); it != staged.cend(); ++it) {
-        if (progress)
-            progress(QStringLiteral("write"), writeIndex, writeTotal, it.key());
-        ++writeIndex;
-        QSaveFile file(it.key());
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
-            || file.write(it.value()) != it.value().size() || !file.commit()) {
-            result.error = QStringLiteral("Failed to commit %1.").arg(it.key());
-            restore(rootFolder, result.backupFolder, committed, &result.error);
-            return result;
-        }
-        committed << QDir(rootFolder).relativeFilePath(it.key());
-    }
     if (progress)
-        progress(QStringLiteral("verify"), 0, 1, QString());
-    if (m_failureInjectionStep == QStringLiteral("after-commit")) {
-        result.error = QStringLiteral("Injected failure after commit.");
-        restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
+        progress(QStringLiteral("write"), 0, prepared.changes.size(), QString());
+
+    QString transactionFailureInjection = m_failureInjectionStep;
+    // The legacy hook ran after all local writes.  The shared transaction
+    // instead injects after its first commit and rolls every change back,
+    // proving the same no-partial-save guarantee without a manual restore.
+    if (transactionFailureInjection == QStringLiteral("after-commit"))
+        transactionFailureInjection = QStringLiteral("after-first-commit");
+    const FolderSaveTransactionResult transaction = BackupManager().applyFolderTransaction(
+        rootFolder,
+        prepared.changes,
+        analysis.analysisReportText,
+        previewReportText,
+        [&prepared](const QString &stagingFolder, QString *validationError) {
+            return validateStagedRenameXml(stagingFolder, prepared.xmlFiles, validationError);
+        },
+        [rootFolder, whitelistIds, &analysis, &plan, appliedRenames, progress](QString *validationError) {
+            if (progress)
+                progress(QStringLiteral("verify"), 0, 1, QString());
+            return validateCommittedRename(rootFolder, whitelistIds, analysis, plan, appliedRenames, validationError);
+        },
+        transactionFailureInjection);
+    result.backupFolder = transaction.backupFolder;
+    if (!transaction.success) {
+        result.error = renameTransactionError(transaction);
         return result;
     }
-    FolderAnalyzer analyzer;
-    AnalysisResult rebuilt;
-    QString verifyError;
-    if (!analyzer.analyzeFolder(rootFolder, whitelistIds, &rebuilt, &verifyError)) {
-        result.error = QStringLiteral("Re-analysis failed: %1").arg(verifyError);
-        restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
+    if (progress) {
+        progress(QStringLiteral("write"), prepared.changes.size(), prepared.changes.size(), QString());
+        progress(QStringLiteral("verify"), 1, 1, QString());
     }
-    QSet<QString> newIds;
-    for (auto it = appliedRenames.cbegin(); it != appliedRenames.cend(); ++it)
-        newIds.insert(it.value());
-    QSet<QString> oldIdsToCheck;
-    QHash<QString, QSet<QString>> oldScopesById;
-    QHash<QString, QSet<QString>> newScopesById;
-    QStringList postErrors;
-    for (const RenamePlanItem &item : plan.items) {
-        if (appliedRenames.value(item.oldId) != item.newId)
-            continue;
-        if (item.nodeIndex < 0 || item.nodeIndex >= analysis.nodes.size())
-            continue;
-        const QString scope = sc2dh::catalogIdentityScope(analysis.nodes.at(item.nodeIndex).elementName);
-        newScopesById[item.newId].insert(scope);
-        if (!newIds.contains(item.oldId)) {
-            oldIdsToCheck.insert(item.oldId);
-            oldScopesById[item.oldId].insert(scope);
-        }
-    }
-    for (auto it = newScopesById.cbegin(); it != newScopesById.cend(); ++it) {
-        bool found = false;
-        for (const DataNode &node : rebuilt.nodes) {
-            if (node.id == it.key() && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
-                found = true;
-                break;
-            }
-        }
-        if (!found)
-            postErrors << QStringLiteral("Refreshed analysis did not expose renamed ID %1 in the expected catalog scope.")
-                              .arg(it.key());
-    }
-    for (auto it = oldScopesById.cbegin(); it != oldScopesById.cend(); ++it) {
-        for (const DataNode &node : rebuilt.nodes) {
-            if (node.id == it.key() && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
-                postErrors << QStringLiteral("Refreshed analysis still exposes old ID %1 in %2.")
-                                  .arg(it.key(), node.elementName);
-                break;
-            }
-        }
-    }
-    if (!oldIdsToCheck.isEmpty()) {
-        for (const DataNode &node : rebuilt.nodes) {
-            for (const QString &reference : node.referencedIds) {
-                if (oldIdsToCheck.contains(reference)) {
-                    if (isParentAttributeReferenceOnly(node, reference))
-                        continue;
-                    postErrors << QStringLiteral("A refreshed-analysis strong reference to old ID %1 remains in %2.")
-                                        .arg(reference, node.id);
-                    break;
-                }
-            }
-        }
-    }
-    if (!postErrors.isEmpty()) {
-        if (postErrors.size() > 20)
-            postErrors = postErrors.mid(0, 20) << QStringLiteral("... %1 more post-rename verification error(s).")
-                                                   .arg(postErrors.size() - 20);
-        result.error = QStringLiteral("Post-rename verification failed:\n- %1")
-                           .arg(postErrors.join(QStringLiteral("\n- ")));
-        restore(rootFolder, result.backupFolder, relativeFiles, &result.error);
-        return result;
-    }
+
     result.success = true;
-    result.changedFiles = relativeFiles;
+    result.changedFiles = transaction.changedFiles;
     result.identitiesRenamed = rewriteResult.identities;
     result.referencesUpdated = rewriteResult.references;
     result.finalReport = previewReportText + QStringLiteral("\nFinal result after apply: success\nBackup: %1\n").arg(result.backupFolder);

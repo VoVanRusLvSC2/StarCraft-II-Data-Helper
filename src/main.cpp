@@ -1,6 +1,7 @@
 #include "app/MainWindow.h"
 #include "app/AudioManager.h"
 #include "app/AppSettings.h"
+#include "app/TranslationManager.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -8,7 +9,6 @@
 #include <QIcon>
 #include <QPixmap>
 #include <QSettings>
-#include <QTranslator>
 
 int main(int argc, char *argv[])
 {
@@ -19,18 +19,17 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("SC2 Data Helper"));
-    QApplication::setApplicationVersion(QStringLiteral("2.1.0"));
+    // Numeric by contract: update checks and QVersionNumber consumers can
+    // compare this independently from the user-facing release label.
+    QApplication::setApplicationVersion(QStringLiteral(SC2DH_VERSION_NUMBER));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
 
-    QTranslator appTranslator;
-    const QString languageCode = sc2dh::app::AppSettings::resolvedLanguage();
-    for (const sc2dh::app::LanguageOption &language : sc2dh::app::AppSettings::supportedLanguages()) {
-        if (language.code == languageCode && !language.localeName.isEmpty()) {
-            if (appTranslator.load(QStringLiteral(":/i18n/SC2DataHelper_%1.qm").arg(language.localeName)))
-                app.installTranslator(&appTranslator);
-            break;
-        }
-    }
+    // Build the persistent UI once in the source language so the generic
+    // TranslationManager can retain stable source keys. The user's selected
+    // language is installed immediately after construction, before the window
+    // becomes visible.
+    auto &translationManager = sc2dh::app::TranslationManager::instance();
+    translationManager.setLanguage(QStringLiteral("enUS"), false);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [] {
         AudioManager::instance()->shutdown();
     });
@@ -41,6 +40,7 @@ int main(int argc, char *argv[])
     }
 
     MainWindow window;
+    translationManager.setLanguage(sc2dh::app::AppSettings::selectedLanguage(), false);
     const QStringList args = app.arguments();
     const int wizardApplyTestIndex = args.indexOf(QStringLiteral("--wizard-apply-test"));
     if (wizardApplyTestIndex >= 0 && wizardApplyTestIndex + 1 < args.size()) {

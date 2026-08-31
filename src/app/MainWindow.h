@@ -103,6 +103,11 @@ private:
     bool validateArchiveCatalogSchema(const QString &archivePath, QString *errorMessage) const;
     void setCurrentSourcePath(const QString &path);
     void logLine(const QString &line) const;
+    void showOperationResult(const OperationResult &result, bool focusPanel = true);
+    void showSaveFailure(const QString &title, const QString &error,
+                         const QString &backupPath = {}, const QString &outputPath = {},
+                         bool originalChanged = false,
+                         OperationErrorCode code = OperationErrorCode::SaveFailed);
     void refreshPages();
     bool loadPathAndAnalyze(const QString &path);
     bool analyzeFolderPath(const QString &folderPath, QString *errorMessage);

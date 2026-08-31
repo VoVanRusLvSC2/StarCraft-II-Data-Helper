@@ -49,9 +49,17 @@ QMenu {
                                 stop:1 rgba(0, 8, 12, 250));
     border: 7px solid transparent;
     border-image: url(:/textures/ui_glue_dropdownmenuframe_terran.png) 8 8 8 8 stretch stretch;
-    selection-background-color: transparent;
+    selection-background-color: #276f62;
     selection-color: white;
     padding: 6px;
+}
+
+QLineEdit,
+QTextEdit,
+QPlainTextEdit,
+QAbstractSpinBox {
+    selection-background-color: #2f806f;
+    selection-color: #ffffff;
 }
 
 QMenu::item {

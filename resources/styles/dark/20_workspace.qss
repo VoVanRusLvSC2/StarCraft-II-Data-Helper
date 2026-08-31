@@ -147,7 +147,7 @@ QGraphicsView {
     border: 4px solid transparent;
     border-image: url(:/textures/ui_nova_archives_listitem_normal_cropped_52_boosted.png) 12 12 12 12 repeat repeat;
     alternate-background-color: rgba(10, 25, 27, 220);
-    selection-background-color: transparent;
+    selection-background-color: rgba(47, 128, 111, 210);
     selection-color: white;
     gridline-color: rgba(53, 91, 83, 120);
     font-size: 11pt;
@@ -208,6 +208,14 @@ QScrollBar::handle:horizontal:pressed {
 QSlider#backgroundMusicVolume {
     min-height: 32px;
     max-height: 32px;
+}
+
+QTreeView::item:selected,
+QTableView::item:selected,
+QTableWidget::item:selected,
+QListWidget::item:selected {
+    background-color: rgba(47, 128, 111, 210);
+    color: #ffffff;
 }
 
 QScrollBar::add-page,
