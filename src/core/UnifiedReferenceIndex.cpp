@@ -4,6 +4,8 @@
 #include "core/ScannedFileReader.h"
 
 #include <QFileInfo>
+#include <QHash>
+#include <QQueue>
 #include <QRegularExpression>
 #include <QSet>
 
@@ -14,7 +16,21 @@ namespace
 
 QString foldedKey(const QString &value)
 {
-    return value.trimmed().toCaseFolded();
+    const QString trimmed = value.trimmed();
+    QString folded;
+    folded.reserve(trimmed.size());
+    for (const QChar character : trimmed)
+        folded.append(character.toCaseFolded());
+    return folded;
+}
+
+QString foldedCharacters(const QString &value)
+{
+    QString folded;
+    folded.reserve(value.size());
+    for (const QChar character : value)
+        folded.append(character.toCaseFolded());
+    return folded;
 }
 
 bool isSc2TokenBoundary(const QChar ch)
@@ -22,25 +38,119 @@ bool isSc2TokenBoundary(const QChar ch)
     return !(ch.isLetterOrNumber() || ch == QLatin1Char('_'));
 }
 
-QRegularExpression tokenExpression(const QString &token)
+class TokenSetMatcher
 {
-    return QRegularExpression(QStringLiteral("(?<![A-Za-z0-9_])%1(?![A-Za-z0-9_])")
-                                  .arg(QRegularExpression::escape(token)),
-                              QRegularExpression::CaseInsensitiveOption);
-}
+public:
+    // first = text to scan for, second = stable key returned to the caller.
+    explicit TokenSetMatcher(const QVector<QPair<QString, QString>> &patterns)
+    {
+        m_nodes.append(Node{});
+        QSet<QString> seen;
+        for (const auto &pattern : patterns) {
+            if (pattern.first.isEmpty() || seen.contains(pattern.first))
+                continue;
+            seen.insert(pattern.first);
+            const int index = m_patterns.size();
+            m_patterns.append(pattern);
+            int state = 0;
+            for (const QChar character : pattern.first) {
+                auto edge = m_nodes[state].edges.constFind(character);
+                if (edge == m_nodes[state].edges.cend()) {
+                    const int next = m_nodes.size();
+                    m_nodes.append(Node{});
+                    m_nodes[state].edges.insert(character, next);
+                    state = next;
+                } else {
+                    state = edge.value();
+                }
+            }
+            m_nodes[state].outputs.append(index);
+        }
 
-int lineNumberAt(const QString &text, qsizetype offset)
-{
-    if (offset < 0)
-        return -1;
-    int line = 1;
-    const qsizetype bounded = std::min(offset, text.size());
-    for (qsizetype i = 0; i < bounded; ++i) {
-        if (text.at(i) == QLatin1Char('\n'))
-            ++line;
+        QQueue<int> queue;
+        for (auto edge = m_nodes[0].edges.cbegin(); edge != m_nodes[0].edges.cend(); ++edge)
+            queue.enqueue(edge.value());
+        while (!queue.isEmpty()) {
+            const int state = queue.dequeue();
+            const auto edges = m_nodes[state].edges;
+            for (auto edge = edges.cbegin(); edge != edges.cend(); ++edge) {
+                const QChar character = edge.key();
+                const int next = edge.value();
+                queue.enqueue(next);
+                int fallback = m_nodes[state].failure;
+                while (fallback != 0 && !m_nodes[fallback].edges.contains(character))
+                    fallback = m_nodes[fallback].failure;
+                const auto fallbackEdge = m_nodes[fallback].edges.constFind(character);
+                if (fallbackEdge != m_nodes[fallback].edges.cend()
+                    && fallbackEdge.value() != next) {
+                    fallback = fallbackEdge.value();
+                }
+                m_nodes[next].failure = fallback;
+                m_nodes[next].outputs += m_nodes[fallback].outputs;
+            }
+        }
     }
-    return line;
-}
+
+    QHash<QString, qsizetype> firstMatches(const QString &text) const
+    {
+        QHash<QString, qsizetype> found;
+        int state = 0;
+        for (qsizetype position = 0; position < text.size(); ++position) {
+            const QChar character = text.at(position);
+            while (state != 0 && !m_nodes[state].edges.contains(character))
+                state = m_nodes[state].failure;
+            const auto edge = m_nodes[state].edges.constFind(character);
+            state = edge == m_nodes[state].edges.cend() ? 0 : edge.value();
+            for (const int patternIndex : m_nodes[state].outputs) {
+                const auto &pattern = m_patterns.at(patternIndex);
+                if (found.contains(pattern.second))
+                    continue;
+                const qsizetype start = position - pattern.first.size() + 1;
+                const qsizetype end = position + 1;
+                const bool leftOk = start == 0 || isSc2TokenBoundary(text.at(start - 1));
+                const bool rightOk = end >= text.size() || isSc2TokenBoundary(text.at(end));
+                if (leftOk && rightOk)
+                    found.insert(pattern.second, start);
+            }
+            if (found.size() == m_patterns.size())
+                break;
+        }
+        return found;
+    }
+
+private:
+    struct Node
+    {
+        QHash<QChar, int> edges;
+        int failure = 0;
+        QVector<int> outputs;
+    };
+    QVector<Node> m_nodes;
+    QVector<QPair<QString, QString>> m_patterns;
+};
+
+class LineNumberIndex
+{
+public:
+    explicit LineNumberIndex(const QString &text)
+    {
+        for (qsizetype i = 0; i < text.size(); ++i) {
+            if (text.at(i) == QLatin1Char('\n'))
+                m_newlines.append(i);
+        }
+    }
+
+    int at(qsizetype offset) const
+    {
+        if (offset < 0)
+            return -1;
+        return int(std::lower_bound(m_newlines.cbegin(), m_newlines.cend(), offset)
+                   - m_newlines.cbegin()) + 1;
+    }
+
+private:
+    QVector<qsizetype> m_newlines;
+};
 
 bool isSafeTextFile(const QString &relativePath, const ScannedFileInfo &file)
 {
@@ -122,22 +232,6 @@ QStringList placementTargets(const QString &text, qsizetype *lastOffset = nullpt
     return targets;
 }
 
-bool binaryContainsToken(const QByteArray &bytes, const QByteArray &needle)
-{
-    if (needle.isEmpty())
-        return false;
-    qsizetype pos = 0;
-    while ((pos = bytes.indexOf(needle, pos)) >= 0) {
-        const bool leftOk = pos == 0 || isSc2TokenBoundary(QChar::fromLatin1(bytes.at(pos - 1)));
-        const qsizetype rightPos = pos + needle.size();
-        const bool rightOk = rightPos >= bytes.size() || isSc2TokenBoundary(QChar::fromLatin1(bytes.at(rightPos)));
-        if (leftOk && rightOk)
-            return true;
-        ++pos;
-    }
-    return false;
-}
-
 } // namespace
 
 namespace sc2dh::refs
@@ -159,6 +253,18 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
         canonicalIdByKey.insert(key, node.id);
     }
 
+    QVector<QPair<QString, QString>> foldedIdPatterns;
+    QVector<QPair<QString, QString>> binaryIdPatterns;
+    foldedIdPatterns.reserve(knownIdKeys.size());
+    binaryIdPatterns.reserve(knownIdKeys.size());
+    for (const QString &idKey : knownIdKeys) {
+        const QString canonical = canonicalIdByKey.value(idKey);
+        foldedIdPatterns.append({idKey, idKey});
+        binaryIdPatterns.append({QString::fromLatin1(canonical.toUtf8()), idKey});
+    }
+    const TokenSetMatcher foldedIdMatcher(foldedIdPatterns);
+    const TokenSetMatcher binaryIdMatcher(binaryIdPatterns);
+
     QHash<QString, qint64> assetSizes;
     QHash<QString, QString> canonicalAssetByKey;
     for (const ScannedFileInfo &file : analysis.scannedFiles) {
@@ -172,6 +278,12 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
         canonicalAssetByKey.insert(foldedKey(info.fileName()), normalized);
         assetSizes.insert(normalized, file.size);
     }
+
+    QVector<QPair<QString, QString>> assetPatterns;
+    assetPatterns.reserve(canonicalAssetByKey.size());
+    for (auto it = canonicalAssetByKey.cbegin(); it != canonicalAssetByKey.cend(); ++it)
+        assetPatterns.append({it.key(), it.key()});
+    const TokenSetMatcher assetMatcher(assetPatterns);
 
     for (const DataNode &node : analysis.nodes) {
         for (const QString &reference : node.referencedIds) {
@@ -201,10 +313,10 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
             continue;
 
         if (!text) {
-            for (const QString &idKey : knownIdKeys) {
+            const auto matches = binaryIdMatcher.firstMatches(QString::fromLatin1(bytes));
+            for (auto match = matches.cbegin(); match != matches.cend(); ++match) {
+                const QString idKey = match.key();
                 const QString canonical = canonicalIdByKey.value(idKey);
-                if (!binaryContainsToken(bytes, canonical.toUtf8()))
-                    continue;
                 ReferenceRecord record;
                 record.kind = ReferenceKind::BinaryUnconfirmed;
                 record.strength = ReferenceStrength::Blocking;
@@ -218,6 +330,7 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
         }
 
         const QString content = QString::fromUtf8(bytes);
+        const LineNumberIndex lines(content);
         if (isPlacementFile(relative)) {
             qsizetype lastOffset = -1;
             for (const QString &target : placementTargets(content, &lastOffset)) {
@@ -229,7 +342,7 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
                 record.strength = ReferenceStrength::Strong;
                 record.targetId = canonicalIdByKey.value(key, target);
                 record.sourceFile = relative;
-                record.lineNumber = lineNumberAt(content, lastOffset);
+                record.lineNumber = lines.at(lastOffset);
                 record.detail = QStringLiteral("Objects placement/runtime root");
                 record.rewritable = true;
                 addRecord(record);
@@ -238,38 +351,31 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
 
         const ReferenceKind textKind = textKindForPath(relative);
         const bool strongText = isStrongTextPath(relative);
-        for (const QString &idKey : knownIdKeys) {
+        const QString foldedContent = foldedCharacters(content);
+        const auto idMatches = foldedIdMatcher.firstMatches(foldedContent);
+        for (auto match = idMatches.cbegin(); match != idMatches.cend(); ++match) {
+            const QString idKey = match.key();
             const QString canonical = canonicalIdByKey.value(idKey);
-            const QRegularExpression expression = tokenExpression(canonical);
-            const QRegularExpressionMatch match = expression.match(content);
-            if (!match.hasMatch())
-                continue;
             ReferenceRecord record;
             record.kind = textKind;
             record.strength = strongText ? ReferenceStrength::Strong : ReferenceStrength::Weak;
             record.targetId = canonical;
             record.sourceFile = relative;
-            record.lineNumber = lineNumberAt(content, match.capturedStart());
+            record.lineNumber = lines.at(match.value());
             record.detail = strongText ? QStringLiteral("token-aware text reference")
                                        : QStringLiteral("weak token-aware text match");
             record.rewritable = strongText;
             addRecord(record);
         }
 
-        for (auto it = canonicalAssetByKey.cbegin(); it != canonicalAssetByKey.cend(); ++it) {
-            const QString token = it.key();
-            if (token.isEmpty())
-                continue;
-            const QRegularExpression expression = tokenExpression(token);
-            const QRegularExpressionMatch match = expression.match(content);
-            if (!match.hasMatch())
-                continue;
+        const auto assetMatches = assetMatcher.firstMatches(foldedContent);
+        for (auto match = assetMatches.cbegin(); match != assetMatches.cend(); ++match) {
             ReferenceRecord record;
             record.kind = ReferenceKind::AssetText;
             record.strength = ReferenceStrength::Strong;
-            record.targetAsset = it.value();
+            record.targetAsset = canonicalAssetByKey.value(match.key());
             record.sourceFile = relative;
-            record.lineNumber = lineNumberAt(content, match.capturedStart());
+            record.lineNumber = lines.at(match.value());
             record.detail = QStringLiteral("asset path/name text reference");
             record.rewritable = true;
             addRecord(record);

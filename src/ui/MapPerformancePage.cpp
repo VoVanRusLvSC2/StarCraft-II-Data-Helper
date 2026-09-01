@@ -1294,17 +1294,18 @@ void MapPerformancePage::rebuild()
     watcher->setFuture(QtConcurrent::run([snapshot] {
         PreparedMapPerformance prepared;
         try {
+            const ScannedFileReader sharedReader(snapshot);
             QByteArray regionsBytes;
             QString regionsSource;
-            if (MapPerformancePage::readRegionsFile(snapshot, &regionsBytes, &regionsSource)) {
+            if (MapPerformancePage::readRegionsFile(snapshot, &regionsBytes, &regionsSource, &sharedReader)) {
                 prepared.regions = sc2dh::region::MapRegionRepository().parse(regionsBytes, regionsSource);
             } else {
                 prepared.regions.sourceLabel = QStringLiteral("Regions");
                 prepared.regions.warnings << QStringLiteral("The map has no readable Regions component.");
             }
-            prepared.preview = MapPerformancePage::buildMapPreviewData(snapshot);
+            prepared.preview = MapPerformancePage::buildMapPreviewData(snapshot, &sharedReader);
             prepared.hasObjects = MapPerformancePage::readObjectsFile(
-                snapshot, &prepared.objectsBytes, &prepared.objectsSource);
+                snapshot, &prepared.objectsBytes, &prepared.objectsSource, &sharedReader);
             if (prepared.hasObjects) {
                 sc2dh::perf::MapPerformanceOptions options;
                 options.columns = 8;
@@ -1326,11 +1327,14 @@ void MapPerformancePage::rebuild()
 
 bool MapPerformancePage::readObjectsFile(const AnalysisResult &result,
                                          QByteArray *objectsBytes,
-                                         QString *sourceLabel)
+                                         QString *sourceLabel,
+                                         const ScannedFileReader *sharedReader)
 {
     if (!objectsBytes)
         return false;
-    ScannedFileReader reader(result);
+    const std::unique_ptr<ScannedFileReader> ownedReader = sharedReader
+        ? nullptr : std::make_unique<ScannedFileReader>(result);
+    const ScannedFileReader &reader = sharedReader ? *sharedReader : *ownedReader;
     for (const ScannedFileInfo &file : result.scannedFiles) {
         if (!isObjectsEntry(result.rootFolder, file))
             continue;
@@ -1347,11 +1351,14 @@ bool MapPerformancePage::readObjectsFile(const AnalysisResult &result,
 
 bool MapPerformancePage::readRegionsFile(const AnalysisResult &result,
                                          QByteArray *regionsBytes,
-                                         QString *sourceLabel)
+                                         QString *sourceLabel,
+                                         const ScannedFileReader *sharedReader)
 {
     if (!regionsBytes)
         return false;
-    ScannedFileReader reader(result);
+    const std::unique_ptr<ScannedFileReader> ownedReader = sharedReader
+        ? nullptr : std::make_unique<ScannedFileReader>(result);
+    const ScannedFileReader &reader = sharedReader ? *sharedReader : *ownedReader;
     for (const ScannedFileInfo &file : result.scannedFiles) {
         if (!isRegionsEntry(result.rootFolder, file))
             continue;
@@ -1368,7 +1375,8 @@ bool MapPerformancePage::readRegionsFile(const AnalysisResult &result,
 
 bool MapPerformancePage::readMinimapImage(const AnalysisResult &result,
                                           QImage *image,
-                                          QString *sourceLabel)
+                                          QString *sourceLabel,
+                                          const ScannedFileReader *sharedReader)
 {
     if (!image)
         return false;
@@ -1376,7 +1384,9 @@ bool MapPerformancePage::readMinimapImage(const AnalysisResult &result,
     if (sourceLabel)
         sourceLabel->clear();
 
-    ScannedFileReader reader(result);
+    const std::unique_ptr<ScannedFileReader> ownedReader = sharedReader
+        ? nullptr : std::make_unique<ScannedFileReader>(result);
+    const ScannedFileReader &reader = sharedReader ? *sharedReader : *ownedReader;
     for (const ScannedFileInfo &file : result.scannedFiles) {
         const QString relative = ScannedFileReader::relativePath(result.rootFolder, file.filePath);
         if (QFileInfo(relative).fileName().compare(QStringLiteral("Minimap.tga"), Qt::CaseInsensitive) != 0)
@@ -1404,14 +1414,17 @@ bool MapPerformancePage::readPreviewComponent(const AnalysisResult &result,
                                                const QStringList &fileNames,
                                                qint64 maxBytes,
                                                QByteArray *bytes,
-                                               QString *sourceLabel)
+                                               QString *sourceLabel,
+                                               const ScannedFileReader *sharedReader)
 {
     if (!bytes)
         return false;
     bytes->clear();
     if (sourceLabel)
         sourceLabel->clear();
-    ScannedFileReader reader(result);
+    const std::unique_ptr<ScannedFileReader> ownedReader = sharedReader
+        ? nullptr : std::make_unique<ScannedFileReader>(result);
+    const ScannedFileReader &reader = sharedReader ? *sharedReader : *ownedReader;
     for (const ScannedFileInfo &file : result.scannedFiles) {
         const QString relative = ScannedFileReader::relativePath(result.rootFolder, file.filePath);
         const QString baseName = QFileInfo(relative).fileName();
@@ -1432,7 +1445,9 @@ bool MapPerformancePage::readPreviewComponent(const AnalysisResult &result,
     return false;
 }
 
-sc2dh::preview::MapPreviewData MapPerformancePage::buildMapPreviewData(const AnalysisResult &result)
+sc2dh::preview::MapPreviewData MapPerformancePage::buildMapPreviewData(
+    const AnalysisResult &result,
+    const ScannedFileReader *sharedReader)
 {
     sc2dh::preview::MapPreviewData preview;
     sc2dh::preview::MapPreviewDataReader reader;
@@ -1441,7 +1456,7 @@ sc2dh::preview::MapPreviewData MapPerformancePage::buildMapPreviewData(const Ana
     QString terrainXmlSource;
     sc2dh::preview::TerrainDescriptor terrain;
     if (readPreviewComponent(result, {QStringLiteral("t3Terrain.xml"), QStringLiteral("t3Terrain")},
-                             8ll * 1024ll * 1024ll, &terrainXml, &terrainXmlSource)) {
+                             8ll * 1024ll * 1024ll, &terrainXml, &terrainXmlSource, sharedReader)) {
         terrain = reader.parseTerrainXml(terrainXml);
         preview.warnings += terrain.errors;
         if (terrain.complete) {
@@ -1454,7 +1469,7 @@ sc2dh::preview::MapPreviewData MapPerformancePage::buildMapPreviewData(const Ana
         QByteArray mapInfo;
         QString mapInfoSource;
         if (readPreviewComponent(result, {QStringLiteral("MapInfo")}, 16ll * 1024ll * 1024ll,
-                                 &mapInfo, &mapInfoSource)) {
+                                 &mapInfo, &mapInfoSource, sharedReader)) {
             preview.worldBounds = reader.parseMapInfoDimensions(mapInfo, &preview.warnings);
             if (preview.worldBounds.valid)
                 preview.warnings << QStringLiteral("APPROXIMATE_BACKGROUND_ALIGNMENT: MapInfo dimensions provide aspect only; terrain origin was unavailable.");
@@ -1463,7 +1478,7 @@ sc2dh::preview::MapPreviewData MapPerformancePage::buildMapPreviewData(const Ana
 
     QImage minimap;
     QString minimapSource;
-    if (readMinimapImage(result, &minimap, &minimapSource)) {
+    if (readMinimapImage(result, &minimap, &minimapSource, sharedReader)) {
         preview.image = minimap;
         preview.sourceLabel = minimapSource;
         preview.terrainBacked = false;
@@ -1476,7 +1491,7 @@ sc2dh::preview::MapPreviewData MapPerformancePage::buildMapPreviewData(const Ana
     QString heightMapSource;
     if (terrain.complete
         && readPreviewComponent(result, {QStringLiteral("t3HeightMap")}, 256ll * 1024ll * 1024ll,
-                                &heightMap, &heightMapSource)) {
+                                &heightMap, &heightMapSource, sharedReader)) {
         preview.image = reader.renderHeightMap(heightMap, terrain, &preview.warnings);
         if (!preview.image.isNull()) {
             preview.sourceLabel = QStringLiteral("%1 + %2").arg(terrainXmlSource, heightMapSource);

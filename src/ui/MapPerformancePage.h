@@ -14,6 +14,7 @@ class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
 class QStandardItemModel;
+class ScannedFileReader;
 class QTableView;
 
 class MapPerformancePage : public QWidget
@@ -36,15 +37,20 @@ private:
     void updateDecorPreview();
     void createDecorOptimizedMapCopy();
     void createMaximumCompressedCopy();
-    static bool readObjectsFile(const AnalysisResult &result, QByteArray *objectsBytes, QString *sourceLabel);
-    static bool readRegionsFile(const AnalysisResult &result, QByteArray *regionsBytes, QString *sourceLabel);
-    static bool readMinimapImage(const AnalysisResult &result, QImage *image, QString *sourceLabel);
+    static bool readObjectsFile(const AnalysisResult &result, QByteArray *objectsBytes, QString *sourceLabel,
+                                const ScannedFileReader *sharedReader = nullptr);
+    static bool readRegionsFile(const AnalysisResult &result, QByteArray *regionsBytes, QString *sourceLabel,
+                                const ScannedFileReader *sharedReader = nullptr);
+    static bool readMinimapImage(const AnalysisResult &result, QImage *image, QString *sourceLabel,
+                                 const ScannedFileReader *sharedReader = nullptr);
     static bool readPreviewComponent(const AnalysisResult &result,
                                      const QStringList &fileNames,
                                      qint64 maxBytes,
                                      QByteArray *bytes,
-                                     QString *sourceLabel);
-    static sc2dh::preview::MapPreviewData buildMapPreviewData(const AnalysisResult &result);
+                                     QString *sourceLabel,
+                                     const ScannedFileReader *sharedReader = nullptr);
+    static sc2dh::preview::MapPreviewData buildMapPreviewData(const AnalysisResult &result,
+                                                              const ScannedFileReader *sharedReader = nullptr);
     void startMapPreviewLoad();
     void applyMapPreview(const sc2dh::preview::MapPreviewData &preview);
     QString sourceArchivePath() const;
