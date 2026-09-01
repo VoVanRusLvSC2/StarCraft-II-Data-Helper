@@ -4055,6 +4055,38 @@ void CoreTests::maximumCompressionFailurePathsPreserveSourceAndOutput()
     QCOMPARE(cancelledResult.status, QStringLiteral("CANCELLED"));
     QVERIFY(!QFileInfo::exists(cancelledOutput));
 
+    const QString verifyCancelledOutput = QDir(dir.path()).absoluteFilePath(QStringLiteral("VerifyCancelled.SC2Map"));
+    int cancellationChecks = 0;
+    sc2dh::compression::ArchiveCompressionRequest verifyCancelledRequest{sourcePath, verifyCancelledOutput};
+    verifyCancelledRequest.availableBytesOverride = std::numeric_limits<qint64>::max();
+    verifyCancelledRequest.isCancelled = [&cancellationChecks] { return ++cancellationChecks >= 3; };
+    const auto verifyCancelledResult = service.compressCompatibleCopy(verifyCancelledRequest);
+    QVERIFY2(verifyCancelledResult.status == QStringLiteral("CANCELLED"),
+             qPrintable(verifyCancelledResult.status + QStringLiteral(": ") + verifyCancelledResult.error));
+    QVERIFY(!QFileInfo::exists(verifyCancelledOutput));
+
+    const QString corruptPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Corrupt.SC2Map"));
+    QVERIFY(writeTextFile(corruptPath, QByteArrayLiteral("not an MPQ archive")));
+    const QString corruptOutput = QDir(dir.path()).absoluteFilePath(QStringLiteral("CorruptOutput.SC2Map"));
+    sc2dh::compression::ArchiveCompressionRequest corruptRequest{corruptPath, corruptOutput};
+    corruptRequest.availableBytesOverride = std::numeric_limits<qint64>::max();
+    const auto corruptResult = service.compressCompatibleCopy(corruptRequest);
+    QVERIFY(!corruptResult.success);
+    QVERIFY(!QFileInfo::exists(corruptOutput));
+
+    const QString compactedOutput = QDir(dir.path()).absoluteFilePath(QStringLiteral("Compacted.SC2Map"));
+    sc2dh::compression::ArchiveCompressionRequest compactRequest{sourcePath, compactedOutput};
+    compactRequest.availableBytesOverride = std::numeric_limits<qint64>::max();
+    const auto compactResult = service.compressCompatibleCopy(compactRequest);
+    QVERIFY2(compactResult.success, qPrintable(compactResult.error));
+    QVERIFY(compactResult.sourceUnchanged);
+    QVERIFY(compactResult.logicalEntryEquality);
+    QVERIFY(compactResult.structuralVerification);
+    if (QFileInfo::exists(compactedOutput))
+        QVERIFY(QFileInfo(compactedOutput).size() < QFileInfo(sourcePath).size());
+    else
+        QCOMPARE(compactResult.status, QStringLiteral("NO_COMPATIBLE_SIZE_GAIN"));
+
     QFile sourceAfter(sourcePath);
     QVERIFY(sourceAfter.open(QIODevice::ReadOnly));
     QCOMPARE(sourceAfter.readAll(), originalBytes);

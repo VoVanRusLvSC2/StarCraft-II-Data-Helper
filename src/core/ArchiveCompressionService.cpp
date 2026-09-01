@@ -161,9 +161,13 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
     }
     for (const Sc2ArchiveEntryMetadata &entry : metadata) {
         const quint32 unknownFlags = entry.flags & ~quint32(MPQ_FILE_VALID_FLAGS);
+        // Compaction operates on a byte-for-byte archive copy and does not
+        // rename or re-add entries, so StormLib-supported encrypted entries
+        // (including the customary encrypted MPQ listfile) retain their key
+        // and flags. Patch/delete/signature records require format-specific
+        // handling that this strategy does not claim to support.
         const quint32 unsafeFlags = entry.flags
-            & quint32(MPQ_FILE_ENCRYPTED | MPQ_FILE_KEY_V2 | MPQ_FILE_PATCH_FILE
-                      | MPQ_FILE_DELETE_MARKER | MPQ_FILE_SIGNATURE);
+            & quint32(MPQ_FILE_PATCH_FILE | MPQ_FILE_DELETE_MARKER | MPQ_FILE_SIGNATURE);
         if (unknownFlags != 0 || unsafeFlags != 0) {
             result.status = QStringLiteral("BLOCKED_UNSUPPORTED_ARCHIVE_FLAGS");
             result.error = QStringLiteral("Entry %1 uses unsupported MPQ flags 0x%2 (unknown mask 0x%3).")

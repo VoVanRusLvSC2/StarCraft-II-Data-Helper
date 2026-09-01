@@ -1,5 +1,6 @@
 #include "ui/MapPerformancePage.h"
 
+#include "app/AppSettings.h"
 #include "core/ArchiveCompressionService.h"
 #include "core/DecorationMapCopyService.h"
 #include "core/MapPreviewData.h"
@@ -23,12 +24,14 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QOpenGLWidget>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
 #include <QPixmap>
 #include <QPlainTextEdit>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -39,13 +42,17 @@
 #include <QTableView>
 #include <QSplitter>
 #include <QStorageInfo>
+#include <QSurfaceFormat>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
 #include <QtConcurrent>
 
 #include <algorithm>
+#include <atomic>
+#include <exception>
 #include <functional>
+#include <memory>
 #include <limits>
 
 namespace
@@ -183,15 +190,19 @@ QColor riskColor(double score)
     return QColor(QStringLiteral("#1f2937"));
 }
 
-class MapHeatmapWidget : public QWidget
+class MapHeatmapWidget : public QOpenGLWidget
 {
 public:
     explicit MapHeatmapWidget(QWidget *parent = nullptr)
-        : QWidget(parent)
+        : QOpenGLWidget(parent)
     {
+        QSurfaceFormat format = this->format();
+        format.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+        format.setSamples(sc2dh::app::AppSettings::modelAntialiasing() ? 4 : 0);
+        setFormat(format);
         setMinimumHeight(220);
         setMouseTracking(true);
-        setAttribute(Qt::WA_OpaquePaintEvent, true);
+        setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
     }
 
     void setReport(const sc2dh::perf::MapPerformanceReport &report)
@@ -260,9 +271,8 @@ public:
     std::function<void(int)> regionClicked;
 
 protected:
-    void paintEvent(QPaintEvent *event) override
+    void paintGL() override
     {
-        Q_UNUSED(event);
         ensureStaticLayer();
         QPainter painter(this);
         painter.drawPixmap(0, 0, m_staticLayer);
@@ -1463,7 +1473,18 @@ void MapPerformancePage::startMapPreviewLoad()
         applyMapPreview(preview);
     });
     watcher->setFuture(QtConcurrent::run([snapshot] {
-        return MapPerformancePage::buildMapPreviewData(snapshot);
+        try {
+            return MapPerformancePage::buildMapPreviewData(snapshot);
+        } catch (const std::exception &exception) {
+            sc2dh::preview::MapPreviewData preview;
+            preview.unavailableReason = QStringLiteral("Preview worker exception: %1")
+                                            .arg(QString::fromUtf8(exception.what()));
+            return preview;
+        } catch (...) {
+            sc2dh::preview::MapPreviewData preview;
+            preview.unavailableReason = QStringLiteral("Unknown preview worker exception.");
+            return preview;
+        }
     }));
 }
 
@@ -2017,7 +2038,19 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
         emit operationFinished(operation);
     });
     watcher->setFuture(QtConcurrent::run([request] {
-        return sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
+        try {
+            return sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
+        } catch (const std::exception &exception) {
+            sc2dh::decor::DecorOptimizedMapResult result;
+            result.outputArchivePath = request.outputArchivePath;
+            result.error = QStringLiteral("Worker exception: %1").arg(QString::fromUtf8(exception.what()));
+            return result;
+        } catch (...) {
+            sc2dh::decor::DecorOptimizedMapResult result;
+            result.outputArchivePath = request.outputArchivePath;
+            result.error = QStringLiteral("Unknown worker exception.");
+            return result;
+        }
     }));
 }
 
@@ -2060,15 +2093,30 @@ void MapPerformancePage::createMaximumCompressedCopy()
     sc2dh::compression::ArchiveCompressionRequest request;
     request.sourceArchivePath = source;
     request.outputArchivePath = output;
+    const auto cancelled = std::make_shared<std::atomic_bool>(false);
+    request.isCancelled = [cancelled] { return cancelled->load(std::memory_order_relaxed); };
+    auto *progress = new QProgressDialog(tr("Compacting and verifying logical archive entries..."),
+                                         tr("Cancel"), 0, 0, this);
+    progress->setObjectName(QStringLiteral("maximumCompressionProgress"));
+    progress->setWindowModality(Qt::NonModal);
+    progress->setMinimumDuration(0);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    connect(progress, &QProgressDialog::canceled, this, [cancelled] {
+        cancelled->store(true, std::memory_order_relaxed);
+    });
+    progress->show();
     m_compressButton->setEnabled(false);
     m_createCopyButton->setEnabled(false);
     m_previewButton->setEnabled(false);
     m_decorSummaryLabel->setText(tr("Compacting and comparing every logical archive entry in a worker thread…"));
     auto *watcher = new QFutureWatcher<sc2dh::compression::ArchiveCompressionResult>(this);
     connect(watcher, &QFutureWatcher<sc2dh::compression::ArchiveCompressionResult>::finished, this,
-            [this, watcher] {
+            [this, watcher, progress] {
         const auto result = watcher->result();
         watcher->deleteLater();
+        progress->close();
+        progress->deleteLater();
         m_compressButton->setEnabled(!sourceArchivePath().isEmpty());
         m_previewButton->setEnabled(true);
         m_createCopyButton->setEnabled(!m_decorZones.isEmpty());
@@ -2097,7 +2145,21 @@ void MapPerformancePage::createMaximumCompressedCopy()
         emit operationFinished(operation);
     });
     watcher->setFuture(QtConcurrent::run([request] {
-        return sc2dh::compression::ArchiveCompressionService().compressCompatibleCopy(request);
+        try {
+            return sc2dh::compression::ArchiveCompressionService().compressCompatibleCopy(request);
+        } catch (const std::exception &exception) {
+            sc2dh::compression::ArchiveCompressionResult result;
+            result.outputArchivePath = request.outputArchivePath;
+            result.status = QStringLiteral("BLOCKED_WORKER_EXCEPTION");
+            result.error = QStringLiteral("Worker exception: %1").arg(QString::fromUtf8(exception.what()));
+            return result;
+        } catch (...) {
+            sc2dh::compression::ArchiveCompressionResult result;
+            result.outputArchivePath = request.outputArchivePath;
+            result.status = QStringLiteral("BLOCKED_WORKER_EXCEPTION");
+            result.error = QStringLiteral("Unknown worker exception.");
+            return result;
+        }
     }));
 }
 

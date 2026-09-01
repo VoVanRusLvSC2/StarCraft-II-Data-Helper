@@ -18,6 +18,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QOpenGLWidget>
 #include <QPixmap>
 #include <QPointer>
 #include <QSaveFile>
@@ -164,12 +165,16 @@ int runLayoutSmoke(QApplication &app, const QString &outputDirectory)
                     failures.append(QStringLiteral("Action-area screenshot could not be saved."));
                 controlsScroll->verticalScrollBar()->setValue(previous);
             }
+            auto *mapCanvas = (*page)->findChild<QOpenGLWidget *>(QStringLiteral("mapPerformanceHeatmap"));
             reports->append(QJsonObject{
                 {QStringLiteral("profile"), profile.name},
                 {QStringLiteral("logical_width"), profile.logicalSize.width()},
                 {QStringLiteral("logical_height"), profile.logicalSize.height()},
                 {QStringLiteral("language"), profile.language},
                 {QStringLiteral("interactive_controls"), controls.size()},
+                {QStringLiteral("opengl_canvas"), mapCanvas != nullptr},
+                {QStringLiteral("opengl_context_valid"), mapCanvas && mapCanvas->isValid()},
+                {QStringLiteral("qt_opengl_mode"), QString::fromLocal8Bit(qgetenv("QT_OPENGL"))},
                 {QStringLiteral("result"), failures.isEmpty() ? QStringLiteral("PASS") : QStringLiteral("FAIL")},
                 {QStringLiteral("failures"), failures},
                 {QStringLiteral("screenshot"), screenshotName},
