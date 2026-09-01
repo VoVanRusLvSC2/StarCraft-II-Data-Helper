@@ -16,6 +16,7 @@
 #include <QLabel>
 #include <QLineF>
 #include <QMouseEvent>
+#include <QOpenGLWidget>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -23,6 +24,7 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSet>
+#include <QSurfaceFormat>
 #include <QStringList>
 #include <QShowEvent>
 #include <QTimer>
@@ -44,11 +46,25 @@ public:
         , m_lights(QStringLiteral(":/textures/ui_nova_login_backgroundlights.png"))
         , m_scanlines(QStringLiteral(":/textures/ui_nova_archives_backgroundframe_scanlines.png"))
     {
+        const bool useGpuViewport = sc2dh::app::AppSettings::renderer() != QStringLiteral("software");
+        if (useGpuViewport) {
+            auto *openGlViewport = new QOpenGLWidget(this);
+            QSurfaceFormat format = openGlViewport->format();
+            format.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+            format.setSamples(sc2dh::app::AppSettings::modelAntialiasing() ? 4 : 0);
+            openGlViewport->setFormat(format);
+            setViewport(openGlViewport);
+            // QOpenGLWidget paints into an FBO. Full updates avoid stale tiles
+            // while panning/rotating and are still substantially faster on the GPU.
+            setViewportUpdateMode(FullViewportUpdate);
+        } else {
+            setViewportUpdateMode(BoundingRectViewportUpdate);
+        }
         setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
+        setOptimizationFlag(DontSavePainterState, true);
         setTransformationAnchor(AnchorUnderMouse);
         setResizeAnchor(AnchorViewCenter);
         setDragMode(ScrollHandDrag);
-        setViewportUpdateMode(BoundingRectViewportUpdate);
         setFrameShape(QFrame::NoFrame);
         setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -238,6 +254,7 @@ QGraphicsRectItem *addCard(QGraphicsScene *scene,
     auto *frame = scene->addRect(QRectF(0.0, 0.0, width, height), pen, QBrush(fill));
     frame->setPos(pos);
     frame->setZValue(centerCard ? 10.0 : 2.0);
+    frame->setCacheMode(QGraphicsItem::DeviceCoordinateCache);
 
     auto *badge = scene->addEllipse(QRectF(0.0, 0.0, 26.0, 26.0),
                                     QPen(base.lighter(160), 1.0),
@@ -558,10 +575,29 @@ void GraphPage::renderGraph()
     missingIds.removeDuplicates();
     missingIds.sort(Qt::CaseInsensitive);
 
-    m_hintBadge->setText(QStringLiteral("Incoming: %1 | Outgoing: %2 | Missing: %3 | Controls: middle-drag, right-drag, wheel, fit")
-                             .arg(incomingIds.size())
-                             .arg(outgoingIds.size())
-                             .arg(missingIds.size()));
+    const int incomingTotal = incomingIds.size();
+    const int outgoingTotal = outgoingIds.size();
+    const int missingTotal = missingIds.size();
+    // A catalog object can have thousands of links. Rendering every link as
+    // several QGraphicsItems makes selection look frozen and is not useful at
+    // a readable zoom level. Keep a deterministic, sorted working set.
+    constexpr int MaxIncomingCards = 80;
+    constexpr int MaxOutgoingCards = 80;
+    constexpr int MaxMissingCards = 40;
+    if (incomingIds.size() > MaxIncomingCards)
+        incomingIds.resize(MaxIncomingCards);
+    if (outgoingIds.size() > MaxOutgoingCards)
+        outgoingIds.resize(MaxOutgoingCards);
+    if (missingIds.size() > MaxMissingCards)
+        missingIds.resize(MaxMissingCards);
+
+    m_hintBadge->setText(QStringLiteral("Incoming: %1 | Outgoing: %2 | Missing: %3 | rendered: %4 | GPU viewport: %5 | Controls: middle-drag, right-drag, wheel, fit")
+                             .arg(incomingTotal)
+                             .arg(outgoingTotal)
+                             .arg(missingTotal)
+                             .arg(incomingIds.size() + outgoingIds.size() + missingIds.size())
+                             .arg(sc2dh::app::AppSettings::renderer() == QStringLiteral("software")
+                                      ? QStringLiteral("off") : QStringLiteral("on")));
 
     const QVector<qreal> incomingY = [&]() {
         QVector<qreal> positions;

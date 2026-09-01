@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QTransform>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <algorithm>
 
@@ -110,8 +111,6 @@ AnalysisProgressDialog::AnalysisProgressDialog(QWidget *parent)
     m_titleLabel = new QLabel(QStringLiteral("SC2 DATA ANALYSIS"), innerFrame);
     m_titleLabel->setObjectName(QStringLiteral("novaProgressTitle"));
     m_titleLabel->setAlignment(Qt::AlignCenter);
-    m_titleLabel->setCursor(Qt::SizeAllCursor);
-    m_titleLabel->installEventFilter(this);
     auto *titleGlow = new QGraphicsDropShadowEffect(m_titleLabel);
     titleGlow->setBlurRadius(18.0);
     titleGlow->setColor(QColor(255, 111, 42, 190));
@@ -164,6 +163,24 @@ AnalysisProgressDialog::AnalysisProgressDialog(QWidget *parent)
 
     outerLayout->addWidget(innerFrame);
     dialogLayout->addWidget(outerFrame);
+
+    // The dialog is intentionally frameless, so make every non-interactive
+    // surface act like a native title bar instead of exposing one tiny drag
+    // target. Buttons remain normal clickable controls.
+    const QList<QWidget *> dragSurfaces{
+        outerFrame,
+        innerFrame,
+        m_titleLabel,
+        m_primaryLabel,
+        m_secondaryLabel,
+        m_percentLabel,
+        m_progressBar
+    };
+    for (QWidget *surface : dragSurfaces) {
+        surface->setProperty("analysisDragSurface", true);
+        surface->setCursor(Qt::SizeAllCursor);
+        surface->installEventFilter(this);
+    }
 }
 
 void AnalysisProgressDialog::setTitleText(const QString &title)
@@ -189,13 +206,15 @@ void AnalysisProgressDialog::setProgress(int percent, const QString &primaryText
 
 bool AnalysisProgressDialog::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_titleLabel && event)
+    if (watched && watched->property("analysisDragSurface").toBool() && event)
     {
         if (event->type() == QEvent::MouseButtonPress)
         {
             const auto *mouseEvent = static_cast<QMouseEvent *>(event);
             if (mouseEvent->button() == Qt::LeftButton)
             {
+                if (windowHandle() && windowHandle()->startSystemMove())
+                    return true;
                 m_dragOffset = mouseEvent->globalPosition().toPoint() - frameGeometry().topLeft();
                 m_dragging = true;
                 return true;

@@ -99,6 +99,8 @@ jobs:
             'Qt6Core.dll',
             'Qt6Gui.dll',
             'Qt6Widgets.dll',
+            'Qt6OpenGL.dll',
+            'Qt6OpenGLWidgets.dll',
             'platforms/qwindows.dll',
             'MSVCP140.dll',
             'MSVCP140_2.dll',

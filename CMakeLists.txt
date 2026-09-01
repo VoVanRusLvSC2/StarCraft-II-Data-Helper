@@ -25,7 +25,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Test Concurrent Network LinguistTools)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets OpenGLWidgets Test Concurrent Network LinguistTools)
 
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -274,6 +274,7 @@ target_include_directories(SC2DataHelper PRIVATE src)
 
 target_link_libraries(SC2DataHelper PRIVATE
     Qt6::Widgets
+    Qt6::OpenGLWidgets
     Qt6::Concurrent
     Qt6::Network
     spdlog::spdlog_header_only
