@@ -6,6 +6,7 @@
 #include <QAbstractItemView>
 #include <QBrush>
 #include <QColor>
+#include <QCoreApplication>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QFileInfo>
@@ -90,6 +91,43 @@ QString boundsLabel(const sc2dh::perf::MapPerformanceCell &cell)
         .arg(cell.xMax, 0, 'f', 1)
         .arg(cell.yMin, 0, 'f', 1)
         .arg(cell.yMax, 0, 'f', 1);
+}
+
+QString regionGeometryLabel(const sc2dh::region::RegionGeometry &geometry)
+{
+    const auto translate = [](const char *source) {
+        return QCoreApplication::translate("MapPerformancePage", source);
+    };
+    switch (geometry.kind) {
+    case sc2dh::region::RegionShapeKind::Circle:
+        return translate("circle | center %1, %2 | radius %3")
+            .arg(geometry.center.x, 0, 'f', 2)
+            .arg(geometry.center.y, 0, 'f', 2)
+            .arg(geometry.radius, 0, 'f', 2);
+    case sc2dh::region::RegionShapeKind::Rectangle:
+        return translate("rectangle | x %1..%2 | y %3..%4")
+            .arg(geometry.bounds.xMin, 0, 'f', 2)
+            .arg(geometry.bounds.xMax, 0, 'f', 2)
+            .arg(geometry.bounds.yMin, 0, 'f', 2)
+            .arg(geometry.bounds.yMax, 0, 'f', 2);
+    case sc2dh::region::RegionShapeKind::Polygon:
+        return translate("polygon | %1 points | x %2..%3 | y %4..%5")
+            .arg(geometry.points.size())
+            .arg(geometry.bounds.xMin, 0, 'f', 2)
+            .arg(geometry.bounds.xMax, 0, 'f', 2)
+            .arg(geometry.bounds.yMin, 0, 'f', 2)
+            .arg(geometry.bounds.yMax, 0, 'f', 2);
+    case sc2dh::region::RegionShapeKind::Composite:
+        return translate("composite | %1 shapes | bounds x %2..%3 | y %4..%5")
+            .arg(geometry.components.size())
+            .arg(geometry.bounds.xMin, 0, 'f', 2)
+            .arg(geometry.bounds.xMax, 0, 'f', 2)
+            .arg(geometry.bounds.yMin, 0, 'f', 2)
+            .arg(geometry.bounds.yMax, 0, 'f', 2);
+    case sc2dh::region::RegionShapeKind::Unknown:
+        return translate("unsupported shape: %1").arg(geometry.rawType);
+    }
+    return translate("unknown");
 }
 
 QString doodadOverrideKey(QString value)
@@ -1053,17 +1091,13 @@ void MapPerformancePage::populateRegionSelector()
     m_regionList->clear();
     for (int index = 0; index < m_regionReadResult.regions.size(); ++index) {
         const sc2dh::region::MapRegion &region = m_regionReadResult.regions.at(index);
-        QString label = QStringLiteral("%1 [#%2] — %3")
-                            .arg(region.name, region.id,
-                                 sc2dh::region::regionShapeName(region.geometry.kind));
-        if (region.geometry.bounds.valid)
-            label += QStringLiteral(" | x %1..%2, y %3..%4")
-                         .arg(region.geometry.bounds.xMin, 0, 'f', 2)
-                         .arg(region.geometry.bounds.xMax, 0, 'f', 2)
-                         .arg(region.geometry.bounds.yMin, 0, 'f', 2)
-                         .arg(region.geometry.bounds.yMax, 0, 'f', 2);
+        const QString parameters = regionGeometryLabel(region.geometry);
+        const QString label = QStringLiteral("%1 [#%2] — %3")
+                                  .arg(region.name, region.id, parameters);
         auto *item = new QListWidgetItem(label, m_regionList);
         item->setData(Qt::UserRole, index);
+        item->setToolTip(tr("Region #%1\n%2\nExact geometry is used; only ObjectDoodad placements inside it are considered.")
+                             .arg(region.id, parameters));
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(Qt::Unchecked);
         if (!region.geometry.supported) {

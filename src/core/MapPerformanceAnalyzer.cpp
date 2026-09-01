@@ -136,8 +136,7 @@ QVector<MapPlacement> MapPerformanceAnalyzer::parseObjectsPlacements(const QByte
     const QString text = QString::fromUtf8(objectsBytes);
     QVector<MapPlacement> placements;
 
-    if (text.contains(QRegularExpression(QStringLiteral("<\\s*PlacedObjects\\b"),
-                                         QRegularExpression::CaseInsensitiveOption))) {
+    if (text.trimmed().startsWith(QLatin1Char('<'))) {
         pugi::xml_document document;
         const pugi::xml_parse_result parsed = document.load_buffer(
             objectsBytes.constData(), size_t(objectsBytes.size()), pugi::parse_default, pugi::encoding_utf8);

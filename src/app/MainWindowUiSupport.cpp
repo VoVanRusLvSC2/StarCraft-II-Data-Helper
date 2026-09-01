@@ -413,7 +413,7 @@ namespace sc2dh::app
     QObject *installPromoButtonAnimations(QObject *owner, QToolButton *discordButton, QToolButton *boostyButton)
     {
         auto *promoAnimator = new PromoButtonAnimator(owner);
-        promoAnimator->installOn(discordButton, QSize(30, 30), QSize(30, 30), QColor(88, 190, 255, 220));
+        promoAnimator->installOn(discordButton, QSize(42, 42), QSize(46, 46), QColor(88, 190, 255, 220));
         promoAnimator->installOn(boostyButton, QSize(), QSize(), QColor(255, 176, 74, 230));
         return promoAnimator;
     }

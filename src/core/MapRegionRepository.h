@@ -29,6 +29,7 @@ enum class RegionShapeKind
     Circle,
     Rectangle,
     Polygon,
+    Composite,
     Unknown
 };
 
@@ -47,6 +48,7 @@ struct RegionGeometry
     double radius = 0.0;
     RegionBounds bounds;
     QVector<RegionPoint> points;
+    QVector<RegionGeometry> components;
     QHash<QString, QStringList> rawParameters;
     bool supported = false;
     QString unsupportedReason;

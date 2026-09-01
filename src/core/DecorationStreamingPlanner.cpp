@@ -330,8 +330,7 @@ QVector<DoodadPlacement> DecorationStreamingPlanner::parseObjects(const QByteArr
     const QString text = QString::fromUtf8(objectsBytes);
     QVector<DoodadPlacement> doodads;
 
-    if (text.contains(QRegularExpression(QStringLiteral("<\\s*PlacedObjects\\b"),
-                                         QRegularExpression::CaseInsensitiveOption))) {
+    if (text.trimmed().startsWith(QLatin1Char('<'))) {
         const QRegularExpression elementExpression(
             QStringLiteral("<ObjectDoodad\\b[^>]*(?:/\\s*>|>[\\s\\S]*?</ObjectDoodad\\s*>)"),
             QRegularExpression::CaseInsensitiveOption);

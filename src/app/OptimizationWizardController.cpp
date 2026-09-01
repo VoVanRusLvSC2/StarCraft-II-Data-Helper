@@ -399,6 +399,34 @@ void OptimizationWizardController::applyPlan()
             warnings << message;
         }
     };
+    const auto preflightSelectedRenames = [&](const AnalysisResult &analysis, QString *errorMessage)
+    {
+        if (selection.rename.isEmpty())
+            return true;
+        QStringList renamePlanNotes;
+        const RenamePlan plan = buildCombinedRenamePlan(analysis, selection.rename, &renamePlanNotes);
+        recordRenamePlanNotes(renamePlanNotes);
+        if (!plan.valid)
+            return true;
+
+        const RenamePreviewReport preview = window->m_referenceRenamer.preview(analysis, plan);
+        if (preview.valid)
+            return true;
+
+        QStringList details = preview.conflicts;
+        if (details.isEmpty())
+            details = preview.warnings;
+        details.removeDuplicates();
+        if (details.size() > 20)
+            details = details.mid(0, 20) << QStringLiteral("...");
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Rename preflight stopped the optimization before any selected files were changed:\n%1")
+                                .arg(details.isEmpty()
+                                         ? QStringLiteral("The prepared rename result did not pass verification.")
+                                         : details.join(QStringLiteral("\n")));
+        }
+        return false;
+    };
 
     if (window->m_sourceKind == MainWindow::SourceKind::ArchiveFile)
     {
@@ -422,6 +450,14 @@ void OptimizationWizardController::applyPlan()
             else
             {
                 window->applyArchiveReferenceSafety(&current);
+            }
+
+            if (failure.isEmpty() && !selection.rename.isEmpty())
+            {
+                updateApplyProgress(17, QStringLiteral("Checking rename plan before changes"),
+                                    QStringLiteral("Preparing and validating renamed IDs without saving"));
+                if (!preflightSelectedRenames(current, &error))
+                    failure = error;
             }
 
             if (failure.isEmpty() && !selection.importCleanup.isEmpty())
@@ -743,6 +779,14 @@ void OptimizationWizardController::applyPlan()
     {
         AnalysisResult current = window->m_result;
         QString error;
+
+        if (failure.isEmpty() && !selection.rename.isEmpty())
+        {
+            updateApplyProgress(7, QStringLiteral("Checking rename plan before changes"),
+                                QStringLiteral("Preparing and validating renamed IDs without saving"));
+            if (!preflightSelectedRenames(current, &error))
+                failure = error;
+        }
 
         if (failure.isEmpty() && !selection.importCleanup.isEmpty())
         {

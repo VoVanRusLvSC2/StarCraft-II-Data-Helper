@@ -242,10 +242,15 @@ namespace
         }
 
     private:
-        static constexpr int kPeriod = 54;
-        static constexpr int kRenderedFrameCount = 54;
-        static constexpr int kNormalHoldFrames = 1;
-        static constexpr int kFullHighlightFrames = 3;
+        // The previous 54-frame sweep cached a full-size set of pixmaps for
+        // every frame.  A 1180x720 dialog could therefore retain hundreds of
+        // MB and repaint at 90 FPS while the user was trying to browse files.
+        // A single cached highlight keeps the SC2 visual treatment without
+        // making directory navigation compete with an animation.
+        static constexpr int kPeriod = 1;
+        static constexpr int kRenderedFrameCount = 1;
+        static constexpr int kNormalHoldFrames = 0;
+        static constexpr int kFullHighlightFrames = 1;
         static constexpr int kSourceFrameSlice = 24;
         static constexpr int kTargetFrameBorder = 12;
         static constexpr int kHorizontalFrameBand = 176;

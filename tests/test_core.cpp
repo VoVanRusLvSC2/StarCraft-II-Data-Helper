@@ -313,6 +313,7 @@ private slots:
     void reservedCatalogFilterTokensAreNotReferences();
     void referenceRenamePreviewAndApply();
     void referenceRenameRewritesSafeTextReferences();
+    void referenceRenamePreflightCatchesResidualStrongLinks();
     void referenceRenameBlocksBinaryReferences();
     void referenceRenameDoesNotRewriteFilterFields();
     void referenceRenameDoesNotRewriteUntypedEnumValues();
@@ -1884,6 +1885,56 @@ void CoreTests::referenceRenameRewritesSafeTextReferences()
     QFile rewrittenXml(xmlPath);
     QVERIFY(rewrittenXml.open(QIODevice::ReadOnly));
     QVERIFY(QString::fromUtf8(rewrittenXml.readAll()).contains(QStringLiteral("id=\"NewUnit\"")));
+}
+
+void CoreTests::referenceRenamePreflightCatchesResidualStrongLinks()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Alerts.xml"));
+    const QByteArray original = QByteArrayLiteral(
+        "<Catalog>"
+        "<CAlert id=\"OldAlert\"/>"
+        "<CAbilArmMagazine id=\"Consumer\"><Alert value=\"OldAlert\"/></CAbilArmMagazine>"
+        "</Catalog>");
+    QVERIFY(writeTextFile(path, original));
+
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    int alertIndex = -1;
+    for (int index = 0; index < analysis.nodes.size(); ++index) {
+        if (analysis.nodes.at(index).elementName == QStringLiteral("CAlert")
+            && analysis.nodes.at(index).id == QStringLiteral("OldAlert")) {
+            alertIndex = index;
+            break;
+        }
+    }
+    QVERIFY(alertIndex >= 0);
+
+    RenamePlan plan;
+    plan.valid = true;
+    RenamePlanItem item;
+    item.nodeIndex = alertIndex;
+    item.oldId = QStringLiteral("OldAlert");
+    item.newId = QStringLiteral("NewAlert");
+    item.selected = true;
+    plan.items << item;
+
+    const RenamePreviewReport preview = ReferenceRenamer().preview(analysis, plan);
+    QVERIFY(!preview.valid);
+    QVERIFY(preview.conflicts.join(QStringLiteral("\n")).contains(
+        QStringLiteral("Pre-save rename verification failed")));
+    QVERIFY(preview.conflicts.join(QStringLiteral("\n")).contains(QStringLiteral("OldAlert")));
+
+    const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
+    QVERIFY(!applied.success);
+    QVERIFY(applied.error.contains(QStringLiteral("Pre-save rename verification failed")));
+
+    QFile unchanged(path);
+    QVERIFY(unchanged.open(QIODevice::ReadOnly));
+    QCOMPARE(unchanged.readAll(), original);
 }
 
 void CoreTests::referenceRenameBlocksBinaryReferences()
@@ -3795,12 +3846,15 @@ void CoreTests::readsRealSc2RegionXmlAndPreservesGeometry()
         "<shape type=\"circle\"><center value=\"10,20\"/><radius value=\"5\"/></shape></region>"
         "<region id=\"42\"><name value=\"Spawn\"/>"
         "<shape type=\"rect\"><quad value=\"30,40,50,70\"/></shape></region>"
+        "<region id=\"77\"><name value=\"Boss Floors\"/>"
+        "<shape type=\"rect\"><quad value=\"0,0,10,10\"/></shape>"
+        "<shape type=\"rect\"><quad value=\"30,0,40,10\"/></shape></region>"
         "</Regions>");
 
     const sc2dh::region::RegionReadResult parsed = sc2dh::region::MapRegionRepository().parse(regions);
     QVERIFY2(parsed.success, qPrintable(parsed.errors.join(QStringLiteral("; "))));
     QVERIFY2(parsed.complete, qPrintable(parsed.warnings.join(QStringLiteral("; "))));
-    QCOMPARE(parsed.regions.size(), 2);
+    QCOMPARE(parsed.regions.size(), 3);
     QCOMPARE(parsed.regions.at(0).id, QStringLiteral("17"));
     QCOMPARE(parsed.regions.at(0).name, QStringLiteral("Spawn [Region #17]"));
     QCOMPARE(parsed.regions.at(0).geometry.kind, sc2dh::region::RegionShapeKind::Circle);
@@ -3812,11 +3866,17 @@ void CoreTests::readsRealSc2RegionXmlAndPreservesGeometry()
     QCOMPARE(parsed.regions.at(1).geometry.kind, sc2dh::region::RegionShapeKind::Rectangle);
     QCOMPARE(parsed.regions.at(1).geometry.bounds.xMin, 30.0);
     QCOMPARE(parsed.regions.at(1).geometry.bounds.yMax, 70.0);
+    QCOMPARE(parsed.regions.at(2).geometry.kind, sc2dh::region::RegionShapeKind::Composite);
+    QCOMPARE(parsed.regions.at(2).geometry.components.size(), 2);
+    QCOMPARE(parsed.regions.at(2).geometry.classify(5.0, 5.0), sc2dh::region::SpatialRelation::Inside);
+    QCOMPARE(parsed.regions.at(2).geometry.classify(35.0, 5.0), sc2dh::region::SpatialRelation::Inside);
+    QCOMPARE(parsed.regions.at(2).geometry.classify(20.0, 5.0), sc2dh::region::SpatialRelation::Outside);
 }
 
 void CoreTests::realMapRegionReader()
 {
     const QStringList candidates{
+        QStringLiteral("C:/Program Files (x86)/StarCraft II/Maps/Кампания_Империя_KSP_Миссия_1_OPRIMIzATION.SC2Map"),
         QStringLiteral("E:/SK2/SC1ToSC2Converter/local-data/bank-debug/input/NydusConspiracy-current.SC2Map"),
         QStringLiteral("E:/SK2/SC1ToSC2Converter/out/StealTheBeacon_R666.SC2Map"),
         QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../../../logs/DecorSampleSource.SC2Map"))
@@ -3832,10 +3892,13 @@ void CoreTests::realMapRegionReader()
             continue;
 
         QString regionsEntry;
+        QString objectsEntry;
         for (const QString &entry : archive.allEntries()) {
-            if (QDir::cleanPath(entry).replace('\\', '/').compare(QStringLiteral("Regions"), Qt::CaseInsensitive) == 0) {
+            const QString normalized = QDir::cleanPath(entry).replace('\\', '/');
+            if (normalized.compare(QStringLiteral("Regions"), Qt::CaseInsensitive) == 0) {
                 regionsEntry = entry;
-                break;
+            } else if (normalized.compare(QStringLiteral("Objects"), Qt::CaseInsensitive) == 0) {
+                objectsEntry = entry;
             }
         }
 
@@ -3855,6 +3918,14 @@ void CoreTests::realMapRegionReader()
             QVERIFY(!region.name.isEmpty());
             QVERIFY(region.geometry.supported);
             QVERIFY(region.geometry.bounds.valid);
+        }
+        if (!objectsEntry.isEmpty()) {
+            QByteArray objectsBytes;
+            QVERIFY2(archive.readEntry(objectsEntry, &objectsBytes, &error), qPrintable(error));
+            QStringList objectWarnings;
+            const QVector<sc2dh::decor::DoodadPlacement> doodads =
+                sc2dh::decor::DecorationStreamingPlanner().parseObjects(objectsBytes, &objectWarnings);
+            QVERIFY2(!doodads.isEmpty(), qPrintable(objectWarnings.join(QStringLiteral("; "))));
         }
         return;
     }

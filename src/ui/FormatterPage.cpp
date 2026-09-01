@@ -21,6 +21,7 @@
 #include <QSignalBlocker>
 #include <QSettings>
 #include <QSplitter>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabBar>
@@ -42,6 +43,33 @@ constexpr int kCollectionStep = 5;
 constexpr int kSummaryStep = 6;
 constexpr int kAuditStep = 7;
 
+class WholeCellCheckDelegate final : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    bool editorEvent(QEvent *event, QAbstractItemModel *model,
+                     const QStyleOptionViewItem &option, const QModelIndex &index) override
+    {
+        if (!event || !model || index.column() != 0
+            || !index.flags().testFlag(Qt::ItemIsUserCheckable))
+            return QStyledItemDelegate::editorEvent(event, model, option, index);
+
+        // Qt normally toggles only when the small indicator is hit.  The
+        // wizard's "Use" column is an explicit yes/no control, so the whole
+        // cell should work and must toggle exactly once.
+        if (event->type() == QEvent::MouseButtonPress)
+            return true;
+        if (event->type() == QEvent::MouseButtonRelease)
+        {
+            const Qt::CheckState current = static_cast<Qt::CheckState>(index.data(Qt::CheckStateRole).toInt());
+            return model->setData(index, current == Qt::Checked ? Qt::Unchecked : Qt::Checked,
+                                  Qt::CheckStateRole);
+        }
+        return QStyledItemDelegate::editorEvent(event, model, option, index);
+    }
+};
+
 QTableWidget *makeTable(const QStringList &headers) {
     auto *value = new QTableWidget; value->setColumnCount(headers.size()); value->setHorizontalHeaderLabels(headers);
     value->setProperty("optimizationTable", true);
@@ -49,6 +77,7 @@ QTableWidget *makeTable(const QStringList &headers) {
     value->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn); value->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     value->setVerticalScrollMode(QAbstractItemView::ScrollPerItem); value->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     value->setMouseTracking(true);
+    value->setItemDelegateForColumn(0, new WholeCellCheckDelegate(value));
     value->setTextElideMode(Qt::ElideNone); value->verticalHeader()->hide(); return value;
 }
 void addRow(QTableWidget *target, const OptimizationPlanRow &row) {
@@ -190,7 +219,11 @@ OptimizationPlanData calculatePlan(const AnalysisResult &result, bool duplicateM
             : candidate.state == CandidateState::Risky ? QStringLiteral("Review")
                                                        : QStringLiteral("Blocked");
         if (candidate.kind == DeepCleanupKind::UnusedAsset) {
-            plan.importCleanup.append({{state,
+            const QString selectionState = safe ? QStringLiteral("Safe to remove")
+                                                 : candidate.state == CandidateState::Risky
+                                                       ? QStringLiteral("Review required")
+                                                       : QStringLiteral("Protected");
+            plan.importCleanup.append({{selectionState,
                                         candidate.label,
                                         deepCleanupActionName(candidate.action),
                                         candidate.reason,
@@ -283,14 +316,14 @@ FormatterPage::FormatterPage(QWidget *parent) : QWidget(parent) {
     hint->setObjectName(QStringLiteral("inspectorSubtitle")); hint->setWordWrap(true); layout->addWidget(hint);
     m_steps = new QTabWidget(this);
     m_steps->setObjectName(QStringLiteral("optimizationSteps"));
-    m_unused = makeTable({QStringLiteral("Use"), QStringLiteral("Data object ID"), QStringLiteral("Catalog type"), QStringLiteral("Reason"), QStringLiteral("Risk")});
-    m_duplicates = makeTable({QStringLiteral("Use"), QStringLiteral("ID mask"), QStringLiteral("Keep"), QStringLiteral("Remove"), QStringLiteral("References redirected")});
-    m_importCleanup = makeTable({QStringLiteral("Use"), QStringLiteral("Import file"), QStringLiteral("Action"), QStringLiteral("Reason"), QStringLiteral("Bytes")});
-    m_deepCleanup = makeTable({QStringLiteral("Use"), QStringLiteral("Kind"), QStringLiteral("Target"), QStringLiteral("Action"), QStringLiteral("Reason"), QStringLiteral("Bytes")});
-    m_rename = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Role"),
+    m_unused = makeTable({QStringLiteral("Include"), QStringLiteral("Data object ID"), QStringLiteral("Catalog type"), QStringLiteral("Reason"), QStringLiteral("Risk")});
+    m_duplicates = makeTable({QStringLiteral("Include"), QStringLiteral("ID mask"), QStringLiteral("Keep"), QStringLiteral("Remove"), QStringLiteral("References redirected")});
+    m_importCleanup = makeTable({QStringLiteral("Include"), QStringLiteral("Import file"), QStringLiteral("Action"), QStringLiteral("Reason"), QStringLiteral("Bytes")});
+    m_deepCleanup = makeTable({QStringLiteral("Include"), QStringLiteral("Kind"), QStringLiteral("Target"), QStringLiteral("Action"), QStringLiteral("Reason"), QStringLiteral("Bytes")});
+    m_rename = makeTable({QStringLiteral("Include"), QStringLiteral("Family"), QStringLiteral("Role"),
                           QStringLiteral("Current ID"), QStringLiteral("Proposed ID"),
                           QStringLiteral("@ change"), QStringLiteral("Risk / Conflict")});
-    m_collection = makeTable({QStringLiteral("Use"), QStringLiteral("Family"), QStringLiteral("Existing records"), QStringLiteral("Can add"), QStringLiteral("Move out"), QStringLiteral("Warnings")});
+    m_collection = makeTable({QStringLiteral("Include"), QStringLiteral("Family"), QStringLiteral("Existing records"), QStringLiteral("Can add"), QStringLiteral("Move out"), QStringLiteral("Warnings")});
     m_unused->setObjectName(QStringLiteral("optimizationUnusedTable"));
     m_duplicates->setObjectName(QStringLiteral("optimizationDuplicateTable"));
     m_importCleanup->setObjectName(QStringLiteral("optimizationImportCleanupTable"));

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <pugixml.hpp>
+#include <utility>
 
 namespace
 {
@@ -58,6 +59,104 @@ sc2dh::region::RegionBounds boundsFromPoints(const QVector<sc2dh::region::Region
     return bounds;
 }
 
+void includeBounds(sc2dh::region::RegionBounds *target,
+                   const sc2dh::region::RegionBounds &source)
+{
+    if (!target || !source.valid)
+        return;
+    if (!target->valid) {
+        *target = source;
+        return;
+    }
+    target->xMin = std::min(target->xMin, source.xMin);
+    target->yMin = std::min(target->yMin, source.yMin);
+    target->xMax = std::max(target->xMax, source.xMax);
+    target->yMax = std::max(target->yMax, source.yMax);
+}
+
+sc2dh::region::RegionGeometry parseShape(const pugi::xml_node &shape)
+{
+    using namespace sc2dh::region;
+    RegionGeometry geometry;
+    geometry.rawType = shape ? QString::fromUtf8(shape.attribute("type").value()).trimmed() : QString();
+    for (pugi::xml_node parameter : shape.children()) {
+        const QString key = QString::fromUtf8(parameter.name());
+        geometry.rawParameters[key].append(QString::fromUtf8(parameter.attribute("value").value()));
+    }
+
+    const QString type = geometry.rawType.toCaseFolded();
+    if (type == QStringLiteral("circle")) {
+        geometry.kind = RegionShapeKind::Circle;
+        bool radiusOk = false;
+        geometry.radius = childValue(shape, "radius").toDouble(&radiusOk);
+        if (pointFrom(childValue(shape, "center"), &geometry.center)
+            && radiusOk && geometry.radius > 0.0 && std::isfinite(geometry.radius)) {
+            geometry.bounds = {geometry.center.x - geometry.radius,
+                               geometry.center.y - geometry.radius,
+                               geometry.center.x + geometry.radius,
+                               geometry.center.y + geometry.radius,
+                               true};
+            geometry.supported = true;
+        }
+    } else if (type == QStringLiteral("rect") || type == QStringLiteral("rectangle")) {
+        geometry.kind = RegionShapeKind::Rectangle;
+        const QStringList candidates{childValue(shape, "quad"), childValue(shape, "bounds"),
+                                     childValue(shape, "rect")};
+        QVector<double> boundsValues;
+        for (const QString &candidate : candidates) {
+            boundsValues = numbersFrom(candidate);
+            if (boundsValues.size() >= 4)
+                break;
+        }
+        if (boundsValues.size() >= 4) {
+            geometry.bounds = {std::min(boundsValues.at(0), boundsValues.at(2)),
+                               std::min(boundsValues.at(1), boundsValues.at(3)),
+                               std::max(boundsValues.at(0), boundsValues.at(2)),
+                               std::max(boundsValues.at(1), boundsValues.at(3)), true};
+            geometry.supported = true;
+        } else {
+            RegionPoint minimum;
+            RegionPoint maximum;
+            if (pointFrom(childValue(shape, "min"), &minimum)
+                && pointFrom(childValue(shape, "max"), &maximum)) {
+                geometry.bounds = {std::min(minimum.x, maximum.x), std::min(minimum.y, maximum.y),
+                                   std::max(minimum.x, maximum.x), std::max(minimum.y, maximum.y), true};
+                geometry.supported = true;
+            } else {
+                RegionPoint center;
+                RegionPoint size;
+                if (pointFrom(childValue(shape, "center"), &center)
+                    && pointFrom(childValue(shape, "size"), &size)
+                    && size.x > 0.0 && size.y > 0.0) {
+                    geometry.center = center;
+                    geometry.bounds = {center.x - size.x * 0.5, center.y - size.y * 0.5,
+                                       center.x + size.x * 0.5, center.y + size.y * 0.5, true};
+                    geometry.supported = true;
+                }
+            }
+        }
+    } else if (type == QStringLiteral("polygon") || type == QStringLiteral("poly")) {
+        geometry.kind = RegionShapeKind::Polygon;
+        for (pugi::xml_node parameter : shape.children()) {
+            const QString key = QString::fromUtf8(parameter.name()).toCaseFolded();
+            if (!key.contains(QStringLiteral("point")) && !key.contains(QStringLiteral("vertex")))
+                continue;
+            const QVector<double> values = numbersFrom(QString::fromUtf8(parameter.attribute("value").value()));
+            for (int index = 0; index + 1 < values.size(); index += 2)
+                geometry.points << RegionPoint{values.at(index), values.at(index + 1)};
+        }
+        geometry.bounds = boundsFromPoints(geometry.points);
+        geometry.supported = geometry.points.size() >= 3;
+    }
+
+    if (!geometry.supported) {
+        geometry.unsupportedReason = shape
+            ? QStringLiteral("Unsupported or incomplete region shape '%1'.").arg(geometry.rawType)
+            : QStringLiteral("Region has no shape element.");
+    }
+    return geometry;
+}
+
 double distanceToSegment(double x, double y,
                          const sc2dh::region::RegionPoint &a,
                          const sc2dh::region::RegionPoint &b)
@@ -81,6 +180,16 @@ SpatialRelation RegionGeometry::classify(double x, double y, double tolerance) c
     if (!supported || !bounds.valid)
         return SpatialRelation::Outside;
     tolerance = std::max(0.0, tolerance);
+    if (kind == RegionShapeKind::Composite) {
+        bool boundary = false;
+        for (const RegionGeometry &component : components) {
+            const SpatialRelation relation = component.classify(x, y, tolerance);
+            if (relation == SpatialRelation::Inside)
+                return SpatialRelation::Inside;
+            boundary = boundary || relation == SpatialRelation::Boundary;
+        }
+        return boundary ? SpatialRelation::Boundary : SpatialRelation::Outside;
+    }
     if (kind == RegionShapeKind::Circle) {
         const double distance = std::hypot(x - center.x, y - center.y);
         if (std::abs(distance - radius) <= tolerance)
@@ -149,85 +258,33 @@ RegionReadResult MapRegionRepository::parse(const QByteArray &regionsBytes,
                 region.markers << QString::fromUtf8(child.name());
         }
 
-        const pugi::xml_node shape = node.child("shape");
-        RegionGeometry &geometry = region.geometry;
-        geometry.rawType = shape ? QString::fromUtf8(shape.attribute("type").value()).trimmed() : QString();
-        for (pugi::xml_node parameter : shape.children()) {
-            const QString key = QString::fromUtf8(parameter.name());
-            geometry.rawParameters[key].append(QString::fromUtf8(parameter.attribute("value").value()));
-        }
-
-        const QString type = geometry.rawType.toCaseFolded();
-        if (type == QStringLiteral("circle")) {
-            geometry.kind = RegionShapeKind::Circle;
-            bool radiusOk = false;
-            geometry.radius = childValue(shape, "radius").toDouble(&radiusOk);
-            if (pointFrom(childValue(shape, "center"), &geometry.center)
-                && radiusOk && geometry.radius > 0.0 && std::isfinite(geometry.radius)) {
-                geometry.bounds = {geometry.center.x - geometry.radius,
-                                   geometry.center.y - geometry.radius,
-                                   geometry.center.x + geometry.radius,
-                                   geometry.center.y + geometry.radius,
-                                   true};
-                geometry.supported = true;
-            }
-        } else if (type == QStringLiteral("rect") || type == QStringLiteral("rectangle")) {
-            geometry.kind = RegionShapeKind::Rectangle;
-            const QStringList candidates{childValue(shape, "quad"), childValue(shape, "bounds"),
-                                         childValue(shape, "rect")};
-            QVector<double> boundsValues;
-            for (const QString &candidate : candidates) {
-                boundsValues = numbersFrom(candidate);
-                if (boundsValues.size() >= 4)
-                    break;
-            }
-            if (boundsValues.size() >= 4) {
-                geometry.bounds = {std::min(boundsValues.at(0), boundsValues.at(2)),
-                                   std::min(boundsValues.at(1), boundsValues.at(3)),
-                                   std::max(boundsValues.at(0), boundsValues.at(2)),
-                                   std::max(boundsValues.at(1), boundsValues.at(3)), true};
-                geometry.supported = true;
-            } else {
-                RegionPoint minimum;
-                RegionPoint maximum;
-                if (pointFrom(childValue(shape, "min"), &minimum)
-                    && pointFrom(childValue(shape, "max"), &maximum)) {
-                    geometry.bounds = {std::min(minimum.x, maximum.x), std::min(minimum.y, maximum.y),
-                                       std::max(minimum.x, maximum.x), std::max(minimum.y, maximum.y), true};
-                    geometry.supported = true;
-                } else {
-                    RegionPoint center;
-                    RegionPoint size;
-                    if (pointFrom(childValue(shape, "center"), &center)
-                        && pointFrom(childValue(shape, "size"), &size)
-                        && size.x > 0.0 && size.y > 0.0) {
-                        geometry.center = center;
-                        geometry.bounds = {center.x - size.x * 0.5, center.y - size.y * 0.5,
-                                           center.x + size.x * 0.5, center.y + size.y * 0.5, true};
-                        geometry.supported = true;
-                    }
+        QVector<RegionGeometry> shapes;
+        for (pugi::xml_node shape : node.children("shape"))
+            shapes << parseShape(shape);
+        if (shapes.size() == 1) {
+            region.geometry = shapes.front();
+        } else if (shapes.size() > 1) {
+            RegionGeometry &geometry = region.geometry;
+            geometry.kind = RegionShapeKind::Composite;
+            geometry.rawType = QStringLiteral("composite");
+            geometry.components = shapes;
+            geometry.supported = true;
+            for (const RegionGeometry &component : std::as_const(geometry.components)) {
+                includeBounds(&geometry.bounds, component.bounds);
+                if (!component.supported) {
+                    geometry.supported = false;
+                    geometry.unsupportedReason = QStringLiteral("Composite region contains an unsupported shape: %1")
+                                                     .arg(component.unsupportedReason);
                 }
             }
-        } else if (type == QStringLiteral("polygon") || type == QStringLiteral("poly")) {
-            geometry.kind = RegionShapeKind::Polygon;
-            for (pugi::xml_node parameter : shape.children()) {
-                const QString key = QString::fromUtf8(parameter.name()).toCaseFolded();
-                if (!key.contains(QStringLiteral("point")) && !key.contains(QStringLiteral("vertex")))
-                    continue;
-                const QVector<double> values = numbersFrom(QString::fromUtf8(parameter.attribute("value").value()));
-                for (int index = 0; index + 1 < values.size(); index += 2)
-                    geometry.points << RegionPoint{values.at(index), values.at(index + 1)};
-            }
-            geometry.bounds = boundsFromPoints(geometry.points);
-            geometry.supported = geometry.points.size() >= 3;
+            geometry.supported = geometry.supported && geometry.bounds.valid;
+        } else {
+            region.geometry.unsupportedReason = QStringLiteral("Region has no shape element.");
         }
 
-        if (!geometry.supported) {
-            geometry.unsupportedReason = shape
-                ? QStringLiteral("Unsupported or incomplete region shape '%1'.").arg(geometry.rawType)
-                : QStringLiteral("Region has no shape element.");
+        if (!region.geometry.supported) {
             result.warnings << QStringLiteral("%1 [%2]: %3")
-                                   .arg(region.name, region.id, geometry.unsupportedReason);
+                                   .arg(region.name, region.id, region.geometry.unsupportedReason);
         }
         result.regions << region;
     }
@@ -250,6 +307,7 @@ QString regionShapeName(RegionShapeKind kind)
     case RegionShapeKind::Circle: return QStringLiteral("circle");
     case RegionShapeKind::Rectangle: return QStringLiteral("rectangle");
     case RegionShapeKind::Polygon: return QStringLiteral("polygon");
+    case RegionShapeKind::Composite: return QStringLiteral("composite");
     case RegionShapeKind::Unknown: return QStringLiteral("unknown");
     }
     return QStringLiteral("unknown");

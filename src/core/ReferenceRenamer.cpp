@@ -1087,6 +1087,105 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
     return true;
 }
 
+bool validatePreparedStrongReferences(const AnalysisResult &analysis,
+                                      const QHash<QString, QByteArray> &staged,
+                                      const QHash<QString, QString> &appliedRenames,
+                                      QString *error)
+{
+    if (appliedRenames.isEmpty())
+        return true;
+
+    QHash<QString, QVector<int>> relevantNodesByFile;
+    for (int nodeIndex = 0; nodeIndex < analysis.nodes.size(); ++nodeIndex) {
+        const DataNode &node = analysis.nodes.at(nodeIndex);
+        bool relevant = false;
+        for (const QString &reference : node.referencedIds) {
+            if (appliedRenames.contains(reference)) {
+                relevant = true;
+                break;
+            }
+        }
+        if (relevant)
+            relevantNodesByFile[node.sourceFile].append(nodeIndex);
+    }
+
+    QStringList residuals;
+    for (auto fileIt = relevantNodesByFile.cbegin(); fileIt != relevantNodesByFile.cend(); ++fileIt) {
+        QByteArray bytes;
+        if (staged.contains(fileIt.key())) {
+            bytes = staged.value(fileIt.key());
+        } else {
+            QString readError;
+            if (!readFile(fileIt.key(), &bytes, &readError)) {
+                residuals << readError;
+                continue;
+            }
+        }
+
+        pugi::xml_document document;
+        const pugi::xml_parse_result parsed = document.load_buffer(
+            bytes.constData(), size_t(bytes.size()), pugi::parse_default, pugi::encoding_utf8);
+        if (!parsed) {
+            residuals << QStringLiteral("Prepared XML cannot be parsed: %1: %2")
+                             .arg(fileIt.key(), QString::fromUtf8(parsed.description()));
+            continue;
+        }
+
+        QHash<QString, pugi::xml_node> nodesByPath;
+        std::function<void(pugi::xml_node)> indexNodes = [&](pugi::xml_node node) {
+            if (node.type() == pugi::node_element)
+                nodesByPath.insert(nodePath(node), node);
+            for (pugi::xml_node child = node.first_child(); child; child = child.next_sibling())
+                indexNodes(child);
+        };
+        indexNodes(document);
+
+        for (int nodeIndex : fileIt.value()) {
+            const DataNode &original = analysis.nodes.at(nodeIndex);
+            const pugi::xml_node preparedNode = nodesByPath.value(original.originalLocation);
+            if (!preparedNode) {
+                residuals << QStringLiteral("Prepared rename preview cannot locate %1 at %2.")
+                                 .arg(original.id, original.originalLocation);
+                continue;
+            }
+
+            std::ostringstream stream;
+            preparedNode.print(stream, "  ", pugi::format_raw, pugi::encoding_utf8);
+            DataNode prepared = original;
+            prepared.serializedXml = QString::fromStdString(stream.str());
+            prepared.attributes.clear();
+            for (const pugi::xml_attribute attribute : preparedNode.attributes())
+                prepared.attributes.insert(QString::fromUtf8(attribute.name()),
+                                           QString::fromUtf8(attribute.value()));
+            if (preparedNode.attribute("id"))
+                prepared.id = QString::fromUtf8(preparedNode.attribute("id").value());
+
+            const QSet<QString> preparedReferences = sc2dh::extractCatalogLinkReferences(prepared);
+            for (const QString &oldId : original.referencedIds) {
+                if (!appliedRenames.contains(oldId) || !preparedReferences.contains(oldId))
+                    continue;
+                if (isParentAttributeReferenceOnly(prepared, oldId))
+                    continue;
+                residuals << QStringLiteral("Strong reference to old ID %1 would remain in %2.")
+                                 .arg(oldId, prepared.id);
+            }
+        }
+    }
+
+    residuals.removeDuplicates();
+    if (residuals.isEmpty())
+        return true;
+    std::sort(residuals.begin(), residuals.end());
+    if (residuals.size() > 20)
+        residuals = residuals.mid(0, 20) << QStringLiteral("... %1 more pre-save rename error(s).")
+                                               .arg(residuals.size() - 20);
+    if (error) {
+        *error = QStringLiteral("Pre-save rename verification failed:\n- %1")
+                     .arg(residuals.join(QStringLiteral("\n- ")));
+    }
+    return false;
+}
+
 } // namespace
 
 RenamePreviewReport ReferenceRenamer::preview(const AnalysisResult &analysis, const RenamePlan &plan) const
@@ -1097,10 +1196,11 @@ RenamePreviewReport ReferenceRenamer::preview(const AnalysisResult &analysis, co
     result.warnings = plan.warnings;
     QHash<QString, QByteArray> staged;
     RewriteResult rewriteResult;
+    QHash<QString, QString> appliedRenames;
     QStringList prepareWarnings;
     QString error;
     if (plan.valid && !prepare(analysis, plan, &staged, &rewriteResult, &result.filesChanged,
-                               &prepareWarnings, &error, true, {})) {
+                               &prepareWarnings, &error, true, {}, &appliedRenames)) {
         const QString suffix = QFileInfo(analysis.rootFolder).suffix().toLower();
         const bool archive = suffix.startsWith(QStringLiteral("sc2"));
         if (!archive) {
@@ -1129,6 +1229,10 @@ RenamePreviewReport ReferenceRenamer::preview(const AnalysisResult &analysis, co
             result.warnings << QStringLiteral("Archive mode is preview-only; reference locations are estimated from extracted serialized XML.");
             error.clear();
         }
+    }
+    if (error.isEmpty() && !staged.isEmpty()
+        && !validatePreparedStrongReferences(analysis, staged, appliedRenames, &error)) {
+        result.conflicts << error;
     }
     result.warnings.append(prepareWarnings);
     result.identitiesRenamed = rewriteResult.identities;
@@ -1161,6 +1265,10 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
     QHash<QString, QString> appliedRenames;
     if (!prepare(analysis, plan, &staged, &rewriteResult, &absoluteFiles,
                  &warnings, &result.error, false, progress, &appliedRenames)) {
+        result.warnings = warnings;
+        return result;
+    }
+    if (!validatePreparedStrongReferences(analysis, staged, appliedRenames, &result.error)) {
         result.warnings = warnings;
         return result;
     }

@@ -180,7 +180,7 @@ void MainWindowUiBuilder::build()
     auto *discordButton = new QToolButton(toolbarContent);
     discordButton->setObjectName(QStringLiteral("discordPromoButton"));
     discordButton->setIcon(QIcon(QStringLiteral(":/textures/Discord.png")));
-    discordButton->setIconSize(QSize(30, 30));
+    discordButton->setIconSize(QSize(42, 42));
     discordButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
     discordButton->setToolTip(mainText("Join Discord"));
     discordButton->setCursor(Qt::PointingHandCursor);

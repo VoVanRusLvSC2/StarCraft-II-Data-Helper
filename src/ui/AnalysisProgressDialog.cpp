@@ -4,6 +4,7 @@
 #include <QFrame>
 #include <QGraphicsDropShadowEffect>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPixmap>
@@ -109,6 +110,8 @@ AnalysisProgressDialog::AnalysisProgressDialog(QWidget *parent)
     m_titleLabel = new QLabel(QStringLiteral("SC2 DATA ANALYSIS"), innerFrame);
     m_titleLabel->setObjectName(QStringLiteral("novaProgressTitle"));
     m_titleLabel->setAlignment(Qt::AlignCenter);
+    m_titleLabel->setCursor(Qt::SizeAllCursor);
+    m_titleLabel->installEventFilter(this);
     auto *titleGlow = new QGraphicsDropShadowEffect(m_titleLabel);
     titleGlow->setBlurRadius(18.0);
     titleGlow->setColor(QColor(255, 111, 42, 190));
@@ -182,4 +185,36 @@ void AnalysisProgressDialog::setProgress(int percent, const QString &primaryText
     m_secondaryLabel->setText(secondaryText);
     m_percentLabel->setText(QStringLiteral("%1%").arg(bounded));
     m_progressBar->setValue(bounded);
+}
+
+bool AnalysisProgressDialog::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_titleLabel && event)
+    {
+        if (event->type() == QEvent::MouseButtonPress)
+        {
+            const auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton)
+            {
+                m_dragOffset = mouseEvent->globalPosition().toPoint() - frameGeometry().topLeft();
+                m_dragging = true;
+                return true;
+            }
+        }
+        else if (event->type() == QEvent::MouseMove && m_dragging)
+        {
+            const auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->buttons() & Qt::LeftButton)
+            {
+                move(mouseEvent->globalPosition().toPoint() - m_dragOffset);
+                return true;
+            }
+        }
+        else if (event->type() == QEvent::MouseButtonRelease && m_dragging)
+        {
+            m_dragging = false;
+            return true;
+        }
+    }
+    return QDialog::eventFilter(watched, event);
 }

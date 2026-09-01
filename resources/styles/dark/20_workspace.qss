@@ -250,7 +250,7 @@ QScrollBar::handle:vertical:hover,
 QScrollBar::handle:vertical:pressed {
     background: transparent;
     border: 5px solid transparent;
-    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 14 7 14 7 repeat repeat;
+    border-image: url(:/textures/ui_nova_global_scrollbarbutton_over.png) 24 10 24 10 repeat repeat;
 }
 
 QScrollBar::handle:horizontal:hover,
