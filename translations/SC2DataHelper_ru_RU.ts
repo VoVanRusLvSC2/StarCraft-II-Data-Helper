@@ -285,4 +285,63 @@
         <translation>Изменения языка, режима рендеринга и курсора полностью применятся после перезапуска SC2 Data Helper.</translation>
     </message>
 </context>
+<context>
+    <name>DynamicUI</name>
+    <message>
+        <source>Map Performance — Region Decor Streaming</source>
+        <translation>Производительность карты — потоковая загрузка декора по регионам</translation>
+    </message>
+    <message>
+        <source>Choose a real map Region. Decor inside its exact shape can be removed from Objects in a copy and recreated by generated Galaxy actor functions.</source>
+        <translation>Выберите настоящий регион карты. Декор внутри его точной формы можно удалить из Objects в копии и воссоздавать сгенерированными функциями акторов Galaxy.</translation>
+    </message>
+    <message>
+        <source>The original map is never modified. Region geometry comes directly from the map's Regions component.</source>
+        <translation>Исходная карта никогда не изменяется. Геометрия регионов читается непосредственно из компонента Regions карты.</translation>
+    </message>
+    <message>
+        <source>Select one or more exact Regions on the map or in the list. The candidate count updates immediately; generation happens only when you press Preview.</source>
+        <translation>Выберите один или несколько точных регионов на карте или в списке. Число кандидатов обновляется сразу; генерация запускается только кнопкой предпросмотра.</translation>
+    </message>
+    <message>
+        <source>1. Choose real map Regions</source>
+        <translation>1. Выберите настоящие регионы карты</translation>
+    </message>
+    <message>
+        <source>MAP SELECTION ACTIVE — CLICK AN OUTLINED REGION ABOVE</source>
+        <translation>ВЫБОР НА КАРТЕ АКТИВЕН — НАЖМИТЕ НА КОНТУР РЕГИОНА ВЫШЕ</translation>
+    </message>
+    <message>
+        <source>No Regions component loaded.</source>
+        <translation>Компонент Regions не загружен.</translation>
+    </message>
+    <message>
+        <source>Select All</source>
+        <translation>Выбрать все</translation>
+    </message>
+    <message>
+        <source>Clear</source>
+        <translation>Очистить</translation>
+    </message>
+    <message>
+        <source>Galaxy function prefix</source>
+        <translation>Префикс функций Galaxy</translation>
+    </message>
+    <message>
+        <source>2. PREVIEW REMOVED DECOR + GALAXY</source>
+        <translation>2. ПРЕДПРОСМОТР УДАЛЯЕМОГО ДЕКОРА + GALAXY</translation>
+    </message>
+    <message>
+        <source>3. CREATE OPTIMIZED MAP COPY</source>
+        <translation>3. СОЗДАТЬ ОПТИМИЗИРОВАННУЮ КОПИЮ КАРТЫ</translation>
+    </message>
+    <message>
+        <source>MAXIMUM COMPATIBLE COMPRESSION</source>
+        <translation>СИЛЬНО СЖАТЬ КАРТУ (СОВМЕСТИМО С РЕДАКТОРОМ)</translation>
+    </message>
+    <message>
+        <source>Maximum Compatible Compression</source>
+        <translation>Максимальное совместимое сжатие</translation>
+    </message>
+</context>
 </TS>

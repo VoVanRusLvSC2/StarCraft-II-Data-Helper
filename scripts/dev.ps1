@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Configure", "Build", "Test", "Stage", "Run", "Beta2RealMapValidation")]
+    [ValidateSet("Configure", "Build", "Test", "Stage", "Run", "Beta2RealMapValidation", "LayoutSmoke")]
     [string] $Action = "Build",
     [ValidateSet("Debug", "Release")]
     [string] $Configuration = "Debug",
@@ -105,6 +105,16 @@ try {
             $validatorArgs += "--inventory-only"
         }
         Invoke-Checked $validator $validatorArgs
+        return
+    }
+
+    if ($Action -eq "LayoutSmoke") {
+        Invoke-Checked $cmake @("--build", "--preset", $buildPreset, "--target", "SC2DataHelper")
+        $qtRoot = Resolve-QtRoot
+        $env:Path = "$(Join-Path $qtRoot 'bin');$env:Path"
+        $application = Join-Path $buildDirectory "$Configuration\SC2DataHelper.exe"
+        $layoutOutput = Join-Path $DiagnosticOutputPath "layout-smoke"
+        Invoke-Checked $application @("--layout-smoke", $layoutOutput)
         return
     }
 

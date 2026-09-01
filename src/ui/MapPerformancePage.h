@@ -3,6 +3,7 @@
 #include "core/AnalysisModels.h"
 #include "core/DecorationStreamingPlanner.h"
 #include "core/MapPerformanceAnalyzer.h"
+#include "core/MapPreviewData.h"
 
 #include <QImage>
 #include <QWidget>
@@ -12,7 +13,6 @@ class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
 class QPushButton;
-class QSpinBox;
 class QStandardItemModel;
 class QTableView;
 
@@ -35,9 +35,18 @@ private:
     void selectCellIndex(int cellIndex);
     void updateDecorPreview();
     void createDecorOptimizedMapCopy();
+    void createMaximumCompressedCopy();
     bool readObjectsFile(QByteArray *objectsBytes, QString *sourceLabel) const;
     bool readRegionsFile(QByteArray *regionsBytes, QString *sourceLabel) const;
-    bool readMinimapImage(QImage *image, QString *sourceLabel) const;
+    static bool readMinimapImage(const AnalysisResult &result, QImage *image, QString *sourceLabel);
+    static bool readPreviewComponent(const AnalysisResult &result,
+                                     const QStringList &fileNames,
+                                     qint64 maxBytes,
+                                     QByteArray *bytes,
+                                     QString *sourceLabel);
+    static sc2dh::preview::MapPreviewData buildMapPreviewData(const AnalysisResult &result);
+    void startMapPreviewLoad();
+    void applyMapPreview(const sc2dh::preview::MapPreviewData &preview);
     QString sourceArchivePath() const;
     QString defaultDecorOutputPath() const;
     QVector<sc2dh::decor::DecorZone> zonesFromModel() const;
@@ -74,11 +83,12 @@ private:
     QPushButton *m_previewButton = nullptr;
     QListWidget *m_regionList = nullptr;
     QLineEdit *m_prefixEdit = nullptr;
-    QSpinBox *m_batchSpin = nullptr;
     QStandardItemModel *m_zoneModel = nullptr;
     QTableView *m_zoneTable = nullptr;
     QStandardItemModel *m_doodadModel = nullptr;
     QTableView *m_doodadTable = nullptr;
     QPlainTextEdit *m_galaxyPreview = nullptr;
     QPushButton *m_createCopyButton = nullptr;
+    QPushButton *m_compressButton = nullptr;
+    quint64 m_previewGeneration = 0;
 };

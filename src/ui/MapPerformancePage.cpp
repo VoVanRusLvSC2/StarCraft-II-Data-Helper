@@ -1,6 +1,8 @@
 #include "ui/MapPerformancePage.h"
 
+#include "core/ArchiveCompressionService.h"
 #include "core/DecorationMapCopyService.h"
+#include "core/MapPreviewData.h"
 #include "core/ScannedFileReader.h"
 
 #include <QAbstractItemView>
@@ -12,6 +14,7 @@
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QFrame>
+#include <QFutureWatcher>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -28,13 +31,18 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QSet>
 #include <QSignalBlocker>
-#include <QSpinBox>
 #include <QStandardItem>
 #include <QStandardItemModel>
 #include <QTableView>
+#include <QSplitter>
+#include <QStorageInfo>
 #include <QVBoxLayout>
+#include <QWheelEvent>
+
+#include <QtConcurrent>
 
 #include <algorithm>
 #include <functional>
@@ -44,6 +52,7 @@ namespace
 {
 
 constexpr qint64 MaxObjectsBytes = 64ll * 1024ll * 1024ll;
+constexpr int InternalActorBatchLimit = 64;
 
 enum DecorDoodadColumns {
     DecorDoodadExcludeColumn = 0,
@@ -180,7 +189,7 @@ public:
     explicit MapHeatmapWidget(QWidget *parent = nullptr)
         : QWidget(parent)
     {
-        setMinimumHeight(360);
+        setMinimumHeight(220);
         setMouseTracking(true);
         setAttribute(Qt::WA_OpaquePaintEvent, true);
     }
@@ -196,6 +205,13 @@ public:
     void setDecorZones(const QVector<sc2dh::decor::DecorZone> &zones)
     {
         m_zones = zones;
+        update();
+    }
+
+    void setDecorPlan(const sc2dh::decor::DecorationStreamingPlan &plan)
+    {
+        m_decorPlan = plan;
+        invalidateStaticLayer();
         update();
     }
 
@@ -221,10 +237,13 @@ public:
         update();
     }
 
-    void setBackgroundImage(const QImage &image, const QString &sourceLabel)
+    void setMapPreview(const sc2dh::preview::MapPreviewData &preview)
     {
-        m_backgroundImage = image;
-        m_backgroundSourceLabel = sourceLabel;
+        m_backgroundImage = preview.image;
+        m_backgroundSourceLabel = preview.sourceLabel;
+        m_worldBounds = preview.worldBounds;
+        m_exactWorldBounds = preview.exactWorldBounds;
+        m_previewUnavailableReason = preview.unavailableReason;
         invalidateStaticLayer();
         update();
     }
@@ -299,6 +318,13 @@ protected:
 
     void mousePressEvent(QMouseEvent *event) override
     {
+        if (event->button() == Qt::MiddleButton || event->button() == Qt::RightButton) {
+            m_panning = true;
+            m_lastPanPosition = event->position();
+            setCursor(Qt::ClosedHandCursor);
+            event->accept();
+            return;
+        }
         if (m_regionSelectionEnabled) {
             const int regionIndex = regionIndexAt(event->position());
             if (regionIndex >= 0) {
@@ -321,6 +347,18 @@ protected:
 
     void mouseMoveEvent(QMouseEvent *event) override
     {
+        if (m_panning) {
+            const QPointF delta = event->position() - m_lastPanPosition;
+            m_lastPanPosition = event->position();
+            const QRectF area = gridArea();
+            const auto base = baseDisplayBounds();
+            m_panX -= delta.x() / std::max(1.0, area.width()) * (base.xMax - base.xMin) / m_zoom;
+            m_panY += delta.y() / std::max(1.0, area.height()) * (base.yMax - base.yMin) / m_zoom;
+            invalidateStaticLayer();
+            update();
+            event->accept();
+            return;
+        }
         const int hovered = m_regionSelectionEnabled ? regionIndexAt(event->position()) : -1;
         if (hovered != m_hoveredRegion) {
             m_hoveredRegion = hovered;
@@ -334,6 +372,36 @@ protected:
             update();
         }
         QWidget::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (m_panning && (event->button() == Qt::MiddleButton || event->button() == Qt::RightButton)) {
+            m_panning = false;
+            setCursor(m_regionSelectionEnabled ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            event->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(event);
+    }
+
+    void wheelEvent(QWheelEvent *event) override
+    {
+        const double factor = event->angleDelta().y() > 0 ? 1.25 : 0.8;
+        m_zoom = std::clamp(m_zoom * factor, 1.0, 16.0);
+        invalidateStaticLayer();
+        update();
+        event->accept();
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        m_zoom = 1.0;
+        m_panX = 0.0;
+        m_panY = 0.0;
+        invalidateStaticLayer();
+        update();
+        event->accept();
     }
 
     void leaveEvent(QEvent *event) override
@@ -352,12 +420,32 @@ protected:
 private:
     QRectF gridArea() const
     {
-        return QRectF(12.0, 40.0, double(width() - 24), double(std::max(80, height() - 72)));
+        QRectF available(48.0, 40.0, double(std::max(80, width() - 64)),
+                         double(std::max(80, height() - 84)));
+        const auto bounds = displayBounds();
+        const double mapWidth = std::max(0.0001, bounds.xMax - bounds.xMin);
+        const double mapHeight = std::max(0.0001, bounds.yMax - bounds.yMin);
+        const double mapAspect = mapWidth / mapHeight;
+        const double availableAspect = available.width() / available.height();
+        if (availableAspect > mapAspect) {
+            const double fittedWidth = available.height() * mapAspect;
+            available.setLeft(available.center().x() - fittedWidth / 2.0);
+            available.setWidth(fittedWidth);
+        } else {
+            const double fittedHeight = available.width() / mapAspect;
+            available.setTop(available.center().y() - fittedHeight / 2.0);
+            available.setHeight(fittedHeight);
+        }
+        return available;
     }
 
-    sc2dh::region::RegionBounds displayBounds() const
+    sc2dh::region::RegionBounds baseDisplayBounds() const
     {
         sc2dh::region::RegionBounds bounds;
+        if (m_worldBounds.valid && m_worldBounds.xMin < m_worldBounds.xMax
+            && m_worldBounds.yMin < m_worldBounds.yMax) {
+            return m_worldBounds;
+        }
         const auto include = [&bounds](const sc2dh::region::RegionBounds &candidate) {
             if (!candidate.valid)
                 return;
@@ -378,6 +466,19 @@ private:
         if (!bounds.valid || bounds.xMin >= bounds.xMax || bounds.yMin >= bounds.yMax)
             return {0.0, 0.0, 1.0, 1.0, true};
         return bounds;
+    }
+
+    sc2dh::region::RegionBounds displayBounds() const
+    {
+        const auto base = baseDisplayBounds();
+        const double fullWidth = base.xMax - base.xMin;
+        const double fullHeight = base.yMax - base.yMin;
+        const double viewWidth = fullWidth / m_zoom;
+        const double viewHeight = fullHeight / m_zoom;
+        const double centerX = (base.xMin + base.xMax) / 2.0 + m_panX;
+        const double centerY = (base.yMin + base.yMax) / 2.0 + m_panY;
+        return {centerX - viewWidth / 2.0, centerY - viewHeight / 2.0,
+                centerX + viewWidth / 2.0, centerY + viewHeight / 2.0, true};
     }
 
     QPointF mapToWidget(double x, double y, const QRectF &area,
@@ -474,10 +575,10 @@ private:
         if (!m_staticLayer.isNull() && m_staticLayer.size() == size())
             return;
         m_staticLayer = QPixmap(size());
-        m_staticLayer.fill(QColor(QStringLiteral("#03080c")));
+        m_staticLayer.fill(QColor(QStringLiteral("#1a2227")));
         QPainter painter(&m_staticLayer);
         painter.setRenderHint(QPainter::TextAntialiasing, true);
-        painter.fillRect(rect(), QColor(3, 8, 12));
+        painter.fillRect(rect(), QColor(26, 34, 39));
         if (!m_gridTexture.isNull()) {
             painter.setOpacity(0.18);
             painter.drawTiledPixmap(rect(), m_gridTexture);
@@ -496,19 +597,55 @@ private:
         }
         painter.setOpacity(1.0);
         painter.setPen(QColor(QStringLiteral("#d9f7ee")));
+        const QString alignment = m_exactWorldBounds
+            ? QStringLiteral("EXACT TERRAIN WORLD BOUNDS")
+            : QStringLiteral("APPROXIMATE_BACKGROUND_ALIGNMENT");
         painter.drawText(QRect(12, 8, width() - 24, 24), Qt::AlignLeft | Qt::AlignVCenter,
-                         QStringLiteral("MAP REGIONS — exact geometry selection"));
+                         QStringLiteral("MAP CANVAS — %1 — %2").arg(alignment, m_backgroundSourceLabel));
 
         const QRectF area = gridArea();
+        const auto bounds = displayBounds();
+        const auto baseBounds = baseDisplayBounds();
         if (!m_backgroundImage.isNull()) {
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            painter.drawImage(area, m_backgroundImage);
-            painter.fillRect(area, QColor(3, 9, 14, 118));
+            const double baseWidth = std::max(0.0001, baseBounds.xMax - baseBounds.xMin);
+            const double baseHeight = std::max(0.0001, baseBounds.yMax - baseBounds.yMin);
+            QRectF sourceRect(
+                (bounds.xMin - baseBounds.xMin) / baseWidth * m_backgroundImage.width(),
+                (baseBounds.yMax - bounds.yMax) / baseHeight * m_backgroundImage.height(),
+                (bounds.xMax - bounds.xMin) / baseWidth * m_backgroundImage.width(),
+                (bounds.yMax - bounds.yMin) / baseHeight * m_backgroundImage.height());
+            sourceRect = sourceRect.intersected(m_backgroundImage.rect());
+            painter.drawImage(area, m_backgroundImage, sourceRect);
+            painter.fillRect(area, QColor(3, 9, 14, 48));
         } else {
-            painter.fillRect(area, QColor(4, 16, 20, 178));
+            painter.fillRect(area, QColor(38, 46, 51));
+            painter.setPen(QColor(QStringLiteral("#ffd3a1")));
+            painter.drawText(area.adjusted(18, 18, -18, -18), Qt::AlignCenter | Qt::TextWordWrap,
+                             QStringLiteral("MAP PREVIEW UNAVAILABLE: %1")
+                                 .arg(m_previewUnavailableReason.isEmpty()
+                                          ? QStringLiteral("no decodable Minimap.tga or t3HeightMap")
+                                          : m_previewUnavailableReason));
         }
         painter.setPen(QPen(QColor(74, 220, 195, 76), 1));
         painter.drawRect(area);
+
+        painter.setPen(QPen(QColor(230, 246, 242, 90), 1, Qt::DotLine));
+        for (int tick = 0; tick <= 8; ++tick) {
+            const double fraction = double(tick) / 8.0;
+            const double x = bounds.xMin + fraction * (bounds.xMax - bounds.xMin);
+            const double y = bounds.yMin + fraction * (bounds.yMax - bounds.yMin);
+            const QPointF xPoint = mapToWidget(x, bounds.yMin, area, bounds);
+            const QPointF yPoint = mapToWidget(bounds.xMin, y, area, bounds);
+            painter.drawLine(QPointF(xPoint.x(), area.top()), QPointF(xPoint.x(), area.bottom()));
+            painter.drawLine(QPointF(area.left(), yPoint.y()), QPointF(area.right(), yPoint.y()));
+            painter.setPen(QColor(QStringLiteral("#b8cac6")));
+            painter.drawText(QRectF(xPoint.x() - 28, area.bottom() + 3, 56, 18), Qt::AlignHCenter,
+                             QString::number(x, 'f', 0));
+            painter.drawText(QRectF(2, yPoint.y() - 9, 42, 18), Qt::AlignRight,
+                             QString::number(y, 'f', 0));
+            painter.setPen(QPen(QColor(230, 246, 242, 90), 1, Qt::DotLine));
+        }
 
         if (m_report.cells.isEmpty() || m_report.columns <= 0 || m_report.rows <= 0) {
             painter.setPen(QColor(QStringLiteral("#91a3b7")));
@@ -517,7 +654,6 @@ private:
             return;
         }
 
-        const auto bounds = displayBounds();
         for (const auto &cell : m_report.cells) {
             const QRectF cellRect = QRectF(mapToWidget(cell.xMin, cell.yMin, area, bounds),
                                            mapToWidget(cell.xMax, cell.yMax, area, bounds)).normalized();
@@ -540,6 +676,26 @@ private:
             painter.setBrush(color);
             painter.drawEllipse(position, 2.2, 2.2);
         }
+        const auto drawDoodad = [&](int doodadIndex, const QColor &color, double radius) {
+            if (doodadIndex < 0 || doodadIndex >= m_decorPlan.doodads.size())
+                return;
+            const auto &doodad = m_decorPlan.doodads.at(doodadIndex);
+            if (!doodad.hasPosition)
+                return;
+            painter.setPen(QPen(QColor(0, 0, 0, 150), 1));
+            painter.setBrush(color);
+            painter.drawEllipse(mapToWidget(doodad.x, doodad.y, area, bounds), radius, radius);
+        };
+        for (const auto &assignment : m_decorPlan.zones)
+            for (int index : assignment.doodadIndices)
+                drawDoodad(index, QColor(QStringLiteral("#35e6ff")), 3.6);
+        for (int index : m_decorPlan.staticOnlyDoodads)
+            drawDoodad(index, QColor(QStringLiteral("#ff6f61")), 3.3);
+        for (int index : m_decorPlan.unassignedDoodads)
+            drawDoodad(index, QColor(QStringLiteral("#a5adb8")), 2.8);
+        painter.setPen(QColor(QStringLiteral("#e8f4f1")));
+        painter.drawText(QRectF(area.left(), area.top() - 22, area.width(), 18), Qt::AlignRight,
+                         QStringLiteral("candidate ● cyan   static/blocked ● red   outside ● gray   wheel zoom   drag pan   double-click fit"));
     }
 
     int cellIndexAt(const QPointF &point) const
@@ -560,11 +716,15 @@ private:
     }
 
     sc2dh::perf::MapPerformanceReport m_report;
+    sc2dh::decor::DecorationStreamingPlan m_decorPlan;
     QVector<sc2dh::decor::DecorZone> m_zones;
     QVector<sc2dh::region::MapRegion> m_regions;
     QSet<int> m_selectedRegions;
     QImage m_backgroundImage;
     QString m_backgroundSourceLabel;
+    sc2dh::region::RegionBounds m_worldBounds;
+    bool m_exactWorldBounds = false;
+    QString m_previewUnavailableReason;
     QPixmap m_staticLayer;
     QPixmap m_gridTexture{QStringLiteral(":/textures/ui_nova_storymode_bggrid_shimmer_sideways.png")};
     QPixmap m_pointTexture{QStringLiteral(":/textures/ui_nova_storymode_bgpointgrid_25.png")};
@@ -573,6 +733,11 @@ private:
     int m_selectedCell = -1;
     int m_hoveredRegion = -1;
     bool m_regionSelectionEnabled = true;
+    bool m_panning = false;
+    QPointF m_lastPanPosition;
+    double m_zoom = 1.0;
+    double m_panX = 0.0;
+    double m_panY = 0.0;
 };
 
 class RegionListWidget final : public QListWidget
@@ -682,7 +847,7 @@ QString decorationPreviewText(const sc2dh::decor::DecorationOptimizedArtifacts &
     QString text;
     text += QStringLiteral("DECORATION STREAMING PREVIEW / 3.0 BETA\n");
     text += QStringLiteral("Function prefix: %1\n").arg(options.functionPrefix);
-    text += QStringLiteral("Batch per game tick: %1\n\n").arg(options.batchLimit);
+    text += QStringLiteral("Actor creation is yielded automatically for responsive gameplay.\n\n");
     text += QStringLiteral("How to use in Galaxy:\n");
     text += QStringLiteral("  - Create/load zone: %1_Create_1(); or DecorOpt_CreateZone(1);\n").arg(options.functionPrefix);
     text += QStringLiteral("  - Clear created actors from zone: %1_Clear_1(); or DecorOpt_ClearZone(1);\n").arg(options.functionPrefix);
@@ -809,7 +974,11 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     headerLayout->addWidget(m_warningLabel);
     layout->addWidget(header);
 
-    m_heatmap = new MapHeatmapWidget(this);
+    auto *contentSplitter = new QSplitter(Qt::Vertical, this);
+    contentSplitter->setObjectName(QStringLiteral("mapPerformanceContentSplitter"));
+    contentSplitter->setChildrenCollapsible(false);
+
+    m_heatmap = new MapHeatmapWidget(contentSplitter);
     m_heatmap->setObjectName(QStringLiteral("mapPerformanceHeatmap"));
     static_cast<MapHeatmapWidget *>(m_heatmap)->cellClicked = [this](int cellIndex) {
         selectCellIndex(cellIndex);
@@ -817,9 +986,9 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     static_cast<MapHeatmapWidget *>(m_heatmap)->regionClicked = [this](int regionIndex) {
         toggleRegionFromMap(regionIndex);
     };
-    layout->addWidget(m_heatmap, 1);
+    contentSplitter->addWidget(m_heatmap);
 
-    auto *decorGroup = new QGroupBox(QStringLiteral("Decoration Streaming / Оптимизация декорациями"), this);
+    auto *decorGroup = new QGroupBox(QStringLiteral("Decoration Streaming / Оптимизация декорациями"), contentSplitter);
     decorGroup->setObjectName(QStringLiteral("mapDecorStreamingGroup"));
     auto *decorLayout = new QVBoxLayout(decorGroup);
     decorLayout->setContentsMargins(10, 10, 10, 10);
@@ -861,26 +1030,28 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     auto *decorControls = new QHBoxLayout();
     m_prefixEdit = new QLineEdit(QStringLiteral("NAME_OUT_FUNK"), decorGroup);
     m_prefixEdit->setMinimumWidth(150);
-    m_batchSpin = new QSpinBox(decorGroup);
-    m_batchSpin->setRange(1, 4096);
-    m_batchSpin->setValue(64);
-
     auto *form = new QFormLayout();
     form->setContentsMargins(0, 0, 0, 0);
     form->setSpacing(6);
     form->addRow(tr("Galaxy function prefix"), m_prefixEdit);
-    form->addRow(tr("Actors created per game tick"), m_batchSpin);
     decorControls->addLayout(form, 1);
 
     auto *buttonLayout = new QVBoxLayout();
     m_previewButton = new QPushButton(tr("2. PREVIEW REMOVED DECOR + GALAXY"), decorGroup);
     m_createCopyButton = new QPushButton(tr("3. CREATE OPTIMIZED MAP COPY"), decorGroup);
+    m_compressButton = new QPushButton(tr("MAXIMUM COMPATIBLE COMPRESSION"), decorGroup);
+    m_previewButton->setObjectName(QStringLiteral("decorPreviewButton"));
+    m_createCopyButton->setObjectName(QStringLiteral("decorCreateCopyButton"));
+    m_compressButton->setObjectName(QStringLiteral("maximumCompatibleCompressionButton"));
     m_previewButton->setMinimumHeight(44);
     m_createCopyButton->setMinimumHeight(44);
+    m_compressButton->setMinimumHeight(44);
     m_previewButton->setToolTip(tr("Calculate the exact decor removed from Objects and show the generated Galaxy functions."));
     m_createCopyButton->setToolTip(tr("Create a new map archive. The original stays unchanged; selected safe visual doodads are removed only from the copy."));
+    m_compressButton->setToolTip(tr("Create a separate archive using verified MPQ compaction only. Assets and logical entry bytes are not removed or changed."));
     buttonLayout->addWidget(m_previewButton);
     buttonLayout->addWidget(m_createCopyButton);
+    buttonLayout->addWidget(m_compressButton);
     buttonLayout->addStretch(1);
     decorControls->addLayout(buttonLayout);
     decorLayout->addLayout(decorControls);
@@ -944,6 +1115,7 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
 
     connect(m_previewButton, &QPushButton::clicked, this, &MapPerformancePage::updateDecorPreview);
     connect(m_createCopyButton, &QPushButton::clicked, this, &MapPerformancePage::createDecorOptimizedMapCopy);
+    connect(m_compressButton, &QPushButton::clicked, this, &MapPerformancePage::createMaximumCompressedCopy);
     connect(m_doodadModel, &QStandardItemModel::itemChanged, this, &MapPerformancePage::updateDecorPreview);
     connect(m_regionList, &QListWidget::itemChanged, this, &MapPerformancePage::updateOptimizationScope);
     connect(m_chooseRegionsButton, &QPushButton::toggled, this, [this](bool enabled) {
@@ -972,10 +1144,20 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
         m_galaxyPreview->setPlainText(tr("Generation settings changed. Press Preview to rebuild the exact removal list and Galaxy code."));
     };
     connect(m_prefixEdit, &QLineEdit::textChanged, this, invalidatePreview);
-    connect(m_batchSpin, &QSpinBox::valueChanged, this, invalidatePreview);
     updateOptimizationScope();
 
-    layout->addWidget(decorGroup, 2);
+    auto *decorScroll = new QScrollArea(contentSplitter);
+    decorScroll->setObjectName(QStringLiteral("mapPerformanceControlsScroll"));
+    decorScroll->setWidgetResizable(true);
+    decorScroll->setFrameShape(QFrame::NoFrame);
+    decorScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    decorScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    decorScroll->setWidget(decorGroup);
+    contentSplitter->addWidget(decorScroll);
+    contentSplitter->setStretchFactor(0, 3);
+    contentSplitter->setStretchFactor(1, 2);
+    contentSplitter->setSizes({420, 360});
+    layout->addWidget(contentSplitter, 1);
 
     m_model = new QStandardItemModel(this);
     m_model->setHorizontalHeaderLabels({
@@ -1026,6 +1208,7 @@ void MapPerformancePage::setAnalysisResult(const AnalysisResult &result)
 
 void MapPerformancePage::rebuild()
 {
+    ++m_previewGeneration;
     QByteArray regionsBytes;
     QString regionsSource;
     if (readRegionsFile(&regionsBytes, &regionsSource))
@@ -1037,13 +1220,12 @@ void MapPerformancePage::rebuild()
     }
     populateRegionSelector();
 
-    if (readMinimapImage(&m_minimapImage, &m_minimapSourceLabel)) {
-        static_cast<MapHeatmapWidget *>(m_heatmap)->setBackgroundImage(m_minimapImage, m_minimapSourceLabel);
-    } else {
-        m_minimapImage = {};
-        m_minimapSourceLabel.clear();
-        static_cast<MapHeatmapWidget *>(m_heatmap)->setBackgroundImage({}, {});
-    }
+    m_minimapImage = {};
+    m_minimapSourceLabel.clear();
+    sc2dh::preview::MapPreviewData loadingPreview;
+    loadingPreview.unavailableReason = tr("Map preview is loading in a worker thread...");
+    static_cast<MapHeatmapWidget *>(m_heatmap)->setMapPreview(loadingPreview);
+    m_compressButton->setEnabled(!sourceArchivePath().isEmpty());
 
     QByteArray objectsBytes;
     QString sourceLabel;
@@ -1075,6 +1257,7 @@ void MapPerformancePage::rebuild()
             "4. Create an optimized copy; the source map stays unchanged.\n"));
         m_createCopyButton->setEnabled(false);
         m_details->clear();
+        startMapPreviewLoad();
         return;
     }
     m_hasObjects = true;
@@ -1095,15 +1278,11 @@ void MapPerformancePage::rebuild()
                                 .arg(m_minimapImage.isNull()
                                          ? QString()
                                          : tr(" | Minimap: %1").arg(m_minimapSourceLabel)));
-    QString warning = tr("Region outlines use the map's exact circle, polygon, rectangle or composite geometry. The source archive is read-only.");
-    if (m_minimapImage.isNull())
-        warning += tr(" Minimap.tga was unavailable; using the Graph-style coordinate background.");
-    if (!m_report.warnings.isEmpty())
-        warning += QStringLiteral(" Warnings: %1").arg(m_report.warnings.join(QStringLiteral(" | ")));
-    m_warningLabel->setText(warning);
+    m_warningLabel->setText(tr("Region geometry is loaded. Map preview decoding is running outside the UI thread; the source archive is read-only."));
     sc2dh::decor::DecorationStreamingPlanner decorPlanner;
     m_allDoodads = decorPlanner.parseObjects(m_objectsBytes);
     updateOptimizationScope();
+    startMapPreviewLoad();
 }
 
 bool MapPerformancePage::readObjectsFile(QByteArray *objectsBytes, QString *sourceLabel) const
@@ -1144,7 +1323,9 @@ bool MapPerformancePage::readRegionsFile(QByteArray *regionsBytes, QString *sour
     return false;
 }
 
-bool MapPerformancePage::readMinimapImage(QImage *image, QString *sourceLabel) const
+bool MapPerformancePage::readMinimapImage(const AnalysisResult &result,
+                                          QImage *image,
+                                          QString *sourceLabel)
 {
     if (!image)
         return false;
@@ -1152,9 +1333,9 @@ bool MapPerformancePage::readMinimapImage(QImage *image, QString *sourceLabel) c
     if (sourceLabel)
         sourceLabel->clear();
 
-    ScannedFileReader reader(m_result);
-    for (const ScannedFileInfo &file : m_result.scannedFiles) {
-        const QString relative = ScannedFileReader::relativePath(m_result.rootFolder, file.filePath);
+    ScannedFileReader reader(result);
+    for (const ScannedFileInfo &file : result.scannedFiles) {
+        const QString relative = ScannedFileReader::relativePath(result.rootFolder, file.filePath);
         if (QFileInfo(relative).fileName().compare(QStringLiteral("Minimap.tga"), Qt::CaseInsensitive) != 0)
             continue;
 
@@ -1174,6 +1355,138 @@ bool MapPerformancePage::readMinimapImage(QImage *image, QString *sourceLabel) c
         return true;
     }
     return false;
+}
+
+bool MapPerformancePage::readPreviewComponent(const AnalysisResult &result,
+                                               const QStringList &fileNames,
+                                               qint64 maxBytes,
+                                               QByteArray *bytes,
+                                               QString *sourceLabel)
+{
+    if (!bytes)
+        return false;
+    bytes->clear();
+    if (sourceLabel)
+        sourceLabel->clear();
+    ScannedFileReader reader(result);
+    for (const ScannedFileInfo &file : result.scannedFiles) {
+        const QString relative = ScannedFileReader::relativePath(result.rootFolder, file.filePath);
+        const QString baseName = QFileInfo(relative).fileName();
+        const bool matches = std::any_of(fileNames.cbegin(), fileNames.cend(), [&](const QString &name) {
+            return baseName.compare(name, Qt::CaseInsensitive) == 0
+                || relative.trimmed().replace('\\', '/').compare(name, Qt::CaseInsensitive) == 0;
+        });
+        if (!matches)
+            continue;
+        QByteArray loaded;
+        if (!reader.readBytes(file, maxBytes, &loaded))
+            continue;
+        *bytes = loaded;
+        if (sourceLabel)
+            *sourceLabel = relative;
+        return true;
+    }
+    return false;
+}
+
+sc2dh::preview::MapPreviewData MapPerformancePage::buildMapPreviewData(const AnalysisResult &result)
+{
+    sc2dh::preview::MapPreviewData preview;
+    sc2dh::preview::MapPreviewDataReader reader;
+
+    QByteArray terrainXml;
+    QString terrainXmlSource;
+    sc2dh::preview::TerrainDescriptor terrain;
+    if (readPreviewComponent(result, {QStringLiteral("t3Terrain.xml"), QStringLiteral("t3Terrain")},
+                             8ll * 1024ll * 1024ll, &terrainXml, &terrainXmlSource)) {
+        terrain = reader.parseTerrainXml(terrainXml);
+        preview.warnings += terrain.errors;
+        if (terrain.complete) {
+            preview.worldBounds = terrain.worldBounds;
+            preview.exactWorldBounds = true;
+        }
+    }
+
+    if (!preview.worldBounds.valid) {
+        QByteArray mapInfo;
+        QString mapInfoSource;
+        if (readPreviewComponent(result, {QStringLiteral("MapInfo")}, 16ll * 1024ll * 1024ll,
+                                 &mapInfo, &mapInfoSource)) {
+            preview.worldBounds = reader.parseMapInfoDimensions(mapInfo, &preview.warnings);
+            if (preview.worldBounds.valid)
+                preview.warnings << QStringLiteral("APPROXIMATE_BACKGROUND_ALIGNMENT: MapInfo dimensions provide aspect only; terrain origin was unavailable.");
+        }
+    }
+
+    QImage minimap;
+    QString minimapSource;
+    if (readMinimapImage(result, &minimap, &minimapSource)) {
+        preview.image = minimap;
+        preview.sourceLabel = minimapSource;
+        preview.terrainBacked = false;
+        if (!preview.exactWorldBounds)
+            preview.warnings << QStringLiteral("APPROXIMATE_BACKGROUND_ALIGNMENT: minimap is fitted to fallback map bounds.");
+        return preview;
+    }
+
+    QByteArray heightMap;
+    QString heightMapSource;
+    if (terrain.complete
+        && readPreviewComponent(result, {QStringLiteral("t3HeightMap")}, 256ll * 1024ll * 1024ll,
+                                &heightMap, &heightMapSource)) {
+        preview.image = reader.renderHeightMap(heightMap, terrain, &preview.warnings);
+        if (!preview.image.isNull()) {
+            preview.sourceLabel = QStringLiteral("%1 + %2").arg(terrainXmlSource, heightMapSource);
+            preview.terrainBacked = true;
+            preview.exactWorldBounds = true;
+            return preview;
+        }
+    }
+
+    preview.unavailableReason = preview.warnings.isEmpty()
+        ? QStringLiteral("Minimap.tga is absent and the terrain descriptor/heightmap pair is unavailable.")
+        : preview.warnings.join(QStringLiteral(" | "));
+    return preview;
+}
+
+void MapPerformancePage::startMapPreviewLoad()
+{
+    const AnalysisResult snapshot = m_result;
+    const quint64 generation = m_previewGeneration;
+    auto *watcher = new QFutureWatcher<sc2dh::preview::MapPreviewData>(this);
+    connect(watcher, &QFutureWatcher<sc2dh::preview::MapPreviewData>::finished, this,
+            [this, watcher, generation] {
+        const sc2dh::preview::MapPreviewData preview = watcher->result();
+        watcher->deleteLater();
+        if (generation != m_previewGeneration)
+            return;
+        applyMapPreview(preview);
+    });
+    watcher->setFuture(QtConcurrent::run([snapshot] {
+        return MapPerformancePage::buildMapPreviewData(snapshot);
+    }));
+}
+
+void MapPerformancePage::applyMapPreview(const sc2dh::preview::MapPreviewData &preview)
+{
+    m_minimapImage = preview.image;
+    m_minimapSourceLabel = preview.sourceLabel;
+    static_cast<MapHeatmapWidget *>(m_heatmap)->setMapPreview(preview);
+
+    QString warning = tr("Region outlines use the map's exact circle, polygon, rectangle or composite geometry. The source archive is read-only.");
+    if (preview.image.isNull())
+        warning += tr(" MAP PREVIEW UNAVAILABLE: %1").arg(preview.unavailableReason);
+    else if (preview.terrainBacked)
+        warning += tr(" Terrain-backed preview: %1.").arg(preview.sourceLabel);
+    else
+        warning += tr(" Map preview: %1.").arg(preview.sourceLabel);
+    if (!preview.exactWorldBounds)
+        warning += tr(" APPROXIMATE_BACKGROUND_ALIGNMENT; spatial classification still uses world coordinates.");
+    if (!preview.warnings.isEmpty())
+        warning += QStringLiteral(" Preview warnings: %1").arg(preview.warnings.join(QStringLiteral(" | ")));
+    if (!m_report.warnings.isEmpty())
+        warning += QStringLiteral(" Warnings: %1").arg(m_report.warnings.join(QStringLiteral(" | ")));
+    m_warningLabel->setText(warning);
 }
 
 void MapPerformancePage::populateTable()
@@ -1517,6 +1830,7 @@ void MapPerformancePage::updateDecorPreview()
 {
     if (!m_hasObjects) {
         m_decorPreview = {};
+        static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorPlan({});
         m_decorSummaryLabel->setText(QStringLiteral("No readable Objects entry: open a map archive or extracted map folder with Objects first."));
         m_galaxyPreview->setPlainText(QStringLiteral(
             "NO OBJECTS ENTRY LOADED\n\n"
@@ -1530,6 +1844,7 @@ void MapPerformancePage::updateDecorPreview()
     static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorZones(m_decorZones);
     if (m_decorZones.isEmpty()) {
         m_decorPreview = {};
+        static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorPlan({});
         m_decorSummaryLabel->setText(tr("No real map Region selected. Click an exact outlined Region on the map or click its row in the list."));
         m_galaxyPreview->setPlainText(QStringLiteral(
             "SELECT A MAP REGION FIRST\n\n"
@@ -1547,13 +1862,14 @@ void MapPerformancePage::updateDecorPreview()
     options.functionPrefix = m_prefixEdit->text().trimmed().isEmpty()
         ? QStringLiteral("NAME_OUT_FUNK")
         : m_prefixEdit->text().trimmed();
-    options.batchLimit = m_batchSpin->value();
+    options.batchLimit = InternalActorBatchLimit;
 
     const sc2dh::decor::DecorationSafetyContext safetyContext = decorationSafetyContextFromDoodadTable();
     m_decorPreview = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(m_objectsBytes,
                                                                                          m_decorZones,
                                                                                          safetyContext,
                                                                                          options);
+    static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorPlan(m_decorPreview.plan);
     const sc2dh::decor::DecorationStreamingPlan &plan = m_decorPreview.plan;
     populateDoodadTable(plan.doodads);
     updateDoodadTableState(plan);
@@ -1561,13 +1877,12 @@ void MapPerformancePage::updateDecorPreview()
     for (const sc2dh::decor::ZoneAssignment &assignment : plan.zones)
         dynamicAssigned += assignment.doodadIndices.size();
 
-    QString summary = QStringLiteral("%1 doodad(s), %2 will be deleted from Objects in the optimized copy and recreated by Galaxy, %3 static-only, %4 unassigned. Prefix/function example: %5_1(). Batch: %6.")
+    QString summary = QStringLiteral("%1 doodad(s), %2 will be deleted from Objects in the optimized copy and recreated by Galaxy, %3 static-only, %4 unassigned. Prefix/function example: %5_1(). Runtime yielding is automatic.")
                           .arg(plan.doodads.size())
                           .arg(dynamicAssigned)
                           .arg(plan.staticOnlyDoodads.size())
                           .arg(plan.unassignedDoodads.size())
-                          .arg(options.functionPrefix)
-                          .arg(options.batchLimit);
+                          .arg(options.functionPrefix);
     if (!m_decorPreview.warnings.isEmpty())
         summary += QStringLiteral(" Warnings: %1").arg(m_decorPreview.warnings.join(QStringLiteral(" | ")));
     if (m_decorZones.isEmpty())
@@ -1646,48 +1961,144 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
     request.galaxyOptions.functionPrefix = m_prefixEdit->text().trimmed().isEmpty()
         ? QStringLiteral("NAME_OUT_FUNK")
         : m_prefixEdit->text().trimmed();
-    request.galaxyOptions.batchLimit = m_batchSpin->value();
+    request.galaxyOptions.batchLimit = InternalActorBatchLimit;
     request.safetyContext = decorationSafetyContextFromDoodadTable();
     request.overwriteExisting = overwrite;
 
-    const sc2dh::decor::DecorOptimizedMapResult result =
-        sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
-    if (!result.success) {
-        m_decorSummaryLabel->setText(QStringLiteral("Create copy failed: %1").arg(result.error));
-        m_galaxyPreview->appendPlainText(QStringLiteral("\n\nSAVE ERROR\nOriginal source changed: no\nReason: %1")
-                                             .arg(result.error));
+    m_createCopyButton->setEnabled(false);
+    m_previewButton->setEnabled(false);
+    m_compressButton->setEnabled(false);
+    m_decorSummaryLabel->setText(tr("Creating and freshly verifying the optimized copy in a worker thread…"));
+    auto *watcher = new QFutureWatcher<sc2dh::decor::DecorOptimizedMapResult>(this);
+    connect(watcher, &QFutureWatcher<sc2dh::decor::DecorOptimizedMapResult>::finished, this,
+            [this, watcher, selectedOutput] {
+        const sc2dh::decor::DecorOptimizedMapResult result = watcher->result();
+        watcher->deleteLater();
+        m_previewButton->setEnabled(true);
+        m_compressButton->setEnabled(!sourceArchivePath().isEmpty());
+        m_createCopyButton->setEnabled(!m_decorZones.isEmpty());
+        if (!result.success) {
+            m_decorSummaryLabel->setText(QStringLiteral("Create copy failed: %1").arg(result.error));
+            m_galaxyPreview->appendPlainText(QStringLiteral("\n\nSAVE ERROR\nSource unchanged: %1\nReason: %2")
+                                                 .arg(result.sourceUnchanged ? QStringLiteral("yes") : QStringLiteral("not proven"),
+                                                      result.error));
+            OperationResult operation;
+            operation.outcome = OperationOutcome::Failed;
+            operation.errorCode = OperationErrorCode::SaveFailed;
+            operation.title = tr("Create decor-optimized map copy");
+            operation.summary = tr("No unverified output was committed. Source integrity is reported separately.");
+            operation.outputPath = selectedOutput;
+            operation.originalChanged = !result.sourceUnchanged;
+            operation.error = result.error;
+            operation.details = result.warnings;
+            emit operationFinished(operation);
+            return;
+        }
+
+        QString message = QStringLiteral("Created structural-verified copy:\n%1\n\nRemoved dynamic visual doodads: %2\nFull re-analysis: %3 file(s), %4 data node(s).\nOriginal SHA-256 unchanged: %5")
+                              .arg(QDir::toNativeSeparators(result.outputArchivePath))
+                              .arg(result.removedDoodads)
+                              .arg(result.verifiedScannedFiles)
+                              .arg(result.verifiedDataNodes)
+                              .arg(result.sourceUnchanged ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
+        if (!result.warnings.isEmpty())
+            message += QStringLiteral("\n\nWarnings:\n%1").arg(result.warnings.join(QStringLiteral("\n")));
+        m_decorSummaryLabel->setText(message);
         OperationResult operation;
-        operation.outcome = OperationOutcome::Failed;
-        operation.errorCode = OperationErrorCode::SaveFailed;
+        operation.outcome = OperationOutcome::Succeeded;
         operation.title = tr("Create decor-optimized map copy");
-        operation.summary = tr("No output was committed. The original map was not changed.");
-        operation.outputPath = selectedOutput;
+        operation.selected = m_decorPreview.plan.doodads.size();
+        operation.applied = result.removedDoodads;
+        operation.skipped = m_decorPreview.plan.unassignedDoodads.size();
+        operation.blocked = m_decorPreview.plan.staticOnlyDoodads.size();
+        operation.outputPath = result.outputArchivePath;
         operation.originalChanged = false;
-        operation.error = result.error;
         operation.details = result.warnings;
         emit operationFinished(operation);
+    });
+    watcher->setFuture(QtConcurrent::run([request] {
+        return sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
+    }));
+}
+
+void MapPerformancePage::createMaximumCompressedCopy()
+{
+    const QString source = sourceArchivePath();
+    if (source.isEmpty()) {
+        QMessageBox::warning(this, tr("Maximum Compatible Compression"),
+                             tr("Open a packed .SC2Map or .SC2Mod first."));
+        return;
+    }
+    const QFileInfo info(source);
+    const QString suffix = info.suffix().isEmpty() ? QStringLiteral("SC2Map") : info.suffix();
+    const QString suggested = QDir(info.absolutePath()).absoluteFilePath(
+        info.completeBaseName() + QStringLiteral("_MaximumCompressed.") + suffix);
+    const QString output = QFileDialog::getSaveFileName(
+        this, tr("Maximum Compatible Compression"), suggested,
+        tr("SC2 archives (*.SC2Map *.SC2Mod *.SC2Campaign);;All files (*)"));
+    if (output.isEmpty())
+        return;
+    if (QFileInfo::exists(output)) {
+        QMessageBox::warning(this, tr("Maximum Compatible Compression"),
+                             tr("The output already exists. Choose a new, separately named file; compression never overwrites it."));
         return;
     }
 
-    QString message = QStringLiteral("Created structural-verified copy:\n%1\n\nRemoved dynamic visual doodads: %2\nFull re-analysis: %3 file(s), %4 data node(s).")
-                          .arg(QDir::toNativeSeparators(result.outputArchivePath))
-                          .arg(result.removedDoodads)
-                          .arg(result.verifiedScannedFiles)
-                          .arg(result.verifiedDataNodes);
-    if (!result.warnings.isEmpty())
-        message += QStringLiteral("\n\nWarnings:\n%1").arg(result.warnings.join(QStringLiteral("\n")));
-    m_decorSummaryLabel->setText(message);
-    OperationResult operation;
-    operation.outcome = OperationOutcome::Succeeded;
-    operation.title = tr("Create decor-optimized map copy");
-    operation.selected = m_decorPreview.plan.doodads.size();
-    operation.applied = result.removedDoodads;
-    operation.skipped = m_decorPreview.plan.unassignedDoodads.size();
-    operation.blocked = m_decorPreview.plan.staticOnlyDoodads.size();
-    operation.outputPath = result.outputArchivePath;
-    operation.originalChanged = false;
-    operation.details = result.warnings;
-    emit operationFinished(operation);
+    const QStorageInfo storage(QFileInfo(output).absolutePath());
+    const QString preflight = tr(
+        "Source: %1\nOutput: %2\nSource bytes: %3\nAvailable bytes: %4\n\n"
+        "Logical operation: archive compaction only. No textures, sounds, models, strings, previews, metadata, or other assets are removed. "
+        "Every logical entry will be compared before the output is committed. Editor acceptance remains NOT RUN until the real Editor check.")
+        .arg(QDir::toNativeSeparators(source), QDir::toNativeSeparators(output))
+        .arg(info.size())
+        .arg(storage.bytesAvailable());
+    if (QMessageBox::information(this, tr("Maximum Compatible Compression — preflight"), preflight,
+                                 QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Ok) {
+        return;
+    }
+
+    sc2dh::compression::ArchiveCompressionRequest request;
+    request.sourceArchivePath = source;
+    request.outputArchivePath = output;
+    m_compressButton->setEnabled(false);
+    m_createCopyButton->setEnabled(false);
+    m_previewButton->setEnabled(false);
+    m_decorSummaryLabel->setText(tr("Compacting and comparing every logical archive entry in a worker thread…"));
+    auto *watcher = new QFutureWatcher<sc2dh::compression::ArchiveCompressionResult>(this);
+    connect(watcher, &QFutureWatcher<sc2dh::compression::ArchiveCompressionResult>::finished, this,
+            [this, watcher] {
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        m_compressButton->setEnabled(!sourceArchivePath().isEmpty());
+        m_previewButton->setEnabled(true);
+        m_createCopyButton->setEnabled(!m_decorZones.isEmpty());
+        const QString summary = tr(
+            "Compression result: %1\nOriginal unchanged: %2\nSource bytes: %3\nOutput bytes: %4\nBytes saved: %5 (%6%)\n"
+            "Structural verification: %7\nLogical-entry equality: %8\nEditor acceptance: %9%10")
+            .arg(result.status, result.sourceUnchanged ? tr("yes") : tr("no"))
+            .arg(result.sourceBytes)
+            .arg(result.outputBytes)
+            .arg(result.savedBytes)
+            .arg(result.savedPercent, 0, 'f', 2)
+            .arg(result.structuralVerification ? QStringLiteral("PASS") : QStringLiteral("FAIL"),
+                 result.logicalEntryEquality ? QStringLiteral("PASS") : QStringLiteral("FAIL"),
+                 result.editorAcceptance,
+                 result.error.isEmpty() ? QString() : QStringLiteral("\n") + result.error);
+        m_decorSummaryLabel->setText(summary);
+        OperationResult operation;
+        operation.outcome = result.success ? OperationOutcome::Succeeded : OperationOutcome::Failed;
+        operation.errorCode = result.success ? OperationErrorCode::None : OperationErrorCode::SaveFailed;
+        operation.title = tr("Maximum Compatible Compression");
+        operation.summary = summary;
+        operation.outputPath = result.outputArchivePath;
+        operation.originalChanged = !result.sourceUnchanged;
+        operation.error = result.error;
+        operation.details = result.warnings;
+        emit operationFinished(operation);
+    });
+    watcher->setFuture(QtConcurrent::run([request] {
+        return sc2dh::compression::ArchiveCompressionService().compressCompatibleCopy(request);
+    }));
 }
 
 QString MapPerformancePage::detailTextForCell(const sc2dh::perf::MapPerformanceCell &cell) const
