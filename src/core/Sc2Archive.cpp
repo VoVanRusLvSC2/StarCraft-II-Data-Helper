@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QProcess>
 #include <QSaveFile>
 #include <QStandardPaths>
@@ -32,6 +33,124 @@
 
 namespace
 {
+
+#ifdef SC2DH_USE_STORMLIB
+    bool mpqNumberOfFiles(const QString &path, DWORD *count)
+    {
+        HANDLE archive = nullptr;
+        if (!SFileOpenArchive(reinterpret_cast<const TCHAR *>(path.utf16()), 0, 0, &archive))
+            return false;
+        DWORD value = 0;
+        const bool ok = SFileGetFileInfo(archive, SFileMpqNumberOfFiles,
+                                         &value, sizeof(value), nullptr);
+        SFileCloseArchive(archive);
+        if (ok && count)
+            *count = value;
+        return ok;
+    }
+
+    QStringList fullyNamedArchiveEntries(const Sc2Archive &archive)
+    {
+        QStringList names = archive.allEntries();
+        for (const QString &special : {QStringLiteral("(listfile)"),
+                                       QStringLiteral("(attributes)"),
+                                       QStringLiteral("(signature)")}) {
+            QByteArray bytes;
+            QString ignored;
+            if (archive.readEntry(special, &bytes, &ignored))
+                names.append(special);
+        }
+        QStringList unique;
+        for (const QString &name : names) {
+            if (!unique.contains(name, Qt::CaseInsensitive))
+                unique.append(name);
+        }
+        std::sort(unique.begin(), unique.end(), [](const QString &left, const QString &right) {
+            return QString::compare(left, right, Qt::CaseInsensitive) < 0;
+        });
+        return unique;
+    }
+
+    bool archiveEntryDigests(const Sc2Archive &archive,
+                             const QStringList &entries,
+                             QHash<QString, QByteArray> *digests)
+    {
+        if (!digests)
+            return false;
+        digests->clear();
+        for (const QString &entry : entries) {
+            QByteArray bytes;
+            QString error;
+            if (!archive.readEntry(entry, &bytes, &error))
+                return false;
+            digests->insert(entry, QCryptographicHash::hash(bytes, QCryptographicHash::Sha256));
+        }
+        return true;
+    }
+
+    bool tryVerifiedArchiveCompaction(const QString &workingPath)
+    {
+        Sc2Archive before;
+        QString error;
+        if (!before.load(workingPath, &error))
+            return false;
+        const QStringList entries = fullyNamedArchiveEntries(before);
+        DWORD beforeCount = 0;
+        if (!mpqNumberOfFiles(workingPath, &beforeCount)
+            || beforeCount != DWORD(entries.size())) {
+            return false;
+        }
+
+        QHash<QString, QByteArray> beforeDigests;
+        if (!archiveEntryDigests(before, entries, &beforeDigests))
+            return false;
+
+        const QString candidatePath = workingPath + QStringLiteral(".compact");
+        const QString fallbackPath = workingPath + QStringLiteral(".fallback");
+        QFile::remove(candidatePath);
+        QFile::remove(fallbackPath);
+        if (!QFile::copy(workingPath, candidatePath))
+            return false;
+
+        HANDLE candidate = nullptr;
+        if (!SFileOpenArchive(reinterpret_cast<const TCHAR *>(candidatePath.utf16()), 0, 0, &candidate)) {
+            QFile::remove(candidatePath);
+            return false;
+        }
+        const bool compacted = SFileCompactArchive(candidate, nullptr, false);
+        const bool closed = SFileCloseArchive(candidate);
+        if (!compacted || !closed) {
+            QFile::remove(candidatePath);
+            return false;
+        }
+
+        DWORD afterCount = 0;
+        Sc2Archive after;
+        QHash<QString, QByteArray> afterDigests;
+        if (!mpqNumberOfFiles(candidatePath, &afterCount)
+            || afterCount != beforeCount
+            || !after.load(candidatePath, &error)
+            || fullyNamedArchiveEntries(after).size() != entries.size()
+            || !archiveEntryDigests(after, entries, &afterDigests)
+            || afterDigests != beforeDigests
+            || QFileInfo(candidatePath).size() >= QFileInfo(workingPath).size()) {
+            QFile::remove(candidatePath);
+            return false;
+        }
+
+        if (!QFile::rename(workingPath, fallbackPath)) {
+            QFile::remove(candidatePath);
+            return false;
+        }
+        if (!QFile::rename(candidatePath, workingPath)) {
+            QFile::rename(fallbackPath, workingPath);
+            QFile::remove(candidatePath);
+            return false;
+        }
+        QFile::remove(fallbackPath);
+        return true;
+    }
+#endif
 
     bool isGameDataXml(const QString &entryName)
     {
@@ -536,7 +655,7 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         const QByteArray archiveName = QDir::cleanPath(it.key()).replace('/', '\\').toUtf8();
         const DWORD flags = MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS | MPQ_FILE_SINGLE_UNIT;
         if (!SFileAddFileEx(archive, reinterpret_cast<const TCHAR *>(sourcePath.utf16()), archiveName.constData(),
-                            flags, MPQ_COMPRESSION_ZLIB, MPQ_COMPRESSION_NEXT_SAME)) {
+                            flags, MPQ_COMPRESSION_BZIP2, MPQ_COMPRESSION_NEXT_SAME)) {
             writeOk = false;
             writeError = QStringLiteral("StormLib could not write %1 (error %2).").arg(it.key()).arg(GetLastError());
         }
@@ -553,11 +672,6 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         writeOk = false;
         writeError = QStringLiteral("StormLib could not flush the rewritten archive (error %1).").arg(GetLastError());
     }
-    // Do not call SFileCompactArchive here. Legacy SC2 maps can contain
-    // mandatory or hashed entries which StormLib cannot safely carry through
-    // compaction. The replacement payloads are already ZLIB-compressed;
-    // preserving every source block is more important than reclaiming a few
-    // stale sectors in a user asset.
     if (!SFileCloseArchive(archive) && writeOk) {
         writeOk = false;
         writeError = QStringLiteral("StormLib could not close the rewritten archive (error %1).").arg(GetLastError());
@@ -567,6 +681,13 @@ bool Sc2Archive::saveCopy(const QString &targetPath,
         if (errorMessage) *errorMessage = writeError;
         return false;
     }
+
+    // Reclaim stale MPQ sectors only when every physical file is addressable
+    // by name (including MPQ special files), then prove that compaction kept
+    // the file count and SHA-256 of every decompressed payload unchanged.
+    // Any uncertainty or non-improving result silently keeps the ordinary
+    // ZLIB-compressed working copy.
+    tryVerifiedArchiveCompaction(tempPath);
 
     Sc2Archive verification;
     QString verifyError;

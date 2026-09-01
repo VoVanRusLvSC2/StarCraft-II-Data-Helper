@@ -876,15 +876,26 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("    return DecorOpt_Loaded[zoneId];\n");
     out += QStringLiteral("}\n\n");
 
+    out += QStringLiteral("actor DecorOpt_CreateActor(string actorType, fixed x, fixed y, fixed z, fixed scaleX, fixed scaleY, fixed scaleZ) {\n");
+    out += QStringLiteral("    point p;\n");
+    out += QStringLiteral("    actor a;\n");
+    out += QStringLiteral("    p = Point(x, y);\n");
+    out += QStringLiteral("    libNtve_gf_CreateActorAtPoint(actorType, p);\n");
+    out += QStringLiteral("    a = libNtve_gf_ActorLastCreated();\n");
+    out += QStringLiteral("    ActorSend(a, libNtve_gf_SetPosition(x, y, z));\n");
+    out += QStringLiteral("    ActorSend(a, libNtve_gf_SetScale(scaleX, scaleY, scaleZ, 0.0));\n");
+    out += QStringLiteral("    return a;\n");
+    out += QStringLiteral("}\n\n");
+
+    out += QStringLiteral("void DecorOpt_StoreActor(int zoneId, actor a) {\n");
+    out += QStringLiteral("    DecorOpt_Actors[zoneId][DecorOpt_ActorCount[zoneId]] = a;\n");
+    out += QStringLiteral("    DecorOpt_ActorCount[zoneId] += 1;\n");
+    out += QStringLiteral("}\n\n");
+
     const auto appendActorCreation = [&](QString *source, int zoneId, const DoodadPlacement &doodad) {
-        *source += QStringLiteral("    p = Point(%1, %2);\n").arg(fixed(doodad.x), fixed(doodad.y));
-        *source += QStringLiteral("    libNtve_gf_CreateActorAtPoint(%1, p);\n")
-                       .arg(galaxyString(doodad.type));
-        *source += QStringLiteral("    a = libNtve_gf_ActorLastCreated();\n");
-        *source += QStringLiteral("    ActorSend(a, libNtve_gf_SetPosition(%1, %2, %3));\n")
-                       .arg(fixed(doodad.x), fixed(doodad.y), fixed(doodad.z));
-        *source += QStringLiteral("    ActorSend(a, libNtve_gf_SetScale(%1, %2, %3, 0.0));\n")
-                       .arg(fixed(doodad.scaleX), fixed(doodad.scaleY), fixed(doodad.scaleZ));
+        *source += QStringLiteral("    a = DecorOpt_CreateActor(%1, %2, %3, %4, %5, %6, %7);\n")
+                       .arg(galaxyString(doodad.type), fixed(doodad.x), fixed(doodad.y), fixed(doodad.z),
+                            fixed(doodad.scaleX), fixed(doodad.scaleY), fixed(doodad.scaleZ));
         if (doodad.rotation != 0.0 || doodad.pitch != 0.0 || doodad.roll != 0.0) {
             const OrientationVectors orientation = orientationFromEuler(doodad);
             *source += QStringLiteral("    ActorSend(a, libNtve_gf_SetRotation(%1, %2, %3, %4, %5, %6));\n")
@@ -899,8 +910,7 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
                                .arg(fixed(tint.red), fixed(tint.green), fixed(tint.blue), fixed(tint.hdr));
             }
         }
-        *source += QStringLiteral("    DecorOpt_Actors[%1][DecorOpt_ActorCount[%1]] = a;\n").arg(zoneId);
-        *source += QStringLiteral("    DecorOpt_ActorCount[%1] += 1;\n").arg(zoneId);
+        *source += QStringLiteral("    DecorOpt_StoreActor(%1, a);\n").arg(zoneId);
     };
 
     for (const ZoneAssignment &zone : plan.zones) {
@@ -909,7 +919,6 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
             out += QStringLiteral("void DecorOpt_CreateZone_%1_Batch_%2() {\n")
                        .arg(zone.zoneId)
                        .arg(batchIndex + 1);
-            out += QStringLiteral("    point p;\n");
             out += QStringLiteral("    actor a;\n");
             const int first = batchIndex * batchLimit;
             const int last = std::min(first + batchLimit, int(zone.doodadIndices.size()));

@@ -3997,8 +3997,10 @@ void CoreTests::decorationXmlRoundTripAndRegionScopeIsolation()
     QVERIFY(artifacts.optimizedObjectsBytes.contains(outsideRaw));
     QVERIFY(artifacts.optimizedObjectsBytes.contains("Id=\"300\""));
     QCOMPARE(artifacts.plan.boundaryDoodads, QVector<int>{2});
-    QVERIFY(artifacts.galaxySource.contains(QStringLiteral("libNtve_gf_SetPosition(10.0, 10.0, 8.0)")));
-    QVERIFY(artifacts.galaxySource.contains(QStringLiteral("libNtve_gf_SetScale(1.0, 2.0, 3.0, 0.0)")));
+    QVERIFY(artifacts.galaxySource.contains(QStringLiteral(
+        "DecorOpt_CreateActor(\"TreeVisual\", 10.0, 10.0, 8.0, 1.0, 2.0, 3.0)")));
+    QVERIFY(artifacts.galaxySource.contains(QStringLiteral("libNtve_gf_SetPosition(x, y, z)")));
+    QVERIFY(artifacts.galaxySource.contains(QStringLiteral("libNtve_gf_SetScale(scaleX, scaleY, scaleZ, 0.0)")));
     QVERIFY(artifacts.galaxySource.contains(QStringLiteral("libNtve_gf_SetRotation(")));
     QVERIFY(artifacts.galaxySource.contains(QStringLiteral("libNtve_gf_SetTintColor(Color(100.0, 50.196078, 0.0), 1.5, 0.0)")));
     QVERIFY(!artifacts.galaxySource.contains(QStringLiteral("SetVisibility")));
@@ -4040,10 +4042,12 @@ void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
     QVERIFY(galaxy.contains(QStringLiteral("void NAME_OUT_FUNK_1()")));
     QVERIFY(galaxy.contains(QStringLiteral("void NAME_OUT_FUNK_2()")));
     QVERIFY(galaxy.contains(QStringLiteral("if (DecorOpt_Loaded[1]) { return; }")));
-    QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_CreateActorAtPoint(\"CrateDoodad\"")));
-    QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_SetScale(1.25, 1.25, 1.25, 0.0)")));
+    QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_CreateActorAtPoint(actorType, p)")));
+    QVERIFY(galaxy.contains(QStringLiteral(
+        "DecorOpt_CreateActor(\"CrateDoodad\", 10.0, 20.0, 0.0, 1.25, 1.25, 1.25)")));
     QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_SetRotation(0.0, 1.0, 0.0, 0.0, 0.0, 1.0)")));
-    QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_SetPosition(20.0, 25.0, 2.0)")));
+    QVERIFY(galaxy.contains(QStringLiteral(
+        "DecorOpt_CreateActor(\"RaisedVisual\", 20.0, 25.0, 2.0")));
     QVERIFY(galaxy.contains(QStringLiteral("void NAME_OUT_FUNK_Create_1()")));
     QVERIFY(galaxy.contains(QStringLiteral("void NAME_OUT_FUNK_Clear_1()")));
     QVERIFY(galaxy.contains(QStringLiteral("void NAME_OUT_FUNK_CreateAll()")));

@@ -1,6 +1,7 @@
 #include "app/SourceSelectionController.h"
 
 #include "app/MainWindow.h"
+#include "app/MainWindowAnalysisController.h"
 #include "app/Sc2FileDialogs.h"
 
 #include "ui/OverviewPage.h"
@@ -79,7 +80,7 @@ void SourceSelectionController::openSc2File()
     m_window.m_analysisPage->setModeLabel(QStringLiteral("Mode: starting automatic analysis"));
     m_window.m_analysisPage->setOutputText(QStringLiteral("File selected. Automatic analysis is starting..."));
     m_window.logLine(QStringLiteral("File selected; starting automatic analysis: %1").arg(selected));
-    m_window.loadPathAndAnalyze(selected);
+    MainWindowAnalysisController(m_window).startPathAnalysis(selected);
 }
 
 void SourceSelectionController::openSourceFolder()
@@ -104,6 +105,6 @@ void SourceSelectionController::openSourceFolder()
     m_window.m_analysisPage->setModeLabel(QStringLiteral("Mode: starting automatic analysis"));
     m_window.m_analysisPage->setOutputText(QStringLiteral("Folder selected. Automatic analysis is starting..."));
     m_window.logLine(QStringLiteral("Folder selected; starting automatic analysis: %1").arg(selected));
-    m_window.loadPathAndAnalyze(selected);
+    MainWindowAnalysisController(m_window).startPathAnalysis(selected);
 }
 }
