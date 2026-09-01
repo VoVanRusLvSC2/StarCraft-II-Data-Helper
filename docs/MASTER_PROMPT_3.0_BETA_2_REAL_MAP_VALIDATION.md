@@ -144,6 +144,8 @@ Beta2RealMapValidation
 
 Runner должен уметь продолжить очередь после одной повреждённой или неподдержанной карты. Один failure не должен уничтожать результаты остальных.
 
+Если карта или мод требует dependency/library, которой нет среди локально доступных SC2 dependencies, пользовательских модов или установленных game data, присвоить документу статус `SKIPPED_MISSING_DEPENDENCY`, перечислить точные отсутствующие dependency ID/name/path и продолжить очередь. Не скачивать неизвестную библиотеку автоматически, не подменять её похожей, не создавать fake/stub dependency и не считать неполный анализ доказательством безопасной оптимизации. Для такого документа разрешены только read-only inventory и diagnostics; archive write, decor removal, compression claim и Editor PASS запрещены до появления зависимости.
+
 ---
 
 # 3. МАТРИЦА РЕАЛЬНОЙ ПРОВЕРКИ
@@ -156,6 +158,7 @@ Runner должен уметь продолжить очередь после о
 - inventory всех entries;
 - Objects/Regions/MapScript/GameData detection;
 - dependency inventory;
+- dependency resolution result: `RESOLVED` или `SKIPPED_MISSING_DEPENDENCY` с точным списком отсутствующего;
 - parse completeness;
 - SHA-256 source;
 - source size;
@@ -243,6 +246,8 @@ StarCraft II Editor является внешним oracle совместимо�
 - минимум 1 `.SC2Mod`, если Editor позволяет корректно открыть этот тип.
 
 Если один файл одновременно покрывает несколько категорий, это разрешено, но итоговая выборка не меньше 8 разных документов плюс обязательная миссия.
+
+Карты со статусом `SKIPPED_MISSING_DEPENDENCY` не ставить в Editor queue и не учитывать как Editor failure приложения: заменить их следующими подходящими документами representative matrix. Если отсутствующая dependency нужна обязательной миссии, зафиксировать `SKIPPED_MISSING_DEPENDENCY`; остальные карты продолжить, но обязательный mission gate остаётся невыполненным и не может быть объявлен PASS.
 
 На каждый Editor run:
 
@@ -610,6 +615,7 @@ Beta 2 candidate можно собрать только если:
 ## Real maps
 
 - весь corpus получил baseline + dry-run report;
+- карты с отсутствующими dependency получили `SKIPPED_MISSING_DEPENDENCY` и точный список недостающих библиотек, а очередь продолжилась;
 - каждая подходящая карта получила реальный optimized-copy attempt;
 - outputs прошли fresh re-analysis либо получили конкретный FAIL/BLOCKED;
 - обязательная миссия получила decor Region optimized copy;
