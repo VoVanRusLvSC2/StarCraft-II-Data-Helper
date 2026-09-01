@@ -1,0 +1,636 @@
+# MASTER PROMPT — StarCraft-II-Data-Helper 3.0 Beta 2
+## Real-map validation, compatible maximum compression and trustworthy map preview
+
+Ты продолжаешь работу над существующим C++ / Qt 6 проектом:
+
+```text
+E:\SK2\Data helper KSP
+```
+
+Это продолжение разработки **StarCraft-II-Data-Helper**, а не новый проект и не переписывание с нуля.
+
+Исходная точка этой фазы — как минимум commit:
+
+```text
+76124d7 feat: select exact map regions for decor streaming
+```
+
+Название целевого проверочного релиза:
+
+```text
+StarCraft-II-Data-Helper 3.0 Beta 2
+```
+
+Главная цель фазы: перестать доказывать корректность только synthetic-тестами. Нужно реально брать разные пользовательские `.SC2Map` / `.SC2Mod`, создавать отдельно названные оптимизированные копии, проверять сохранность, размер, повторное открытие, Galaxy/Objects и принятие результата настоящим StarCraft II Editor.
+
+Пользователь проведёт окончательное игровое тестирование сам. До него нельзя называть сборку Stable/Final и нельзя скрывать непроверенные ограничения.
+
+---
+
+# 0. ПРАВИЛА, КОТОРЫЕ НЕЛЬЗЯ НАРУШАТЬ
+
+1. Все исходные `.SC2Map`, `.SC2Mod`, `.SC2Campaign`, `.SC2Components` считать пользовательскими активами только для чтения.
+2. Никогда не перезаписывать source-карту.
+3. Каждая реально оптимизированная карта создаётся только как отдельная явно названная копия.
+4. Временные файлы, распакованные архивы, отчёты и проверочные карты хранить только под:
+
+   ```text
+   target/diag/beta2-real-maps/
+   ```
+
+5. Не добавлять карты, MPQ payload, извлечённые Blizzard assets и generated diagnostics в Git.
+6. Перед каждой записью вычислить и сохранить SHA-256 оригинала. После операции доказать, что hash оригинала не изменился.
+7. Любой incomplete analysis, parse error, неизвестный archive flag, неподдерживаемый объект, неизвестная ссылка или failed verification переводит destructive change в `BLOCKED`, а не в `Safe`.
+8. XML verifier не доказывает, что карту принимает Galaxy Editor. Эти два результата всегда показывать отдельно.
+9. Не публиковать GitHub release и не делать push в `public` remote без отдельного явного указания пользователя после ручного теста.
+10. Не удалять старые возможности приложения ради упрощения этой фазы.
+11. UI widgets изменять только из UI thread. Анализ, декодирование, построение preview, archive rewrite и verification выполнять в worker threads с cancellation.
+12. Не делать per-map hacks по имени файла, пути, конкретному ID или заранее известному хешу.
+
+---
+
+# 1. ОБЯЗАТЕЛЬНЫЕ РЕАЛЬНЫЕ ИСТОЧНИКИ
+
+## 1.1 Корпус разных карт и модов
+
+Рекурсивно обнаружить реальные тестовые документы в:
+
+```text
+C:\Users\Vladimir\Downloads\TriggerRivezerTests
+```
+
+На момент подготовки промпта там было 22 `.SC2Map` / `.SC2Mod`, включая:
+
+- небольшие архивы около 0.5–6 МБ;
+- средние архивы;
+- большие архивы 100–175 МБ;
+- имена с пробелами;
+- кириллические имена;
+- карты с локальными mod dependencies;
+- отдельные `.SC2Mod`.
+
+Нельзя кодировать этот список вручную. Test runner обязан заново сканировать папку, формировать manifest и фиксировать точный набор, размеры и SHA-256 на момент запуска.
+
+## 1.2 Главная пользовательская миссия
+
+Обязательная oracle-карта:
+
+```text
+C:\Program Files (x86)\StarCraft II\Maps\Кампания_Империя_KSP_Миссия_1_OPRIMIzATION.SC2Map
+```
+
+Важно: не использовать ошибочный вариант, где `Кампания`, `_Империя`, `_KSP` и `_Миссия` интерпретируются как вложенные каталоги. Это единое имя файла в корне `Maps`.
+
+Перед работой всё равно выполнить `Test-Path`/эквивалент и записать фактически найденный canonical path. Если файл отсутствует — не подменять его похожей картой молча; отметить `MISSING_TEST_ASSET` и продолжить остальные тесты.
+
+---
+
+# 2. СНАЧАЛА СОЗДАЙ REAL-MAP TEST HARNESS
+
+Нужен воспроизводимый диагностический runner, который:
+
+1. строит manifest всех входных карт;
+2. для каждой карты создаёт собственную output-папку по безопасному slug + short hash;
+3. никогда не пишет рядом с original;
+4. запускает baseline analysis;
+5. сохраняет машинно-читаемый JSON report;
+6. выполняет выбранную реальную оптимизацию на копии;
+7. повторно анализирует output с нуля;
+8. сравнивает structural/semantic invariants;
+9. измеряет исходный и итоговый размер;
+10. запускает Editor acceptance queue для обязательной выборки;
+11. сохраняет итоговый aggregate report.
+
+Добавь воспроизводимую команду проекта, например через существующую build system/diagnostic CLI, но сначала изучи реальные `CMakeLists.txt`, scripts и существующие tools. Не придумывай параллельную build system.
+
+Пример логической команды, точный синтаксис определить по проекту:
+
+```text
+Beta2RealMapValidation
+  --corpus "C:\Users\Vladimir\Downloads\TriggerRivezerTests"
+  --required-map "C:\Program Files (x86)\StarCraft II\Maps\Кампания_Империя_KSP_Миссия_1_OPRIMIzATION.SC2Map"
+  --output "target/diag/beta2-real-maps"
+```
+
+Runner должен уметь продолжить очередь после одной повреждённой или неподдержанной карты. Один failure не должен уничтожать результаты остальных.
+
+---
+
+# 3. МАТРИЦА РЕАЛЬНОЙ ПРОВЕРКИ
+
+Для каждого найденного документа выполнить минимум:
+
+## A. Read-only baseline
+
+- archive open;
+- inventory всех entries;
+- Objects/Regions/MapScript/GameData detection;
+- dependency inventory;
+- parse completeness;
+- SHA-256 source;
+- source size;
+- analysis duration;
+- peak memory, если доступно без нестабильных hacks;
+- список warnings/errors.
+
+## B. Настоящий dry-run
+
+- построить фактический optimization plan;
+- показать selected/applied/skipped/blocked;
+- доказать, почему каждый destructive candidate разрешён или заблокирован;
+- не считать отсутствие parser support доказательством unused/safe.
+
+## C. Настоящая оптимизированная копия
+
+Если анализ Complete и есть доказанно безопасные операции:
+
+- создать отдельный output archive;
+- реально применить операции;
+- не ограничиваться mocked или in-memory success;
+- сохранить before/after hashes entries;
+- проверить, что source hash не изменился.
+
+Если безопасных операций нет, это корректный результат `NO_SAFE_GAIN`, а не повод удалять что-либо агрессивнее.
+
+## D. Повторное открытие и re-analysis
+
+- output archive открывается тем же archive backend;
+- все обязательные entries читаются;
+- XML/Objects/Regions/Galaxy повторно парсятся;
+- reference graph перестраивается с нуля;
+- запрещены stale cached results;
+- нет новых missing strong references;
+- нет новых parse errors;
+- нет потери неизвестных полей;
+- для decor streaming проходит round-trip и outside-scope preservation.
+
+## E. Сравнение результата
+
+Для каждой карты report должен содержать:
+
+```text
+source_path
+source_sha256
+output_path
+output_sha256
+source_bytes
+output_bytes
+saved_bytes
+saved_percent
+analysis_complete_before
+analysis_complete_after
+parse_errors_before
+parse_errors_after
+strong_missing_refs_before
+strong_missing_refs_after
+entries_added
+entries_removed
+entries_rewritten
+objects_removed
+galaxy_functions_added
+source_unchanged
+structural_verification
+semantic_verification
+editor_acceptance
+runtime_acceptance
+warnings
+limitations
+```
+
+---
+
+# 4. EDITOR ORACLE — ЭТО ОБЯЗАТЕЛЬНО
+
+StarCraft II Editor является внешним oracle совместимости.
+
+Для главной миссии Editor acceptance обязателен. Для корпуса выбрать воспроизводимую representative matrix:
+
+- минимум 2 небольших карты;
+- минимум 2 средних;
+- минимум 2 больших;
+- минимум 2 с кириллическими/сложными именами;
+- минимум 1 карта с локальной mod dependency;
+- минимум 1 `.SC2Mod`, если Editor позволяет корректно открыть этот тип.
+
+Если один файл одновременно покрывает несколько категорий, это разрешено, но итоговая выборка не меньше 8 разных документов плюс обязательная миссия.
+
+На каждый Editor run:
+
+1. открывать только копию под `target/diag/beta2-real-maps/editor-oracle`;
+2. не сохранять поверх source;
+3. дать не более 200 секунд до interactive/editor-ready состояния;
+4. проверить alerts, document load errors, dependency errors, trigger/Galaxy validation и placement errors;
+5. если лимит превышен — `SKIPPED_EDITOR_TIMEOUT`, зафиксировать evidence и перейти к следующей карте;
+6. после timeout разрешено закрыть/restart Editor только после проверки, что несохранённый документ является диагностической копией;
+7. не трактовать timeout как PASS;
+8. не трактовать зелёный внутренний XML verifier как Editor PASS.
+
+Для главной миссии дополнительно подготовить понятный manual checklist пользователю:
+
+- карта открывается;
+- триггеры компилируются;
+- миссия запускается;
+- основной этаж выглядит как раньше;
+- нижняя часть карты выглядит как раньше до вызова generated functions;
+- выбранные Region functions создают decor actors;
+- clear/restore не создаёт дубликаты;
+- повторный create idempotent;
+- игровые units/destructibles/trigger-referenced doodads не потеряны.
+
+---
+
+# 5. MAP PERFORMANCE — РЕАЛЬНАЯ REGION DECOR OPTIMIZATION
+
+Сохрани текущую концепцию:
+
+```text
+выбрать настоящий Region карты
+→ посчитать ObjectDoodad внутри точной geometry
+→ показать Preview
+→ удалить только доказанно безопасный decor из Objects в КОПИИ
+→ сгенерировать Galaxy actor create/clear/restore API
+```
+
+Требования:
+
+1. Только реальные Regions из компонента `Regions`.
+2. Не возвращать `Entire Map`, `Custom Area` и auto-grid в основной Beta 2 flow.
+3. На карте рисовать точные circle/rectangle/polygon/composite shapes, не только bounding rectangles.
+4. Координаты Region overlay должны соответствовать реальным map bounds/aspect ratio. Нельзя масштабировать только по min/max найденных doodads, если это сдвигает Region относительно карты.
+5. Если точные map bounds не удалось доказанно прочитать из MapInfo/terrain metadata, явно показать `APPROXIMATE_BACKGROUND_ALIGNMENT`, а destructive spatial classification всё равно выполнять в world coordinates, не по пикселям UI.
+6. Клик по карте и клик по всей строке Region должны быть эквивалентны.
+7. При наложении Regions выбор должен быть детерминированным, а UI должен позволять переключить другой Region из списка.
+8. До Preview показывать быстрый candidate count.
+9. Preview обязан перечислить:
+   - Region и точную geometry;
+   - каждый удаляемый Objects entry;
+   - каждый static/blocked doodad и причину;
+   - generated Galaxy functions;
+   - estimated Objects bytes saved;
+   - итоговый archive-size estimate с пометкой, что это оценка.
+10. Архив создаётся только после успешного preflight. Пользователь не должен ждать несколько минут, чтобы в конце узнать о заранее обнаружимой сильной ссылке или invalid rename.
+11. После archive write выполнить fresh re-analysis и отдельный Editor oracle.
+
+---
+
+# 6. КАЧЕСТВЕННЫЙ MAP VIEWER / PREVIEW
+
+Пользователь предположительно имел в виду внешний SC2 mod/map toolkit или viewer от авторов/проектов, название которых звучит как `Tavk` / `Vise`. Это имя **не подтверждено**.
+
+Запрещено:
+
+- угадывать repository по похожему названию;
+- копировать непроверенный код;
+- добавлять dependency без license audit;
+- выдавать M3 model viewer за полноценный SC2 map viewer;
+- встраивать Blizzard assets в repository/release;
+- делать сеть обязательной для локального просмотра карты.
+
+Сначала выполнить discovery report:
+
+```text
+candidate name
+canonical upstream URL
+author
+license
+last release/commit
+supported SC2 formats
+terrain support
+M3 support
+DDS/TGA support
+MPQ support
+Windows/Qt integration cost
+security/supply-chain risks
+decision: use / adapter / reference only / reject
+```
+
+Проверить как минимум следующие классы решений, не предполагая заранее, что их нужно встраивать:
+
+1. собственные текущие readers проекта (`Sc2Archive`, `Objects`, `Regions`, `MapInfo`, terrain metadata);
+2. официальный StarCraft II Editor как visual oracle;
+3. открытые SC2 map/editor toolkits с terrain/MPQ support;
+4. SC2 M3 viewers/loaders только для слоя models/doodads;
+5. DDS/TGA decoders для terrain/minimap textures.
+
+Если `Tavk/Vise` не удаётся однозначно идентифицировать, не блокируй всю фазу. Реализуй безопасный Level A и запиши точный вопрос пользователю в remaining limitations.
+
+## Level A — обязательный для Beta 2
+
+Сделать хороший интерактивный 2D Map Canvas:
+
+- Graph-style background;
+- аппаратно ускоренный viewport с software fallback;
+- correct map aspect ratio;
+- Minimap/preview image без растягивания и ложного alignment;
+- world-coordinate ruler/grid;
+- exact Regions overlay;
+- Objects doodads/units/destructibles layers;
+- hover tooltip;
+- click selection;
+- zoom/pan/fit;
+- visibility toggles;
+- selected Region highlight;
+- candidate/static/blocked decor legend;
+- cached static layers, чтобы UI не лагал на 4–10 тысячах объектов.
+
+## Level B — только если формат доказан
+
+- terrain height/texture thumbnail из реальных map components;
+- cliffs/pathing overlays;
+- корректная ориентация Y и map origin;
+- golden-image tests на собственных fixtures и визуальное сравнение с Editor.
+
+## Level C — optional, не блокирует Beta 2
+
+- M3 previews для выбранных decor actors;
+- texture/material resolution через локальные SC2 assets;
+- никакого bundling copyrighted assets;
+- отсутствие model/texture не должно блокировать Region optimization.
+
+---
+
+# 7. КНОПКА «СИЛЬНО СЖАТЬ КАРТУ»
+
+Добавить отдельную понятную операцию:
+
+```text
+Maximum Compatible Compression
+Сильно сжать карту (совместимо с редактором)
+```
+
+Она не должна быть скрытым alias для удаления textures/assets.
+
+Сжатие и удаление unused content — разные операции:
+
+- compression меняет container representation без изменения логического содержимого;
+- asset cleanup удаляет данные и требует отдельного proof-based plan.
+
+## Обязательное поведение
+
+1. Всегда создавать новый output archive.
+2. Перед долгой записью выполнить preflight:
+   - source readable;
+   - output path writable;
+   - свободное место;
+   - archive backend available;
+   - entries inventory complete;
+   - unsupported encryption/patch/unknown flags detected;
+   - current document not stale;
+   - predicted temporary-space requirement.
+3. Перепаковывать во временный архив.
+4. Для каждого совместимого entry выбирать минимальный из доказанно поддерживаемых Editor codecs/flags.
+5. Не recompress already-compressed media вслепую, если это увеличивает размер или время без выигрыша.
+6. Не удалять textures, sounds, models, localized strings, previews или metadata в compression-only mode.
+7. Не менять имена entries, locale/platform metadata и logical bytes entries без отдельного optimization plan.
+8. После записи сравнить распакованные logical bytes или semantic representation каждого entry с source.
+9. Output должен быть меньше source. Если безопасного выигрыша нет — удалить временный output и вернуть `NO_COMPATIBLE_SIZE_GAIN`, не создавать файл большего размера.
+10. После внутренней проверки открыть output через fresh backend и поставить в Editor acceptance queue.
+11. Только Editor-accepted strategy может называться `Compatible`.
+12. Если часть archive flags неизвестна — блокировать Maximum mode для этой карты или fallback на доказанно безопасный Normal compression с явным сообщением.
+
+## Режимы UI
+
+```text
+Normal Save
+Maximum Compatible Compression
+```
+
+Перед запуском показать:
+
+- source path;
+- отдельный output path;
+- source size;
+- available disk space;
+- logical operations: `archive recompression only`;
+- что assets не удаляются;
+- ожидаемое время как диапазон, если возможно;
+- кнопку Cancel.
+
+После завершения показать неблокирующий OperationResult:
+
+```text
+Original unchanged
+Source bytes
+Output bytes
+Bytes saved
+Percent saved
+Structural verification
+Logical-entry equality
+Editor acceptance: PASS / FAIL / NOT RUN / TIMEOUT
+```
+
+Не обещать значительное уменьшение для карты, уже хорошо сжатой MPQ. Нулевой выигрыш является честным допустимым результатом.
+
+---
+
+# 8. PERFORMANCE И ОТЗЫВЧИВОСТЬ
+
+1. Никакого MPQ scan, XML parse, graph build, terrain decode, preview rasterization, compression или verification в UI thread.
+2. UI thread выполняет только bounded model updates и painting.
+3. Большие результаты добавлять chunked/batched, не тысячами widgets за один event-loop turn.
+4. Graph/Map Canvas используют cached layers и GPU viewport, но сохраняют рабочий software fallback.
+5. Не создавать по QWidget на каждый doodad.
+6. Для больших таблиц использовать model/view, lazy population и virtualized rows.
+7. Cancellation проверяется между archive entries и крупными фазами.
+8. Закрытие окна/смена карты не оставляет dangling watcher/callback.
+9. Прогресс не должен зависать на 94% во время долгого синхронного `refreshPages()`.
+10. Разделить post-analysis UI refresh на короткие queued stages и показывать фактическую текущую стадию.
+
+Зафиксировать измерения на малой, средней и самой большой карте корпуса:
+
+```text
+analysis wall time
+UI longest blocked interval
+peak working set
+compression time
+verification time
+preview first-paint time
+```
+
+Цель: UI остаётся переносимым, перерисовываемым и позволяет Cancel во время фоновой работы.
+
+---
+
+# 9. FAILURE INJECTION
+
+Добавить тесты минимум для:
+
+- corrupt MPQ;
+- truncated Objects;
+- malformed Regions;
+- unknown Region shape;
+- invalid Galaxy generation;
+- strong trigger reference to doodad;
+- output already exists;
+- output path read-only;
+- insufficient disk-space simulation;
+- cancellation during compression;
+- cancellation during verification;
+- worker exception;
+- source changed during analysis;
+- source changed before commit;
+- output archive reopens internally but Editor rejects it;
+- compression produces larger file;
+- missing optional viewer/toolkit dependency;
+- OpenGL unavailable and software fallback used.
+
+Для каждого failure доказать:
+
+```text
+source hash unchanged
+no partial committed output
+temporary files cleaned or explicitly quarantined
+clear OperationResult
+no false SUCCESS/SAFE/VERIFIED
+```
+
+---
+
+# 10. BUILD, TEST И COMMIT DISCIPLINE
+
+Следовать `AGENTS.md` проекта.
+
+После каждого логического этапа:
+
+1. focused tests;
+2. Release build;
+3. diff inspection;
+4. relevant real-map run;
+5. commit с узким понятным сообщением.
+
+При изменениях generation/archive/verification обязательно выполнить полный штатный test entry point проекта.
+
+Не коммитить:
+
+- карты;
+- архивные payload;
+- runtime logs;
+- screenshots из пользовательских карт;
+- `target/diag`;
+- portable/installer binaries.
+
+---
+
+# 11. BETA 2 ACCEPTANCE GATES
+
+Beta 2 candidate можно собрать только если:
+
+## Safety
+
+- source hashes всех real-map runs не изменились;
+- no false Safe при incomplete analysis;
+- no new strong missing references;
+- no partial archive commits;
+- decor вне выбранных Regions byte/semantic preserved;
+- trigger-referenced/gameplay objects остаются static/blocked.
+
+## Real maps
+
+- весь corpus получил baseline + dry-run report;
+- каждая подходящая карта получила реальный optimized-copy attempt;
+- outputs прошли fresh re-analysis либо получили конкретный FAIL/BLOCKED;
+- обязательная миссия получила decor Region optimized copy;
+- Editor oracle выполнен для обязательной миссии и representative matrix;
+- все timeout/failures явно перечислены.
+
+## Compression
+
+- кнопка Maximum Compatible Compression отделена от asset deletion;
+- logical entries доказанно сохранены;
+- output никогда не больше source;
+- минимум три разных карты реально стали меньше либо честно показали `NO_COMPATIBLE_SIZE_GAIN`;
+- обязательная миссия после сжатия проверена Editor’ом.
+
+## Viewer
+
+- exact Regions визуально совпадают с world-coordinate geometry;
+- map bounds/aspect доказаны или alignment помечен approximate;
+- выбор по карте и списку синхронизирован;
+- большая карта не замораживает UI;
+- software fallback работает.
+
+## Packaging
+
+- portable содержит все Qt runtime DLL, включая Network/OpenGL/OpenGLWidgets;
+- запуск проверен с очищенным Qt PATH;
+- installer/portable smoke tests проходят;
+- версия отображается как `3.0 Beta 2`, а не Stable/Final.
+
+Если хотя бы один обязательный gate не выполнен, release state:
+
+```text
+BETA 2 BLOCKED
+```
+
+с конкретной причиной.
+
+---
+
+# 12. ФИНАЛЬНЫЙ ОТЧЁТ
+
+Отчёт должен содержать факты, а не общие заявления:
+
+1. commit range;
+2. build configuration;
+3. discovered real-map manifest;
+4. source hashes unchanged proof;
+5. per-map analysis result;
+6. per-map optimization result;
+7. per-map source/output sizes;
+8. required mission result;
+9. Region/decor removal proof;
+10. generated Galaxy validation;
+11. fresh re-analysis result;
+12. Editor acceptance matrix;
+13. compression strategy и codec/flag evidence;
+14. viewer/toolkit discovery report;
+15. rendering accuracy limitations;
+16. performance measurements;
+17. failure-injection results;
+18. portable smoke result;
+19. remaining limitations;
+20. exact manual checks left to the user.
+
+Обязательная таблица:
+
+| Map | Source bytes | Output bytes | Saved | Analysis | Semantic verify | Editor | Original unchanged |
+|---|---:|---:|---:|---|---|---|---|
+
+И отдельная таблица функций:
+
+| Feature | Implemented | Synthetic tested | Real-map tested | Editor tested | Limitations |
+|---|---|---|---|---|---|
+| Exact Region selection | | | | | |
+| Objects decor removal | | | | | |
+| Galaxy actor recreation | | | | | |
+| Outside-scope preservation | | | | | |
+| Maximum compatible compression | | | | | |
+| Map Canvas | | | | | |
+| GPU rendering/fallback | | | | | |
+| Background analysis/UI refresh | | | | | |
+
+---
+
+# 13. НАЧИНАЙ
+
+Теперь последовательно:
+
+1. прочитай `AGENTS.md` и существующую архитектуру;
+2. проверь clean/dirty worktree, не затри пользовательские изменения;
+3. создай real-map manifest без изменения карт;
+4. создай диагностический runner;
+5. зафиксируй baseline всего корпуса;
+6. исправь найденные safety/compatibility проблемы;
+7. реализуй Maximum Compatible Compression;
+8. доведи Map Canvas до Level A;
+9. отдельно исследуй и идентифицируй `Tavk/Vise` toolkit; не угадывай;
+10. реально создай оптимизированные копии всех подходящих карт;
+11. выполни fresh verification;
+12. прогони Editor oracle queue;
+13. собери portable `3.0 Beta 2`;
+14. подготовь полный evidence report;
+15. не публикуй релиз до ручного пользовательского теста.
+
+Главный критерий успеха:
+
+> Инструмент не просто пишет, что оптимизация работает. Он создаёт отдельные оптимизированные копии реальных карт, доказывает сохранность оригинала и содержимого, измеряет реальный выигрыш, проходит повторный анализ и отдельно показывает, принял ли карту настоящий StarCraft II Editor.
