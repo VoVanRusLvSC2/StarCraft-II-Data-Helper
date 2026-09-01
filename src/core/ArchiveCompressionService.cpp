@@ -216,7 +216,15 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
         result.error = error;
         return finish();
     }
-    const auto discardStage = [&]() { QFile::remove(stage); QFile::remove(stage + QStringLiteral(".sc2dh.SC2Map")); };
+    const auto discardStage = [&]() {
+        for (const QString &candidate : {
+                 stage,
+                 stage + QStringLiteral(".compact"),
+                 stage + QStringLiteral(".sc2dh.SC2Map"),
+                 stage + QStringLiteral(".sc2dh.SC2Map.compact")}) {
+            QFile::remove(candidate);
+        }
+    };
     if (cancelled(request)) {
         discardStage();
         result.status = QStringLiteral("CANCELLED");

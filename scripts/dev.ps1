@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Configure", "Build", "Test", "Stage", "Run", "Beta2RealMapValidation", "LayoutSmoke", "MapPreviewSmoke")]
+    [ValidateSet("Configure", "Build", "Test", "Stage", "Run", "Beta2RealMapValidation", "PrepareEditorMatrix", "EditorOracle", "LayoutSmoke", "MapPreviewSmoke")]
     [string] $Action = "Build",
     [ValidateSet("Debug", "Release")]
     [string] $Configuration = "Debug",
@@ -106,6 +106,22 @@ try {
             $validatorArgs += "--inventory-only"
         }
         Invoke-Checked $validator $validatorArgs
+        return
+    }
+
+    if ($Action -eq "EditorOracle") {
+        & (Join-Path $PSScriptRoot "editor-oracle.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Editor oracle runner failed with exit code $LASTEXITCODE."
+        }
+        return
+    }
+
+    if ($Action -eq "PrepareEditorMatrix") {
+        & (Join-Path $PSScriptRoot "prepare-editor-matrix.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Editor matrix preparation failed with exit code $LASTEXITCODE."
+        }
         return
     }
 

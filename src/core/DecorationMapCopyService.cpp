@@ -780,8 +780,15 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         return result;
     }
     const auto discardStaging = [&]() {
-        if (!stagingPath.isEmpty())
-            QFile::remove(stagingPath);
+        if (stagingPath.isEmpty())
+            return;
+        for (const QString &candidate : {
+                 stagingPath,
+                 stagingPath + QStringLiteral(".compact"),
+                 stagingPath + QStringLiteral(".sc2dh.SC2Map"),
+                 stagingPath + QStringLiteral(".sc2dh.SC2Map.compact")}) {
+            QFile::remove(candidate);
+        }
     };
 
     // Sc2Archive::saveCopy owns and can remove its target internally. Always

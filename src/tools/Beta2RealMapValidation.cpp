@@ -316,6 +316,21 @@ bool entryEquals(const QString &candidate, const QString &name)
                .compare(name, Qt::CaseInsensitive) == 0;
 }
 
+QString normalizedEntryName(QString name)
+{
+    return name.trimmed().replace(QLatin1Char('\\'), QLatin1Char('/')).toCaseFolded();
+}
+
+QHash<QString, QJsonObject> inventoryByName(const Baseline &baseline)
+{
+    QHash<QString, QJsonObject> result;
+    for (const QJsonValue &value : baseline.entryInventory) {
+        const QJsonObject entry = value.toObject();
+        result.insert(normalizedEntryName(entry.value(QStringLiteral("name")).toString()), entry);
+    }
+    return result;
+}
+
 Baseline analyzeArchive(const QString &path,
                         const QHash<QString, QStringList> &corpusByName,
                         const QString &gameRoot)
@@ -590,10 +605,6 @@ QJsonObject validateOne(const QString &sourcePath,
                 const DecorOptimizedMapResult applied = DecorationMapCopyService().createOptimizedCopy(request);
                 report.insert(QStringLiteral("output_path"), applied.success ? normalizedPath(outputPath) : QString());
                 report.insert(QStringLiteral("objects_removed"), applied.removedDoodads);
-                report.insert(QStringLiteral("entries_added"), applied.patch.replacementEntries.contains(request.runtimeEntry)
-                                  ? QJsonArray{request.runtimeEntry} : QJsonArray());
-                report.insert(QStringLiteral("entries_removed"), QJsonArray());
-                report.insert(QStringLiteral("entries_rewritten"), entryNamesJson(applied.patch.replacementEntries));
                 report.insert(QStringLiteral("galaxy_functions_added"), applied.removedDoodads > 0 ? 5 : 0);
                 report.insert(QStringLiteral("source_unchanged"), applied.sourceUnchanged);
                 report.insert(QStringLiteral("structural_verification"), applied.fullAnalysisVerified
@@ -617,10 +628,70 @@ QJsonObject validateOne(const QString &sourcePath,
                     report.insert(QStringLiteral("saved_percent"), sourceInfo.size() > 0
                                       ? (double(sourceInfo.size() - outputInfo.size()) * 100.0 / double(sourceInfo.size())) : 0.0);
                     const Baseline after = analyzeArchive(outputPath, corpusByName, gameRoot);
+                    const QHash<QString, QJsonObject> beforeEntries = inventoryByName(baseline);
+                    const QHash<QString, QJsonObject> afterEntries = inventoryByName(after);
+                    QSet<QString> permittedChanges;
+                    for (auto replacement = applied.patch.replacementEntries.cbegin();
+                         replacement != applied.patch.replacementEntries.cend(); ++replacement) {
+                        permittedChanges.insert(normalizedEntryName(replacement.key()));
+                    }
+                    // Adding the generated Galaxy entry necessarily updates
+                    // StormLib's internal named inventory and per-entry
+                    // attributes.  These are verified structural metadata,
+                    // not user payload; every other logical entry remains
+                    // byte-identical unless it is an explicit replacement.
+                    permittedChanges.insert(QStringLiteral("(listfile)"));
+                    permittedChanges.insert(QStringLiteral("(attributes)"));
+                    QJsonArray entriesAdded;
+                    QJsonArray entriesRemoved;
+                    QJsonArray entriesRewritten;
+                    QJsonArray unexpectedEntryChanges;
+                    for (auto before = beforeEntries.cbegin(); before != beforeEntries.cend(); ++before) {
+                        const auto afterEntry = afterEntries.constFind(before.key());
+                        if (afterEntry == afterEntries.cend()) {
+                            entriesRemoved.append(before.value().value(QStringLiteral("name")));
+                            unexpectedEntryChanges.append(QStringLiteral("Removed entry: %1")
+                                                              .arg(before.value().value(QStringLiteral("name")).toString()));
+                            continue;
+                        }
+                        if (before.value().value(QStringLiteral("logical_sha256"))
+                            == afterEntry.value().value(QStringLiteral("logical_sha256"))) {
+                            continue;
+                        }
+                        entriesRewritten.append(afterEntry.value().value(QStringLiteral("name")));
+                        if (!permittedChanges.contains(before.key())) {
+                            unexpectedEntryChanges.append(QStringLiteral("Unexpected logical-byte change: %1")
+                                                              .arg(afterEntry.value().value(QStringLiteral("name")).toString()));
+                        }
+                    }
+                    for (auto afterEntry = afterEntries.cbegin(); afterEntry != afterEntries.cend(); ++afterEntry) {
+                        if (beforeEntries.contains(afterEntry.key()))
+                            continue;
+                        entriesAdded.append(afterEntry.value().value(QStringLiteral("name")));
+                        if (!permittedChanges.contains(afterEntry.key())) {
+                            unexpectedEntryChanges.append(QStringLiteral("Unexpected added entry: %1")
+                                                              .arg(afterEntry.value().value(QStringLiteral("name")).toString()));
+                        }
+                    }
+                    const bool unchangedEntriesPreserved = unexpectedEntryChanges.isEmpty();
+                    report.insert(QStringLiteral("entries_added"), entriesAdded);
+                    report.insert(QStringLiteral("entries_removed"), entriesRemoved);
+                    report.insert(QStringLiteral("entries_rewritten"), entriesRewritten);
+                    report.insert(QStringLiteral("unexpected_entry_changes"), unexpectedEntryChanges);
+                    report.insert(QStringLiteral("logical_entry_preservation"), unchangedEntriesPreserved
+                                      ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
                     report.insert(QStringLiteral("fresh_reanalysis"), baselineJson(after));
                     report.insert(QStringLiteral("analysis_complete_after"), after.complete);
                     report.insert(QStringLiteral("parse_errors_after"), stringsJson(after.parseErrors));
-                    report.insert(QStringLiteral("status"), after.complete
+                    report.insert(QStringLiteral("structural_verification"),
+                                  after.complete && unchangedEntriesPreserved
+                                      ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
+                    report.insert(QStringLiteral("semantic_verification"),
+                                  after.complete && unchangedEntriesPreserved
+                                      && applied.patch.artifacts.roundTripVerified
+                                      && applied.patch.artifacts.outsideScopePreserved
+                                      ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
+                    report.insert(QStringLiteral("status"), after.complete && unchangedEntriesPreserved
                                       ? QStringLiteral("OPTIMIZED_COPY_VERIFIED")
                                       : QStringLiteral("BLOCKED_FRESH_REANALYSIS"));
                     if (!outputHashOk)

@@ -4090,6 +4090,13 @@ void CoreTests::maximumCompressionFailurePathsPreserveSourceAndOutput()
     QFile sourceAfter(sourcePath);
     QVERIFY(sourceAfter.open(QIODevice::ReadOnly));
     QCOMPARE(sourceAfter.readAll(), originalBytes);
+    const QStringList remainingFiles = QDir(dir.path()).entryList(QDir::Files);
+    for (const QString &name : remainingFiles) {
+        QVERIFY2(!name.contains(QStringLiteral(".compress-stage-"))
+                     && !name.contains(QStringLiteral(".sc2dh-stage-"))
+                     && !name.endsWith(QStringLiteral(".compact")),
+                 qPrintable(QStringLiteral("Temporary archive helper was not cleaned: %1").arg(name)));
+    }
 #endif
 }
 
@@ -4785,6 +4792,11 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY(!runtimeText.contains(QStringLiteral("StaticBlock")));
     QVERIFY(!runtimeText.contains(QStringLiteral("GrassVisual")));
     QVERIFY(!runtimeText.contains(QStringLiteral("BridgeVisual")));
+    for (const QString &name : QDir(dir.path()).entryList(QDir::Files)) {
+        QVERIFY2(!name.contains(QStringLiteral(".sc2dh-stage-"))
+                     && !name.endsWith(QStringLiteral(".compact")),
+                 qPrintable(QStringLiteral("Decoration staging helper was not cleaned: %1").arg(name)));
+    }
 #endif
 }
 
