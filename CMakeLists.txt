@@ -6,7 +6,7 @@ project(SC2DataHelper VERSION 3.0.0 LANGUAGES CXX)
 # Consumers that compare versions must use SC2DH_VERSION_NUMBER, which remains
 # a valid QVersionNumber / installer / release-tag value.
 set(SC2DH_VERSION_NUMBER "${PROJECT_VERSION}")
-set(SC2DH_VERSION_LABEL "3.0 BETA")
+set(SC2DH_VERSION_LABEL "3.0 Beta 2")
 set(SC2DH_GUI_TITLE "StarCraft-II-Data-Helper ${SC2DH_VERSION_LABEL}")
 
 function(sc2dh_apply_version_definitions target)
@@ -90,6 +90,8 @@ target_sources(SC2DataHelper PRIVATE
     src/app/ThemeManager.cpp
     src/core/Sc2Archive.h
     src/core/Sc2Archive.cpp
+    src/core/ArchiveCompressionService.h
+    src/core/ArchiveCompressionService.cpp
     src/core/M3Model.h
     src/core/M3ModelParser.h
     src/core/M3ModelParser.cpp
@@ -131,6 +133,8 @@ target_sources(SC2DataHelper PRIVATE
     src/core/DecorationStreamingPlanner.cpp
     src/core/MapRegionRepository.h
     src/core/MapRegionRepository.cpp
+    src/core/MapPreviewData.h
+    src/core/MapPreviewData.cpp
     src/core/DecorationMapCopyService.h
     src/core/DecorationMapCopyService.cpp
     src/core/XmlCleanupUtils.h
@@ -339,6 +343,7 @@ add_executable(SC2DataHelperTests
     src/core/TriggerPerformanceAnalyzer.cpp
     src/core/DecorationStreamingPlanner.cpp
     src/core/MapRegionRepository.cpp
+    src/core/MapPreviewData.cpp
     src/core/DecorationMapCopyService.cpp
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
@@ -348,6 +353,7 @@ add_executable(SC2DataHelperTests
     src/core/FolderAnalyzer.cpp
     src/core/BackupManager.cpp
     src/core/Sc2Archive.cpp
+    src/core/ArchiveCompressionService.cpp
     src/core/XmlLoader.cpp
     src/core/DuplicateFinder.cpp
     src/core/MergeService.cpp
@@ -593,3 +599,49 @@ endif()
 
 add_test(NAME SC2DecorOptimizeMapHelp COMMAND SC2DecorOptimizeMap --help)
 add_dependencies(SC2DataHelperTests SC2DecorOptimizeMap)
+
+add_executable(SC2Beta2RealMapValidation
+    src/tools/Beta2RealMapValidation.cpp
+    src/core/AnalysisModels.cpp
+    src/core/AnalysisIndex.cpp
+    src/core/ScannedFileReader.cpp
+    src/core/AssetFileRules.cpp
+    src/core/AssetReferenceScanner.cpp
+    src/core/UnifiedReferenceIndex.cpp
+    src/core/AssetOptimizationAnalyzer.cpp
+    src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/DecorationStreamingPlanner.cpp
+    src/core/MapRegionRepository.cpp
+    src/core/DecorationMapCopyService.cpp
+    src/core/XmlCleanupUtils.cpp
+    src/core/SemanticDuplicateAnalyzer.cpp
+    src/core/CatalogLinkSchema.cpp
+    src/core/FolderAnalyzer.cpp
+    src/core/BackupManager.cpp
+    src/core/Sc2Archive.cpp
+    src/core/ArchiveCompressionService.cpp
+    src/core/XmlLoader.cpp
+    src/core/DeepCleanupService.cpp
+)
+target_include_directories(SC2Beta2RealMapValidation PRIVATE src)
+target_link_libraries(SC2Beta2RealMapValidation PRIVATE
+    Qt6::Core
+    pugixml
+    StormLib::storm
+    nlohmann_json::nlohmann_json
+)
+target_compile_definitions(SC2Beta2RealMapValidation PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
+sc2dh_apply_version_definitions(SC2Beta2RealMapValidation)
+
+if (SC2DH_HAVE_LIBZIP)
+    target_compile_definitions(SC2Beta2RealMapValidation PRIVATE SC2DH_USE_LIBZIP=1)
+    if (TARGET libzip::zip)
+        target_link_libraries(SC2Beta2RealMapValidation PRIVATE libzip::zip)
+    else()
+        target_link_libraries(SC2Beta2RealMapValidation PRIVATE ${LIBZIP_LIBRARY})
+        target_include_directories(SC2Beta2RealMapValidation PRIVATE ${LIBZIP_INCLUDE_DIR})
+    endif()
+endif()
+
+add_test(NAME SC2Beta2RealMapValidationHelp COMMAND SC2Beta2RealMapValidation --help)
+add_dependencies(SC2DataHelperTests SC2Beta2RealMapValidation)

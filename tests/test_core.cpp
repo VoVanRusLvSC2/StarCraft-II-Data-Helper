@@ -18,7 +18,9 @@
 #include "core/DependencyUsageReport.h"
 #include "core/DecorationMapCopyService.h"
 #include "core/DecorationStreamingPlanner.h"
+#include "core/ArchiveCompressionService.h"
 #include "core/MapPerformanceAnalyzer.h"
+#include "core/MapPreviewData.h"
 #include "core/MapRegionRepository.h"
 #include "core/Sc2Archive.h"
 #include "core/UnifiedReferenceIndex.h"
@@ -43,6 +45,7 @@
 #include <QStringList>
 #include <QTabWidget>
 #include <QTranslator>
+#include <QtEndian>
 
 #include <algorithm>
 #include <optional>
@@ -292,6 +295,8 @@ private slots:
     void readsRealSc2RegionXmlAndPreservesGeometry();
     void realMapRegionReader();
     void malformedOrUnsupportedRegionIsFailClosed();
+    void mapPreviewParsesTerrainAndRejectsMalformedHeightData();
+    void maximumCompressionFailurePathsPreserveSourceAndOutput();
     void decorationXmlRoundTripAndRegionScopeIsolation();
     void decorationStreamingParsesZonesAndGeneratesGalaxy();
     void decorationStreamingKeepsExternallyReferencedDoodadsStatic();
@@ -3951,6 +3956,111 @@ void CoreTests::malformedOrUnsupportedRegionIsFailClosed()
     QVERIFY(!unsupported.warnings.isEmpty());
 }
 
+void CoreTests::mapPreviewParsesTerrainAndRejectsMalformedHeightData()
+{
+    sc2dh::preview::MapPreviewDataReader reader;
+    const auto descriptor = reader.parseTerrainXml(QByteArrayLiteral(
+        "<terrain><heightMap dim=\"3 2\" offset=\"10 20 0\" scale=\"2 4 1\">"
+        "<vertData quantizeBias=\"-1\" quantizeScale=\"0.25\"/>"
+        "</heightMap></terrain>"));
+    QVERIFY2(descriptor.complete, qPrintable(descriptor.errors.join(QStringLiteral("; "))));
+    QCOMPARE(descriptor.gridWidth, 3);
+    QCOMPARE(descriptor.gridHeight, 2);
+    QCOMPARE(descriptor.worldBounds.xMin, 10.0);
+    QCOMPARE(descriptor.worldBounds.yMin, 20.0);
+    QCOMPARE(descriptor.worldBounds.xMax, 14.0);
+    QCOMPARE(descriptor.worldBounds.yMax, 24.0);
+
+    const auto appendU32 = [](QByteArray *bytes, quint32 value) {
+        const quint32 little = qToLittleEndian(value);
+        bytes->append(reinterpret_cast<const char *>(&little), sizeof(little));
+    };
+    const auto appendU16 = [](QByteArray *bytes, quint16 value) {
+        const quint16 little = qToLittleEndian(value);
+        bytes->append(reinterpret_cast<const char *>(&little), sizeof(little));
+    };
+    QByteArray heightMap;
+    appendU32(&heightMap, 0x50414D48u); // HMAP
+    appendU32(&heightMap, 101u);
+    appendU32(&heightMap, 3u);
+    appendU32(&heightMap, 2u);
+    heightMap.append(16, '\0');
+    for (quint16 value = 0; value < 6; ++value) {
+        appendU16(&heightMap, quint16(100 + value));
+        appendU16(&heightMap, quint16(10 + value));
+        appendU16(&heightMap, value == 2 ? quint16(0x9000) : quint16(0));
+    }
+    QStringList warnings;
+    const QImage rendered = reader.renderHeightMap(heightMap, descriptor, &warnings);
+    QVERIFY2(!rendered.isNull(), qPrintable(warnings.join(QStringLiteral("; "))));
+    QCOMPARE(rendered.size(), QSize(3, 2));
+
+    const QByteArray truncated = heightMap.left(heightMap.size() - 1);
+    warnings.clear();
+    QVERIFY(reader.renderHeightMap(truncated, descriptor, &warnings).isNull());
+    QVERIFY(!warnings.isEmpty());
+
+    QByteArray mapInfo;
+    appendU32(&mapInfo, 0x4D617049u); // IpaM
+    appendU32(&mapInfo, 27u);
+    appendU32(&mapInfo, 192u);
+    appendU32(&mapInfo, 128u);
+    const auto approximateBounds = reader.parseMapInfoDimensions(mapInfo, &warnings);
+    QVERIFY(approximateBounds.valid);
+    QCOMPARE(approximateBounds.xMax, 192.0);
+    QCOMPARE(approximateBounds.yMax, 128.0);
+}
+
+void CoreTests::maximumCompressionFailurePathsPreserveSourceAndOutput()
+{
+#ifndef SC2DH_USE_STORMLIB
+    QSKIP("StormLib archive writer is unavailable.");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString sourcePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("CompressionSource.SC2Map"));
+    QString error;
+    QVERIFY2(createTestMpqArchive(sourcePath,
+                                  {{QStringLiteral("MapScript.galaxy"), QByteArrayLiteral("void InitMap() {}\n")},
+                                   {QStringLiteral("Objects"), QByteArray(8192, 'A')}},
+                                  &error),
+             qPrintable(error));
+    QFile sourceFile(sourcePath);
+    QVERIFY(sourceFile.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = sourceFile.readAll();
+    sourceFile.close();
+
+    sc2dh::compression::ArchiveCompressionService service;
+    const QString existingOutput = QDir(dir.path()).absoluteFilePath(QStringLiteral("Existing.SC2Map"));
+    QVERIFY(writeTextFile(existingOutput, QByteArrayLiteral("do not replace")));
+    sc2dh::compression::ArchiveCompressionRequest existingRequest{sourcePath, existingOutput};
+    const auto existingResult = service.compressCompatibleCopy(existingRequest);
+    QVERIFY(!existingResult.success);
+    QFile existingFile(existingOutput);
+    QVERIFY(existingFile.open(QIODevice::ReadOnly));
+    QCOMPARE(existingFile.readAll(), QByteArrayLiteral("do not replace"));
+
+    const QString noSpaceOutput = QDir(dir.path()).absoluteFilePath(QStringLiteral("NoSpace.SC2Map"));
+    sc2dh::compression::ArchiveCompressionRequest noSpaceRequest{sourcePath, noSpaceOutput};
+    noSpaceRequest.availableBytesOverride = 0;
+    const auto noSpaceResult = service.compressCompatibleCopy(noSpaceRequest);
+    QCOMPARE(noSpaceResult.status, QStringLiteral("BLOCKED_INSUFFICIENT_SPACE"));
+    QVERIFY(!QFileInfo::exists(noSpaceOutput));
+
+    const QString cancelledOutput = QDir(dir.path()).absoluteFilePath(QStringLiteral("Cancelled.SC2Map"));
+    sc2dh::compression::ArchiveCompressionRequest cancelledRequest{sourcePath, cancelledOutput};
+    cancelledRequest.availableBytesOverride = std::numeric_limits<qint64>::max();
+    cancelledRequest.isCancelled = [] { return true; };
+    const auto cancelledResult = service.compressCompatibleCopy(cancelledRequest);
+    QCOMPARE(cancelledResult.status, QStringLiteral("CANCELLED"));
+    QVERIFY(!QFileInfo::exists(cancelledOutput));
+
+    QFile sourceAfter(sourcePath);
+    QVERIFY(sourceAfter.open(QIODevice::ReadOnly));
+    QCOMPARE(sourceAfter.readAll(), originalBytes);
+#endif
+}
+
 void CoreTests::decorationXmlRoundTripAndRegionScopeIsolation()
 {
     const QByteArray objects = QByteArrayLiteral(
@@ -4447,6 +4557,17 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QVERIFY2(oneZoneOptimized.readEntry(QStringLiteral("Objects"), &oneZoneObjects, &error), qPrintable(error));
     QVERIFY(!QString::fromUtf8(oneZoneObjects).contains(QStringLiteral("FreeVisual")));
 
+    sc2dh::decor::DecorOptimizedMapRequest dryRunRequest = oneZoneRequest;
+    dryRunRequest.outputArchivePath = QDir(dir.path()).absoluteFilePath(QStringLiteral("DryRunMustNotExist.SC2Map"));
+    dryRunRequest.dryRun = true;
+    const sc2dh::decor::DecorOptimizedMapResult dryRunResult =
+        sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(dryRunRequest);
+    QVERIFY2(dryRunResult.success, qPrintable(dryRunResult.error));
+    QVERIFY(dryRunResult.dryRun);
+    QVERIFY(dryRunResult.sourceUnchanged);
+    QCOMPARE(dryRunResult.sourceSha256Before, dryRunResult.sourceSha256After);
+    QVERIFY(!QFileInfo::exists(dryRunRequest.outputArchivePath));
+
     const QString visibilityOutputPath =
         QDir(dir.path()).absoluteFilePath(QStringLiteral("DecorSource_DecorVisibility.SC2Map"));
     sc2dh::decor::DecorOptimizedMapRequest visibilityRequest;
@@ -4679,8 +4800,6 @@ void CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
         zonesPath,
         QStringLiteral("--report"),
         reportPath,
-        QStringLiteral("--batch"),
-        QStringLiteral("4"),
         QStringLiteral("--overwrite")
     });
     process.setProcessChannelMode(QProcess::MergedChannels);
@@ -4736,8 +4855,6 @@ void CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
         QStringLiteral("KSPDecor"),
         QStringLiteral("--report"),
         visibilityReportPath,
-        QStringLiteral("--batch"),
-        QStringLiteral("4")
     });
     visibilityProcess.setProcessChannelMode(QProcess::MergedChannels);
     visibilityProcess.start();

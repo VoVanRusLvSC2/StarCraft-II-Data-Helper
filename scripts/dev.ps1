@@ -1,9 +1,13 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Configure", "Build", "Test", "Stage", "Run")]
+    [ValidateSet("Configure", "Build", "Test", "Stage", "Run", "Beta2RealMapValidation")]
     [string] $Action = "Build",
     [ValidateSet("Debug", "Release")]
-    [string] $Configuration = "Debug"
+    [string] $Configuration = "Debug",
+    [string] $CorpusPath = "C:\Users\Vladimir\Downloads\TriggerRivezerTests",
+    [string] $RequiredMapPath = "C:\Program Files (x86)\StarCraft II\Maps\Кампания_Империя_KSP_Миссия_1_OPRIMIzATION.SC2Map",
+    [string] $DiagnosticOutputPath = "target\diag\beta2-real-maps",
+    [switch] $InventoryOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,6 +88,23 @@ try {
             $ctest = Find-Tool "ctest" @()
         }
         Invoke-Checked $ctest @("--preset", $buildPreset)
+        return
+    }
+
+    if ($Action -eq "Beta2RealMapValidation") {
+        Invoke-Checked $cmake @("--build", "--preset", $buildPreset, "--target", "SC2Beta2RealMapValidation")
+        $qtRoot = Resolve-QtRoot
+        $env:Path = "$(Join-Path $qtRoot 'bin');$env:Path"
+        $validator = Join-Path $buildDirectory "$Configuration\SC2Beta2RealMapValidation.exe"
+        $validatorArgs = @(
+            "--corpus", $CorpusPath,
+            "--required-map", $RequiredMapPath,
+            "--output", $DiagnosticOutputPath
+        )
+        if ($InventoryOnly) {
+            $validatorArgs += "--inventory-only"
+        }
+        Invoke-Checked $validator $validatorArgs
         return
     }
 

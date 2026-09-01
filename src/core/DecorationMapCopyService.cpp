@@ -570,6 +570,7 @@ namespace sc2dh::decor
 DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const DecorOptimizedMapRequest &request) const
 {
     DecorOptimizedMapResult result;
+    result.dryRun = request.dryRun;
     result.outputArchivePath = request.outputArchivePath.isEmpty()
         ? defaultOutputPath(request.sourceArchivePath)
         : request.outputArchivePath;
@@ -586,6 +587,12 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         result.error = QStringLiteral("Decoration optimized copy must not overwrite the source archive.");
         return result;
     }
+
+    QString sourceHashError;
+    if (!fileSha256(request.sourceArchivePath, &result.sourceSha256Before, &sourceHashError)) {
+        result.error = QStringLiteral("Unable to hash source archive before preflight: %1").arg(sourceHashError);
+        return result;
+    }
     QSet<int> positiveZoneIds;
     for (const DecorZone &zone : request.zones) {
         if (zone.id > 0)
@@ -595,7 +602,7 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         result.error = QStringLiteral("Create at least one positive decoration zone before creating an optimized map copy.");
         return result;
     }
-    if (QFileInfo::exists(result.outputArchivePath)) {
+    if (!request.dryRun && QFileInfo::exists(result.outputArchivePath)) {
         if (!request.overwriteExisting) {
             result.error = QStringLiteral("Output archive already exists.");
             return result;
@@ -659,6 +666,26 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         return result;
     }
 
+    if (request.mode == DecorationOptimizationMode::VisibilityOnly) {
+        result.visibilityControlledDoodads = result.patch.visibilityArtifacts.controlledDoodadIndices.size();
+    } else {
+        result.removedDoodads = result.patch.artifacts.removedDoodadIndices.size();
+    }
+
+    if (!fileSha256(request.sourceArchivePath, &result.sourceSha256After, &sourceHashError)) {
+        result.error = QStringLiteral("Unable to re-hash source archive after preflight: %1").arg(sourceHashError);
+        return result;
+    }
+    result.sourceUnchanged = result.sourceSha256After == result.sourceSha256Before;
+    if (!result.sourceUnchanged) {
+        result.error = QStringLiteral("Source archive changed during preflight; no output was written.");
+        return result;
+    }
+    if (request.dryRun) {
+        result.success = true;
+        return result;
+    }
+
     QString stagingPath;
     if (!makeStagingArchivePath(result.outputArchivePath, &stagingPath, &error)) {
         result.error = QStringLiteral("Unable to create decoration optimized copy staging path: %1").arg(error);
@@ -677,6 +704,17 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
                            .arg(error);
         return result;
     }
+
+    if (!fileSha256(request.sourceArchivePath, &result.sourceSha256After, &sourceHashError)
+        || result.sourceSha256After != result.sourceSha256Before) {
+        discardStaging();
+        result.sourceUnchanged = false;
+        result.error = sourceHashError.isEmpty()
+            ? QStringLiteral("Source archive changed while the output was staged; no output was committed.")
+            : QStringLiteral("Unable to prove source archive unchanged after staging: %1").arg(sourceHashError);
+        return result;
+    }
+    result.sourceUnchanged = true;
 
     Sc2Archive verification;
     if (!verification.load(stagingPath, &error)) {
@@ -805,11 +843,25 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
     result.verificationParseErrors = stagedVerification.verificationParseErrors;
     discardStaging();
 
-    if (request.mode == DecorationOptimizationMode::VisibilityOnly) {
-        result.visibilityControlledDoodads = result.patch.visibilityArtifacts.controlledDoodadIndices.size();
-    } else {
-        result.removedDoodads = result.patch.artifacts.removedDoodadIndices.size();
+    if (!fileSha256(request.sourceArchivePath, &result.sourceSha256After, &sourceHashError)
+        || result.sourceSha256After != result.sourceSha256Before) {
+        result.sourceUnchanged = false;
+        QString recoveryError;
+        const bool recovered = outputExistsAtCommit
+            ? restoreExistingOutput(result.previousOutputBackupPath,
+                                    result.outputArchivePath,
+                                    originalOutputHash,
+                                    &recoveryError)
+            : QFile::remove(result.outputArchivePath);
+        result.error = sourceHashError.isEmpty()
+            ? QStringLiteral("Source archive changed before final verification; the generated output was removed or restored.")
+            : QStringLiteral("Unable to prove source archive unchanged after commit; the generated output was removed or restored: %1")
+                  .arg(sourceHashError);
+        if (!recovered)
+            result.error += QStringLiteral(" Recovery failed: %1").arg(recoveryError);
+        return result;
     }
+    result.sourceUnchanged = true;
     result.success = true;
     return result;
 }

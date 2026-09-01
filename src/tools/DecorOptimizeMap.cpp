@@ -371,7 +371,6 @@ QJsonObject reportObject(const QString &sourcePath,
                                         : QStringLiteral("recreate-actors"));
     report.insert(QStringLiteral("warnings"), stringArray(result.warnings));
     report.insert(QStringLiteral("functionPrefix"), request.galaxyOptions.functionPrefix);
-    report.insert(QStringLiteral("batchLimit"), request.galaxyOptions.batchLimit);
     report.insert(QStringLiteral("objectsEntry"), request.objectsEntry);
     report.insert(QStringLiteral("mapScriptEntry"), request.mapScriptEntry);
     report.insert(QStringLiteral("runtimeEntry"), request.runtimeEntry);
@@ -424,7 +423,6 @@ struct CliOptions
     QString zonesPath;
     QString autoGridSpec;
     QString prefix = QStringLiteral("NAME_OUT_FUNK");
-    QString batch = QStringLiteral("64");
     QString padding = QStringLiteral("0");
     QString reportPath;
     QString objectsEntry = QStringLiteral("Objects");
@@ -445,7 +443,6 @@ QString usageText()
         "  --visibility-only            Keep Objects unchanged; add hide/restore actor visibility API (requires --zones).\n"
         "  --padding <tiles>           Non-negative auto-grid padding. Default: 0.\n"
         "  --prefix <name>             Generated public function prefix. Default: NAME_OUT_FUNK.\n"
-        "  --batch <count>             Actor work batch size before Wait(0.0). Default: 64.\n"
         "  --report <file>             Write JSON report.\n"
         "  --overwrite                 Replace existing output archive.\n"
         "  --objects-entry <entry>     Placement entry. Default: Objects.\n"
@@ -529,9 +526,6 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
         } else if (name == QStringLiteral("--prefix")) {
             if (!consumeOptionValue(args, &i, suppliedValue, &options->prefix, error))
                 return false;
-        } else if (name == QStringLiteral("--batch")) {
-            if (!consumeOptionValue(args, &i, suppliedValue, &options->batch, error))
-                return false;
         } else if (name == QStringLiteral("--report")) {
             if (!consumeOptionValue(args, &i, suppliedValue, &options->reportPath, error))
                 return false;
@@ -603,9 +597,6 @@ int main(int argc, char *argv[])
     }
 
     bool ok = false;
-    const int batchLimit = cli.batch.toInt(&ok);
-    if (!ok || batchLimit <= 0)
-        return fail(QStringLiteral("--batch must be a positive integer."), 2);
 
     const QString sourcePath = QFileInfo(cli.sourcePath).absoluteFilePath();
     const QString outputPath = QFileInfo(cli.outputPath).absoluteFilePath();
@@ -631,7 +622,7 @@ int main(int argc, char *argv[])
     request.sourceArchivePath = sourcePath;
     request.outputArchivePath = outputPath;
     request.zones = zones;
-    request.galaxyOptions = GalaxyGenerationOptions{cli.prefix, batchLimit};
+    request.galaxyOptions = GalaxyGenerationOptions{cli.prefix, 64};
     request.objectsEntry = cli.objectsEntry;
     request.mapScriptEntry = cli.mapScriptEntry;
     request.runtimeEntry = cli.runtimeEntry;

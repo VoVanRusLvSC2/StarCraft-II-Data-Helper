@@ -19,12 +19,20 @@ struct DecorOptimizedMapRequest
     QString runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy");
     DecorationOptimizationMode mode = DecorationOptimizationMode::RecreateActors;
     bool overwriteExisting = false;
+    // Build the exact archive-aware safety plan, but do not create or mutate
+    // any output file. Diagnostic runners use this to report the same plan
+    // that an apply operation would execute.
+    bool dryRun = false;
 };
 
 struct DecorOptimizedMapResult
 {
     bool success = false;
     QString outputArchivePath;
+    QByteArray sourceSha256Before;
+    QByteArray sourceSha256After;
+    bool sourceUnchanged = false;
+    bool dryRun = false;
     // Set only when an existing, explicitly-overwritten output was preserved
     // before the verified replacement was committed.
     QString previousOutputBackupPath;

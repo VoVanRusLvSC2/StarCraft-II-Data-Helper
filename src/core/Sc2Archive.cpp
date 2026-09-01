@@ -582,6 +582,70 @@ bool Sc2Archive::readEntry(const QString &entryName, QByteArray *bytes, QString 
 #endif
 }
 
+bool Sc2Archive::inspectEntryMetadata(QVector<Sc2ArchiveEntryMetadata> *entries,
+                                      int *physicalEntryCount,
+                                      QString *errorMessage) const
+{
+    if (!entries || !physicalEntryCount) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Internal error: archive metadata output is null.");
+        return false;
+    }
+    entries->clear();
+    *physicalEntryCount = -1;
+#ifdef SC2DH_USE_STORMLIB
+    HANDLE archive = nullptr;
+    if (!SFileOpenArchive(reinterpret_cast<const TCHAR *>(m_archivePath.utf16()), 0, 0, &archive)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Unable to open SC2 archive for metadata inspection (StormLib error %1).")
+                                .arg(GetLastError());
+        return false;
+    }
+    DWORD physicalCount = 0;
+    DWORD needed = 0;
+    if (!SFileGetFileInfo(archive, SFileMpqNumberOfFiles, &physicalCount, sizeof(physicalCount), &needed)) {
+        const DWORD code = GetLastError();
+        SFileCloseArchive(archive);
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Unable to read physical MPQ entry count (StormLib error %1).").arg(code);
+        return false;
+    }
+    *physicalEntryCount = int(physicalCount);
+
+    for (const QString &entryName : m_allEntries) {
+        const QByteArray archivedName = QDir::cleanPath(entryName).replace('/', '\\').toUtf8();
+        HANDLE file = nullptr;
+        if (!SFileOpenFileEx(archive, archivedName.constData(), SFILE_OPEN_FROM_MPQ, &file)) {
+            const DWORD code = GetLastError();
+            SFileCloseArchive(archive);
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to inspect MPQ entry %1 (StormLib error %2).")
+                                    .arg(entryName).arg(code);
+            return false;
+        }
+        DWORD flags = 0;
+        DWORD locale = 0;
+        bool ok = SFileGetFileInfo(file, SFileInfoFlags, &flags, sizeof(flags), &needed)
+            && SFileGetFileInfo(file, SFileInfoLocale, &locale, sizeof(locale), &needed);
+        const DWORD code = ok ? ERROR_SUCCESS : GetLastError();
+        SFileCloseFile(file);
+        if (!ok) {
+            SFileCloseArchive(archive);
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Unable to read MPQ flags/locale for %1 (StormLib error %2).")
+                                    .arg(entryName).arg(code);
+            return false;
+        }
+        entries->append({entryName, quint32(flags), quint32(locale)});
+    }
+    SFileCloseArchive(archive);
+    return true;
+#else
+    Q_UNUSED(errorMessage);
+    return false;
+#endif
+}
+
 bool Sc2Archive::saveCopy(const QString &targetPath,
                           const QHash<QString, QByteArray> &replacementEntries,
                           const QStringList &removedEntries,
