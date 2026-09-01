@@ -99,20 +99,14 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
     const ArchiveCompressionRequest &request) const
 {
     ArchiveCompressionResult result;
-    result.sourceArchivePath = QFileInfo(request.sourceArchivePath).absoluteFilePath();
-    result.outputArchivePath = QFileInfo(request.outputArchivePath).absoluteFilePath();
+    result.sourceArchivePath = request.sourceArchivePath.isEmpty()
+        ? QString() : QFileInfo(request.sourceArchivePath).absoluteFilePath();
+    result.outputArchivePath = request.outputArchivePath.isEmpty()
+        ? QString() : QFileInfo(request.outputArchivePath).absoluteFilePath();
 
     const QFileInfo sourceInfo(result.sourceArchivePath);
     if (!sourceInfo.isFile() || !sourceInfo.isReadable()) {
         result.error = QStringLiteral("Source archive is absent or unreadable.");
-        return result;
-    }
-    if (result.outputArchivePath.isEmpty() || samePath(result.sourceArchivePath, result.outputArchivePath)) {
-        result.error = QStringLiteral("Compression output must be a separately named archive.");
-        return result;
-    }
-    if (QFileInfo::exists(result.outputArchivePath)) {
-        result.error = QStringLiteral("Compression output already exists; it was not changed.");
         return result;
     }
     result.sourceBytes = sourceInfo.size();
@@ -123,41 +117,66 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
         result.error = error;
         return result;
     }
+    const auto finish = [&]() {
+        QByteArray latest;
+        QString hashError;
+        if (fileSha256(result.sourceArchivePath, &latest, &hashError)) {
+            result.sourceSha256After = latest;
+            result.sourceUnchanged = latest == result.sourceSha256Before;
+            if (!result.sourceUnchanged && result.status != QStringLiteral("BLOCKED_SOURCE_CHANGED")) {
+                result.success = false;
+                result.status = QStringLiteral("BLOCKED_SOURCE_CHANGED");
+                result.error = QStringLiteral("Source archive changed while the operation result was finalized.");
+            }
+        } else {
+            result.sourceUnchanged = false;
+            result.warnings << QStringLiteral("Final source SHA-256 could not be read: %1").arg(hashError);
+        }
+        return result;
+    };
+    if (result.outputArchivePath.isEmpty() || samePath(result.sourceArchivePath, result.outputArchivePath)) {
+        result.error = QStringLiteral("Compression output must be a separately named archive.");
+        return finish();
+    }
+    if (QFileInfo::exists(result.outputArchivePath)) {
+        result.error = QStringLiteral("Compression output already exists; it was not changed.");
+        return finish();
+    }
     const QStorageInfo storage(QFileInfo(result.outputArchivePath).absolutePath());
     result.availableBytes = request.availableBytesOverride >= 0
         ? request.availableBytesOverride : storage.bytesAvailable();
     if (!storage.isValid() && request.availableBytesOverride < 0) {
         result.error = QStringLiteral("Unable to determine output filesystem free space.");
-        return result;
+        return finish();
     }
     if (result.availableBytes < result.predictedTemporaryBytes) {
         result.status = QStringLiteral("BLOCKED_INSUFFICIENT_SPACE");
         result.error = QStringLiteral("Insufficient free space: need %1 bytes, have %2 bytes.")
                            .arg(result.predictedTemporaryBytes).arg(result.availableBytes);
-        return result;
+        return finish();
     }
     if (cancelled(request)) {
         result.status = QStringLiteral("CANCELLED");
         result.error = QStringLiteral("Operation cancelled before archive open.");
-        return result;
+        return finish();
     }
 
     Sc2Archive source;
     if (!source.load(result.sourceArchivePath, &error)) {
         result.error = QStringLiteral("Archive backend preflight failed: %1").arg(error);
-        return result;
+        return finish();
     }
     QVector<Sc2ArchiveEntryMetadata> metadata;
     int physicalCount = -1;
     if (!source.inspectEntryMetadata(&metadata, &physicalCount, &error)) {
         result.error = QStringLiteral("Archive flags preflight failed: %1").arg(error);
-        return result;
+        return finish();
     }
     if (physicalCount != metadata.size()) {
         result.status = QStringLiteral("BLOCKED_INCOMPLETE_INVENTORY");
         result.error = QStringLiteral("Physical MPQ entry count (%1) differs from the named inventory (%2).")
                            .arg(physicalCount).arg(metadata.size());
-        return result;
+        return finish();
     }
     for (const Sc2ArchiveEntryMetadata &entry : metadata) {
         const quint32 unknownFlags = entry.flags & ~quint32(MPQ_FILE_VALID_FLAGS);
@@ -174,7 +193,7 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
                                .arg(entry.name)
                                .arg(entry.flags, 8, 16, QLatin1Char('0'))
                                .arg(unknownFlags, 8, 16, QLatin1Char('0'));
-            return result;
+            return finish();
         }
     }
 
@@ -182,39 +201,39 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
     if (!logicalHashes(source, request, &beforeHashes, &error)) {
         result.status = cancelled(request) ? QStringLiteral("CANCELLED") : QStringLiteral("BLOCKED_LOGICAL_READ");
         result.error = error;
-        return result;
+        return finish();
     }
     if (!fileSha256(result.sourceArchivePath, &result.sourceSha256After, &error)
         || result.sourceSha256After != result.sourceSha256Before) {
         result.status = QStringLiteral("BLOCKED_SOURCE_CHANGED");
         result.error = error.isEmpty() ? QStringLiteral("Source changed during compression preflight.") : error;
-        return result;
+        return finish();
     }
     result.sourceUnchanged = true;
 
     const QString stage = stagingPathFor(result.outputArchivePath, &error);
     if (stage.isEmpty()) {
         result.error = error;
-        return result;
+        return finish();
     }
     const auto discardStage = [&]() { QFile::remove(stage); QFile::remove(stage + QStringLiteral(".sc2dh.SC2Map")); };
     if (cancelled(request)) {
         discardStage();
         result.status = QStringLiteral("CANCELLED");
         result.error = QStringLiteral("Operation cancelled before archive write.");
-        return result;
+        return finish();
     }
     if (!source.saveCopy(stage, {}, {}, &error)) {
         discardStage();
         result.status = QStringLiteral("BLOCKED_ARCHIVE_WRITE");
         result.error = error;
-        return result;
+        return finish();
     }
     if (cancelled(request)) {
         discardStage();
         result.status = QStringLiteral("CANCELLED");
         result.error = QStringLiteral("Operation cancelled before verification.");
-        return result;
+        return finish();
     }
 
     Sc2Archive verification;
@@ -222,14 +241,14 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
         discardStage();
         result.status = QStringLiteral("BLOCKED_REOPEN");
         result.error = QStringLiteral("Compacted archive did not reopen: %1").arg(error);
-        return result;
+        return finish();
     }
     QHash<QString, QByteArray> afterHashes;
     if (!logicalHashes(verification, request, &afterHashes, &error)) {
         discardStage();
         result.status = cancelled(request) ? QStringLiteral("CANCELLED") : QStringLiteral("BLOCKED_LOGICAL_VERIFY");
         result.error = error;
-        return result;
+        return finish();
     }
     result.entriesVerified = afterHashes.size();
     result.logicalEntryEquality = beforeHashes == afterHashes;
@@ -238,7 +257,7 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
         discardStage();
         result.status = QStringLiteral("BLOCKED_SEMANTIC_MISMATCH");
         result.error = QStringLiteral("Logical entry equality or structural verification failed.");
-        return result;
+        return finish();
     }
 
     result.outputBytes = QFileInfo(stage).size();
@@ -248,7 +267,7 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
         result.success = true;
         result.outputBytes = 0;
         result.warnings << QStringLiteral("Verified compaction did not make the archive smaller; no output was created.");
-        return result;
+        return finish();
     }
 
     if (!fileSha256(result.sourceArchivePath, &result.sourceSha256After, &error)
@@ -257,19 +276,19 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
         result.sourceUnchanged = false;
         result.status = QStringLiteral("BLOCKED_SOURCE_CHANGED");
         result.error = error.isEmpty() ? QStringLiteral("Source changed before output commit.") : error;
-        return result;
+        return finish();
     }
     if (!QFile::rename(stage, result.outputArchivePath)) {
         discardStage();
         result.status = QStringLiteral("BLOCKED_COMMIT");
         result.error = QStringLiteral("Unable to atomically commit compacted output.");
-        return result;
+        return finish();
     }
     if (!fileSha256(result.outputArchivePath, &result.outputSha256, &error)) {
         QFile::remove(result.outputArchivePath);
         result.status = QStringLiteral("BLOCKED_OUTPUT_HASH");
         result.error = error;
-        return result;
+        return finish();
     }
     if (!fileSha256(result.sourceArchivePath, &result.sourceSha256After, &error)
         || result.sourceSha256After != result.sourceSha256Before) {
@@ -277,7 +296,7 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
         result.sourceUnchanged = false;
         result.status = QStringLiteral("BLOCKED_SOURCE_CHANGED");
         result.error = error.isEmpty() ? QStringLiteral("Source changed during output commit; generated output was removed.") : error;
-        return result;
+        return finish();
     }
 
     result.sourceUnchanged = true;
@@ -287,7 +306,7 @@ ArchiveCompressionResult ArchiveCompressionService::compressCompatibleCopy(
         ? double(result.savedBytes) * 100.0 / double(result.sourceBytes) : 0.0;
     result.status = QStringLiteral("VERIFIED_PENDING_EDITOR");
     result.success = true;
-    return result;
+    return finish();
 }
 
 } // namespace sc2dh::compression

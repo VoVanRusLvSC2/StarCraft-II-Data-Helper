@@ -11,6 +11,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QQueue>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 
@@ -298,6 +299,94 @@ const QRegularExpression &tokenExpression()
     return expression;
 }
 
+// Phrase-valued doodad names cannot use the token scanner above.  Checking
+// every phrase with QString::contains() made safety preflight O(text * names)
+// on real maps with large PreloadAssetDB/trigger files.  This compact
+// Aho-Corasick matcher preserves the same case-folded substring semantics
+// while scanning each text entry once.
+class PhraseMatcher
+{
+public:
+    explicit PhraseMatcher(const QSet<QString> &patterns)
+    {
+        m_nodes.append(Node{});
+        for (const QString &pattern : patterns) {
+            if (pattern.isEmpty())
+                continue;
+            const int patternIndex = m_patterns.size();
+            m_patterns.append(pattern);
+            int state = 0;
+            for (const QChar character : pattern) {
+                auto edge = m_nodes[state].edges.constFind(character);
+                if (edge == m_nodes[state].edges.cend()) {
+                    const int next = m_nodes.size();
+                    m_nodes.append(Node{});
+                    m_nodes[state].edges.insert(character, next);
+                    state = next;
+                } else {
+                    state = edge.value();
+                }
+            }
+            m_nodes[state].outputs.append(patternIndex);
+        }
+
+        QQueue<int> queue;
+        for (auto edge = m_nodes[0].edges.cbegin(); edge != m_nodes[0].edges.cend(); ++edge) {
+            queue.enqueue(edge.value());
+            m_nodes[edge.value()].failure = 0;
+        }
+        while (!queue.isEmpty()) {
+            const int state = queue.dequeue();
+            const auto edges = m_nodes[state].edges;
+            for (auto edge = edges.cbegin(); edge != edges.cend(); ++edge) {
+                const QChar character = edge.key();
+                const int next = edge.value();
+                queue.enqueue(next);
+
+                int fallback = m_nodes[state].failure;
+                while (fallback != 0 && !m_nodes[fallback].edges.contains(character))
+                    fallback = m_nodes[fallback].failure;
+                const auto fallbackEdge = m_nodes[fallback].edges.constFind(character);
+                if (fallbackEdge != m_nodes[fallback].edges.cend()
+                    && fallbackEdge.value() != next) {
+                    fallback = fallbackEdge.value();
+                }
+                m_nodes[next].failure = fallback;
+                m_nodes[next].outputs += m_nodes[fallback].outputs;
+            }
+        }
+    }
+
+    QSet<QString> matches(const QString &text) const
+    {
+        QSet<QString> found;
+        if (m_patterns.isEmpty())
+            return found;
+        int state = 0;
+        for (const QChar character : text) {
+            while (state != 0 && !m_nodes[state].edges.contains(character))
+                state = m_nodes[state].failure;
+            const auto edge = m_nodes[state].edges.constFind(character);
+            state = edge == m_nodes[state].edges.cend() ? 0 : edge.value();
+            for (const int patternIndex : m_nodes[state].outputs)
+                found.insert(m_patterns.at(patternIndex));
+            if (found.size() == m_patterns.size())
+                break;
+        }
+        return found;
+    }
+
+private:
+    struct Node
+    {
+        QHash<QChar, int> edges;
+        int failure = 0;
+        QVector<int> outputs;
+    };
+    QVector<Node> m_nodes;
+    QVector<QString> m_patterns;
+};
+
 bool looksLikeUtf8Text(const QByteArray &bytes)
 {
     if (bytes.isEmpty())
@@ -425,7 +514,7 @@ void scanTextForDoodadKeys(sc2dh::decor::DecorationSafetyContext *context,
                            const QString &entryName,
                            const QString &text,
                            const QSet<QString> &tokenKeys,
-                           const QSet<QString> &phraseKeys)
+                           const PhraseMatcher &phraseMatcher)
 {
     auto matches = tokenExpression().globalMatch(text);
     while (matches.hasNext()) {
@@ -435,10 +524,8 @@ void scanTextForDoodadKeys(sc2dh::decor::DecorationSafetyContext *context,
     }
 
     const QString foldedText = text.toCaseFolded();
-    for (const QString &key : phraseKeys) {
-        if (foldedText.contains(key))
-            addReference(context, key, entryName);
-    }
+    for (const QString &key : phraseMatcher.matches(foldedText))
+        addReference(context, key, entryName);
 }
 
 void scanXmlForStaticOnlyDoodadTypes(sc2dh::decor::DecorationSafetyContext *context,
@@ -513,6 +600,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
     }
     if (tokenKeys.isEmpty() && phraseKeys.isEmpty() && doodadTypes.isEmpty())
         return context;
+    const PhraseMatcher phraseMatcher(phraseKeys);
 
     for (const QString &entry : archive.allEntries()) {
         if (!isDecorationSafetyTextEntry(entry, request.objectsEntry, request.runtimeEntry))
@@ -549,7 +637,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
                                  .arg(entry);
             continue;
         }
-        scanTextForDoodadKeys(&context, entry, text, tokenKeys, phraseKeys);
+        scanTextForDoodadKeys(&context, entry, text, tokenKeys, phraseMatcher);
         // Visibility-only mode keeps collision data intact, but hiding a
         // catalog-defined footprint/pathing doodad would still create an
         // invisible gameplay blocker. Keep those types static in both modes.

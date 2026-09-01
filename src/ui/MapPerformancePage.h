@@ -36,8 +36,8 @@ private:
     void updateDecorPreview();
     void createDecorOptimizedMapCopy();
     void createMaximumCompressedCopy();
-    bool readObjectsFile(QByteArray *objectsBytes, QString *sourceLabel) const;
-    bool readRegionsFile(QByteArray *regionsBytes, QString *sourceLabel) const;
+    static bool readObjectsFile(const AnalysisResult &result, QByteArray *objectsBytes, QString *sourceLabel);
+    static bool readRegionsFile(const AnalysisResult &result, QByteArray *regionsBytes, QString *sourceLabel);
     static bool readMinimapImage(const AnalysisResult &result, QImage *image, QString *sourceLabel);
     static bool readPreviewComponent(const AnalysisResult &result,
                                      const QStringList &fileNames,

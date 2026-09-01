@@ -611,7 +611,7 @@ private:
             ? QStringLiteral("EXACT TERRAIN WORLD BOUNDS")
             : QStringLiteral("APPROXIMATE_BACKGROUND_ALIGNMENT");
         painter.drawText(QRect(12, 8, width() - 24, 24), Qt::AlignLeft | Qt::AlignVCenter,
-                         QStringLiteral("MAP CANVAS — %1 — %2").arg(alignment, m_backgroundSourceLabel));
+                         QStringLiteral("MAP CANVAS | %1 | %2").arg(alignment, m_backgroundSourceLabel));
 
         const QRectF area = gridArea();
         const auto bounds = displayBounds();
@@ -705,7 +705,7 @@ private:
             drawDoodad(index, QColor(QStringLiteral("#a5adb8")), 2.8);
         painter.setPen(QColor(QStringLiteral("#e8f4f1")));
         painter.drawText(QRectF(area.left(), area.top() - 22, area.width(), 18), Qt::AlignRight,
-                         QStringLiteral("candidate ● cyan   static/blocked ● red   outside ● gray   wheel zoom   drag pan   double-click fit"));
+                         QStringLiteral("cyan: candidate | red: blocked | gray: outside"));
     }
 
     int cellIndexAt(const QPointF &point) const
@@ -954,6 +954,18 @@ bool isRegionsEntry(const QString &rootFolder, const ScannedFileInfo &file)
         || QFileInfo(file.filePath).fileName().compare(QStringLiteral("Regions"), Qt::CaseInsensitive) == 0;
 }
 
+struct PreparedMapPerformance
+{
+    sc2dh::region::RegionReadResult regions;
+    sc2dh::preview::MapPreviewData preview;
+    QByteArray objectsBytes;
+    QString objectsSource;
+    sc2dh::perf::MapPerformanceReport report;
+    QVector<sc2dh::decor::DoodadPlacement> doodads;
+    bool hasObjects = false;
+    QString workerError;
+};
+
 } // namespace
 
 MapPerformancePage::MapPerformancePage(QWidget *parent)
@@ -974,11 +986,13 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     headerLayout->addWidget(title);
 
     m_summaryLabel = new QLabel(tr("Choose a real map Region. Decor inside its exact shape can be removed from Objects in a copy and recreated by generated Galaxy actor functions."), header);
+    m_summaryLabel->setProperty("sc2dh.mapPerformanceRole", QStringLiteral("summary"));
     m_summaryLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
     m_summaryLabel->setWordWrap(true);
     headerLayout->addWidget(m_summaryLabel);
 
     m_warningLabel = new QLabel(tr("The original map is never modified. Region geometry comes directly from the map's Regions component."), header);
+    m_warningLabel->setProperty("sc2dh.mapPerformanceRole", QStringLiteral("warning"));
     m_warningLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
     m_warningLabel->setWordWrap(true);
     headerLayout->addWidget(m_warningLabel);
@@ -1218,116 +1232,135 @@ void MapPerformancePage::setAnalysisResult(const AnalysisResult &result)
 
 void MapPerformancePage::rebuild()
 {
-    ++m_previewGeneration;
-    QByteArray regionsBytes;
-    QString regionsSource;
-    if (readRegionsFile(&regionsBytes, &regionsSource))
-        m_regionReadResult = sc2dh::region::MapRegionRepository().parse(regionsBytes, regionsSource);
-    else {
-        m_regionReadResult = {};
-        m_regionReadResult.sourceLabel = QStringLiteral("Regions");
-        m_regionReadResult.warnings << tr("The map has no readable Regions component.");
-    }
-    populateRegionSelector();
-
+    const quint64 generation = ++m_previewGeneration;
+    const AnalysisResult snapshot = m_result;
     m_minimapImage = {};
     m_minimapSourceLabel.clear();
     sc2dh::preview::MapPreviewData loadingPreview;
     loadingPreview.unavailableReason = tr("Map preview is loading in a worker thread...");
     static_cast<MapHeatmapWidget *>(m_heatmap)->setMapPreview(loadingPreview);
-    m_compressButton->setEnabled(!sourceArchivePath().isEmpty());
+    m_summaryLabel->setText(tr("Loading Regions, Objects, terrain and cached map layers in a worker thread..."));
+    m_warningLabel->setText(tr("The source archive remains read-only while Map Performance data is prepared."));
+    m_previewButton->setEnabled(false);
+    m_createCopyButton->setEnabled(false);
+    m_compressButton->setEnabled(false);
 
-    QByteArray objectsBytes;
-    QString sourceLabel;
-    if (!readObjectsFile(&objectsBytes, &sourceLabel)) {
-        m_hasObjects = false;
-        m_allDoodads.clear();
-        m_objectsBytes.clear();
-        m_objectsSourceLabel.clear();
-        m_report = {};
+    auto *watcher = new QFutureWatcher<PreparedMapPerformance>(this);
+    connect(watcher, &QFutureWatcher<PreparedMapPerformance>::finished, this,
+            [this, watcher, generation] {
+        const PreparedMapPerformance prepared = watcher->result();
+        watcher->deleteLater();
+        if (generation != m_previewGeneration)
+            return;
+
+        m_regionReadResult = prepared.regions;
+        populateRegionSelector();
+        m_hasObjects = prepared.hasObjects;
+        m_objectsBytes = prepared.objectsBytes;
+        m_objectsSourceLabel = prepared.objectsSource;
+        m_report = prepared.report;
+        m_allDoodads = prepared.doodads;
         static_cast<MapHeatmapWidget *>(m_heatmap)->setReport(m_report);
-        static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorZones({});
-        m_model->removeRows(0, m_model->rowCount());
-        populateZoneTable({});
-        populateDoodadTable({});
-        m_summaryLabel->setText(tr("Objects placement file was not found/readable or is larger than %1. Open a map containing the root Objects file. Scanned files: %2.")
-                                    .arg(formatBytes(MaxObjectsBytes))
-                                    .arg(m_result.scannedFiles.size()));
-        m_warningLabel->setText(m_minimapImage.isNull()
-                                    ? tr("Region outlines can be inspected, but decor cannot be counted until Objects is readable.")
-                                    : tr("Minimap loaded from %1, but Objects placement data is unavailable.").arg(m_minimapSourceLabel));
-        m_decorSummaryLabel->setText(QStringLiteral("No readable Objects entry: cannot list decor, assign zones, generate exact actor script, or remove static doodads from a map copy yet."));
-        m_galaxyPreview->setPlainText(QStringLiteral(
-            "NO OBJECTS ENTRY LOADED\n\n"
-            "This mode needs both the map's root Objects file and its real Regions component.\n\n"
-            "Workflow:\n"
-            "1. Open a .SC2Map/.SC2Mod archive.\n"
-            "2. Click an exact Region on the map.\n"
-            "3. Press Preview to inspect removed decor and Galaxy.\n"
-            "4. Create an optimized copy; the source map stays unchanged.\n"));
-        m_createCopyButton->setEnabled(false);
-        m_details->clear();
-        startMapPreviewLoad();
-        return;
-    }
-    m_hasObjects = true;
-    m_objectsBytes = objectsBytes;
-    m_objectsSourceLabel = sourceLabel;
+        applyMapPreview(prepared.preview);
+        m_compressButton->setEnabled(!sourceArchivePath().isEmpty());
 
-    sc2dh::perf::MapPerformanceOptions options;
-    options.columns = 8;
-    options.rows = 8;
-    options.padding = 0.0;
-    m_report = sc2dh::perf::MapPerformanceAnalyzer().buildReport(objectsBytes, m_result, options);
-    static_cast<MapHeatmapWidget *>(m_heatmap)->setReport(m_report);
-    populateTable();
+        if (!prepared.hasObjects) {
+            static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorZones({});
+            m_model->removeRows(0, m_model->rowCount());
+            populateZoneTable({});
+            populateDoodadTable({});
+            m_summaryLabel->setText(tr("Objects placement file was not found/readable or is larger than %1. Open a map containing the root Objects file. Scanned files: %2.")
+                                        .arg(formatBytes(MaxObjectsBytes))
+                                        .arg(m_result.scannedFiles.size()));
+            m_decorSummaryLabel->setText(QStringLiteral("No readable Objects entry: cannot list decor, assign zones, generate exact actor script, or remove static doodads from a map copy yet."));
+            m_galaxyPreview->setPlainText(QStringLiteral(
+                "NO OBJECTS ENTRY LOADED\n\n"
+                "This mode needs both the map's root Objects file and its real Regions component.\n"));
+            if (!prepared.workerError.isEmpty())
+                m_warningLabel->setText(QStringLiteral("MAP PREPARATION FAILED: %1").arg(prepared.workerError));
+            m_details->clear();
+            return;
+        }
 
-    m_summaryLabel->setText(tr("%1 positioned object(s) loaded. Choose exact map Regions to move safe decor from Objects into generated Galaxy actor functions. Source: %2%3")
-                                .arg(m_report.placements.size())
-                                .arg(sourceLabel)
-                                .arg(m_minimapImage.isNull()
-                                         ? QString()
-                                         : tr(" | Minimap: %1").arg(m_minimapSourceLabel)));
-    m_warningLabel->setText(tr("Region geometry is loaded. Map preview decoding is running outside the UI thread; the source archive is read-only."));
-    sc2dh::decor::DecorationStreamingPlanner decorPlanner;
-    m_allDoodads = decorPlanner.parseObjects(m_objectsBytes);
-    updateOptimizationScope();
-    startMapPreviewLoad();
+        populateTable();
+        m_summaryLabel->setText(tr("%1 positioned object(s) loaded. Choose exact map Regions to move safe decor from Objects into generated Galaxy actor functions. Source: %2%3")
+                                    .arg(m_report.placements.size())
+                                    .arg(prepared.objectsSource)
+                                    .arg(prepared.preview.image.isNull()
+                                             ? QString()
+                                             : tr(" | Minimap: %1").arg(prepared.preview.sourceLabel)));
+        updateOptimizationScope();
+    });
+    watcher->setFuture(QtConcurrent::run([snapshot] {
+        PreparedMapPerformance prepared;
+        try {
+            QByteArray regionsBytes;
+            QString regionsSource;
+            if (MapPerformancePage::readRegionsFile(snapshot, &regionsBytes, &regionsSource)) {
+                prepared.regions = sc2dh::region::MapRegionRepository().parse(regionsBytes, regionsSource);
+            } else {
+                prepared.regions.sourceLabel = QStringLiteral("Regions");
+                prepared.regions.warnings << QStringLiteral("The map has no readable Regions component.");
+            }
+            prepared.preview = MapPerformancePage::buildMapPreviewData(snapshot);
+            prepared.hasObjects = MapPerformancePage::readObjectsFile(
+                snapshot, &prepared.objectsBytes, &prepared.objectsSource);
+            if (prepared.hasObjects) {
+                sc2dh::perf::MapPerformanceOptions options;
+                options.columns = 8;
+                options.rows = 8;
+                options.padding = 0.0;
+                prepared.report = sc2dh::perf::MapPerformanceAnalyzer().buildReport(
+                    prepared.objectsBytes, snapshot, options);
+                prepared.doodads = sc2dh::decor::DecorationStreamingPlanner().parseObjects(
+                    prepared.objectsBytes);
+            }
+        } catch (const std::exception &exception) {
+            prepared.workerError = QString::fromUtf8(exception.what());
+        } catch (...) {
+            prepared.workerError = QStringLiteral("Unknown Map Performance worker exception.");
+        }
+        return prepared;
+    }));
 }
 
-bool MapPerformancePage::readObjectsFile(QByteArray *objectsBytes, QString *sourceLabel) const
+bool MapPerformancePage::readObjectsFile(const AnalysisResult &result,
+                                         QByteArray *objectsBytes,
+                                         QString *sourceLabel)
 {
     if (!objectsBytes)
         return false;
-    ScannedFileReader reader(m_result);
-    for (const ScannedFileInfo &file : m_result.scannedFiles) {
-        if (!isObjectsEntry(m_result.rootFolder, file))
+    ScannedFileReader reader(result);
+    for (const ScannedFileInfo &file : result.scannedFiles) {
+        if (!isObjectsEntry(result.rootFolder, file))
             continue;
         QByteArray bytes;
         if (!reader.readBytes(file, MaxObjectsBytes, &bytes))
             return false;
         *objectsBytes = bytes;
         if (sourceLabel)
-            *sourceLabel = ScannedFileReader::relativePath(m_result.rootFolder, file.filePath);
+            *sourceLabel = ScannedFileReader::relativePath(result.rootFolder, file.filePath);
         return true;
     }
     return false;
 }
 
-bool MapPerformancePage::readRegionsFile(QByteArray *regionsBytes, QString *sourceLabel) const
+bool MapPerformancePage::readRegionsFile(const AnalysisResult &result,
+                                         QByteArray *regionsBytes,
+                                         QString *sourceLabel)
 {
     if (!regionsBytes)
         return false;
-    ScannedFileReader reader(m_result);
-    for (const ScannedFileInfo &file : m_result.scannedFiles) {
-        if (!isRegionsEntry(m_result.rootFolder, file))
+    ScannedFileReader reader(result);
+    for (const ScannedFileInfo &file : result.scannedFiles) {
+        if (!isRegionsEntry(result.rootFolder, file))
             continue;
         QByteArray bytes;
         if (!reader.readBytes(file, MaxObjectsBytes, &bytes))
             return false;
         *regionsBytes = bytes;
         if (sourceLabel)
-            *sourceLabel = ScannedFileReader::relativePath(m_result.rootFolder, file.filePath);
+            *sourceLabel = ScannedFileReader::relativePath(result.rootFolder, file.filePath);
         return true;
     }
     return false;

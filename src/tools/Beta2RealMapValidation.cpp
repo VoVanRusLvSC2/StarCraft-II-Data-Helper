@@ -304,6 +304,7 @@ struct Baseline
     bool hasMapScript = false;
     bool hasMapInfo = false;
     bool hasTerrain = false;
+    bool dependencyInventoryComplete = false;
     int gameDataEntries = 0;
     QByteArray objects;
     RegionReadResult regionResult;
@@ -341,7 +342,10 @@ Baseline analyzeArchive(const QString &path,
         result.hasRegions = result.hasRegions || entryEquals(normalized, QStringLiteral("Regions"));
         result.hasMapScript = result.hasMapScript || entryEquals(normalized, QStringLiteral("MapScript.galaxy"));
         result.hasMapInfo = result.hasMapInfo || entryEquals(normalized, QStringLiteral("MapInfo"));
-        result.hasTerrain = result.hasTerrain || entryEquals(normalized, QStringLiteral("t3Terrain"));
+        result.hasTerrain = result.hasTerrain
+            || entryEquals(normalized, QStringLiteral("t3Terrain"))
+            || entryEquals(normalized, QStringLiteral("t3Terrain.xml"))
+            || entryEquals(normalized, QStringLiteral("t3HeightMap"));
         if (normalized.contains(QStringLiteral("GameData/"), Qt::CaseInsensitive)
             && normalized.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive)) {
             ++result.gameDataEntries;
@@ -392,12 +396,14 @@ Baseline analyzeArchive(const QString &path,
                                    .arg(bytes.size());
     }
 
-    if (!documentInfo.isEmpty())
+    result.dependencyInventoryComplete = !documentInfo.isEmpty();
+    if (result.dependencyInventoryComplete)
         result.dependencies = parseDependencies(documentInfo, &result.parseErrors);
     else
         result.warnings << QStringLiteral("DocumentInfo is absent or empty; dependency inventory is incomplete.");
     result.dependencyResolution = resolveDependencies(result.dependencies, path, corpusByName, gameRoot);
-    result.complete = result.archiveOpen && result.parseErrors.isEmpty()
+    result.complete = result.archiveOpen && result.dependencyInventoryComplete
+        && result.parseErrors.isEmpty()
         && result.dependencyResolution.missing.isEmpty();
     result.durationMs = timer.elapsed();
     // Kept explicit instead of relying on a platform-specific sampling hack.
@@ -420,6 +426,7 @@ QJsonObject baselineJson(const Baseline &baseline)
         {QStringLiteral("map_script_detected"), baseline.hasMapScript},
         {QStringLiteral("map_info_detected"), baseline.hasMapInfo},
         {QStringLiteral("terrain_detected"), baseline.hasTerrain},
+        {QStringLiteral("dependency_inventory_complete"), baseline.dependencyInventoryComplete},
         {QStringLiteral("game_data_entries"), baseline.gameDataEntries},
         {QStringLiteral("dependencies"), stringsJson(baseline.dependencies)},
         {QStringLiteral("resolved_dependencies"), stringsJson(baseline.dependencyResolution.resolved)},

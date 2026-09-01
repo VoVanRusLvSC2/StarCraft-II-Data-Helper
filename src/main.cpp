@@ -2,6 +2,7 @@
 #include "app/AudioManager.h"
 #include "app/AppSettings.h"
 #include "app/TranslationManager.h"
+#include "core/Sc2Archive.h"
 #include "ui/MapPerformancePage.h"
 
 #include <QAbstractButton>
@@ -10,15 +11,20 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QCursor>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
+#include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QIcon>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLabel>
 #include <QLineEdit>
 #include <QOpenGLWidget>
+#include <QPainter>
 #include <QPixmap>
 #include <QPointer>
 #include <QSaveFile>
@@ -50,6 +56,21 @@ bool hasScrollableAncestor(QWidget *widget)
             return true;
     }
     return false;
+}
+
+QByteArray sourceSha256(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    while (!file.atEnd()) {
+        const QByteArray chunk = file.read(4 * 1024 * 1024);
+        if (chunk.isEmpty() && file.error() != QFile::NoError)
+            return {};
+        hash.addData(chunk);
+    }
+    return hash.result();
 }
 
 int runLayoutSmoke(QApplication &app, const QString &outputDirectory)
@@ -187,6 +208,105 @@ int runLayoutSmoke(QApplication &app, const QString &outputDirectory)
     return app.exec();
 }
 
+int runMapPreviewSmoke(QApplication &app, const QString &mapPath, const QString &outputDirectory)
+{
+    const QString sourcePath = QFileInfo(mapPath).absoluteFilePath();
+    if (!QFileInfo(sourcePath).isFile() || !QDir().mkpath(outputDirectory))
+        return 30;
+    const QByteArray hashBefore = sourceSha256(sourcePath);
+    Sc2Archive archive;
+    QString error;
+    if (hashBefore.isEmpty() || !archive.load(sourcePath, &error))
+        return 31;
+
+    AnalysisResult analysis;
+    analysis.rootFolder = sourcePath;
+    for (const QString &entry : archive.allEntries()) {
+        ScannedFileInfo scanned;
+        scanned.filePath = entry;
+        scanned.isXml = entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive);
+        scanned.isSc2DataLike = scanned.isXml;
+        analysis.scannedFiles.append(scanned);
+    }
+
+    auto page = std::make_shared<QPointer<MapPerformancePage>>(new MapPerformancePage);
+    (*page)->resize(1280, 900);
+    (*page)->show();
+    const QElapsedTimer started = [] { QElapsedTimer timer; timer.start(); return timer; }();
+    (*page)->setAnalysisResult(analysis);
+
+    auto poll = std::make_shared<std::function<void()>>();
+    auto readyObservedMs = std::make_shared<qint64>(-1);
+    *poll = [&, page, poll, readyObservedMs, sourcePath, outputDirectory, hashBefore, started] {
+        if (!*page) {
+            app.exit(32);
+            return;
+        }
+        const auto findRoleLabel = [page](const QString &role) -> QLabel * {
+            for (QLabel *label : (*page)->findChildren<QLabel *>()) {
+                if (label->property("sc2dh.mapPerformanceRole").toString() == role)
+                    return label;
+            }
+            return nullptr;
+        };
+        QLabel *summary = findRoleLabel(QStringLiteral("summary"));
+        const bool ready = summary && !summary->text().contains(QStringLiteral("worker thread"), Qt::CaseInsensitive);
+        if (ready && *readyObservedMs < 0)
+            *readyObservedMs = started.elapsed();
+        const bool canvasSettled = ready && started.elapsed() - *readyObservedMs >= 800;
+        if (!canvasSettled && started.elapsed() < 120000) {
+            QTimer::singleShot(100, &app, *poll);
+            return;
+        }
+        const QByteArray hashAfter = sourceSha256(sourcePath);
+        auto *canvas = (*page)->findChild<QOpenGLWidget *>(QStringLiteral("mapPerformanceHeatmap"));
+        QLabel *warning = findRoleLabel(QStringLiteral("warning"));
+        const QString screenshotPath = QDir(outputDirectory).absoluteFilePath(QStringLiteral("real-map-preview.png"));
+        QImage screenshot((*page)->size(), QImage::Format_ARGB32_Premultiplied);
+        screenshot.fill(Qt::transparent);
+        QPainter screenshotPainter(&screenshot);
+        (*page)->render(&screenshotPainter);
+        bool framebufferComposited = false;
+        if (canvas && canvas->isValid()) {
+            const QImage framebuffer = canvas->grabFramebuffer();
+            if (!framebuffer.isNull()) {
+                const QPoint canvasOrigin = canvas->mapTo(*page, QPoint(0, 0));
+                screenshotPainter.drawImage(QRect(canvasOrigin, canvas->size()), framebuffer);
+                framebufferComposited = true;
+            }
+        }
+        screenshotPainter.end();
+        const bool screenshotSaved = screenshot.save(screenshotPath, "PNG");
+        QJsonObject report{
+            {QStringLiteral("schema"), QStringLiteral("sc2dh.beta2.real-map-preview-smoke.v1")},
+            {QStringLiteral("source_path"), sourcePath},
+            {QStringLiteral("source_sha256_before"), QString::fromLatin1(hashBefore.toHex())},
+            {QStringLiteral("source_sha256_after"), QString::fromLatin1(hashAfter.toHex())},
+            {QStringLiteral("source_unchanged"), !hashBefore.isEmpty() && hashBefore == hashAfter},
+            {QStringLiteral("archive_entries"), analysis.scannedFiles.size()},
+            {QStringLiteral("ready"), canvasSettled},
+            {QStringLiteral("first_paint_ready_ms"), double(*readyObservedMs)},
+            {QStringLiteral("summary"), summary ? summary->text() : QString()},
+            {QStringLiteral("warning"), warning ? warning->text() : QString()},
+            {QStringLiteral("opengl_context_valid"), canvas && canvas->isValid()},
+            {QStringLiteral("opengl_framebuffer_composited"), framebufferComposited},
+            {QStringLiteral("screenshot_saved"), screenshotSaved},
+            {QStringLiteral("screenshot"), screenshotPath}
+        };
+        QSaveFile reportFile(QDir(outputDirectory).absoluteFilePath(QStringLiteral("real-map-preview.json")));
+        bool saved = reportFile.open(QIODevice::WriteOnly);
+        if (saved) {
+            const QByteArray bytes = QJsonDocument(report).toJson(QJsonDocument::Indented);
+            saved = reportFile.write(bytes) == bytes.size() && reportFile.commit();
+        }
+        (*page)->close();
+        (*page)->deleteLater();
+        app.exit(canvasSettled && screenshotSaved && saved && hashBefore == hashAfter ? 0 : 33);
+    };
+    QTimer::singleShot(100, &app, *poll);
+    return app.exec();
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -222,6 +342,12 @@ int main(int argc, char *argv[])
     const int layoutSmokeIndex = args.indexOf(QStringLiteral("--layout-smoke"));
     if (layoutSmokeIndex >= 0 && layoutSmokeIndex + 1 < args.size())
         return runLayoutSmoke(app, QFileInfo(args.at(layoutSmokeIndex + 1)).absoluteFilePath());
+    const int previewSmokeIndex = args.indexOf(QStringLiteral("--map-preview-smoke"));
+    if (previewSmokeIndex >= 0 && previewSmokeIndex + 2 < args.size()) {
+        return runMapPreviewSmoke(app,
+                                  args.at(previewSmokeIndex + 1),
+                                  QFileInfo(args.at(previewSmokeIndex + 2)).absoluteFilePath());
+    }
 
     MainWindow window;
     translationManager.setLanguage(sc2dh::app::AppSettings::selectedLanguage(), false);

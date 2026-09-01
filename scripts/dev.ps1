@@ -1,11 +1,12 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("Configure", "Build", "Test", "Stage", "Run", "Beta2RealMapValidation", "LayoutSmoke")]
+    [ValidateSet("Configure", "Build", "Test", "Stage", "Run", "Beta2RealMapValidation", "LayoutSmoke", "MapPreviewSmoke")]
     [string] $Action = "Build",
     [ValidateSet("Debug", "Release")]
     [string] $Configuration = "Debug",
     [string] $CorpusPath = "C:\Users\Vladimir\Downloads\TriggerRivezerTests",
-    [string] $RequiredMapPath = "C:\Program Files (x86)\StarCraft II\Maps\Кампания_Империя_KSP_Миссия_1_OPRIMIzATION.SC2Map",
+    [string] $RequiredMapPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("QzpcUHJvZ3JhbSBGaWxlcyAoeDg2KVxTdGFyQ3JhZnQgSUlcTWFwc1zQmtCw0LzQv9Cw0L3QuNGPX9CY0LzQv9C10YDQuNGPX0tTUF/QnNC40YHRgdC40Y9fMV9PUFJJTUl6QVRJT04uU0MyTWFw")),
+    [string] $MapPreviewPath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("QzpcUHJvZ3JhbSBGaWxlcyAoeDg2KVxTdGFyQ3JhZnQgSUlcTWFwc1zQmtCw0LzQv9Cw0L3QuNGPX9CY0LzQv9C10YDQuNGPX0tTUF/QnNC40YHRgdC40Y9fMV9PUFJJTUl6QVRJT04uU0MyTWFw")),
     [string] $DiagnosticOutputPath = "target\diag\beta2-real-maps",
     [switch] $InventoryOnly
 )
@@ -115,6 +116,30 @@ try {
         $application = Join-Path $buildDirectory "$Configuration\SC2DataHelper.exe"
         $layoutOutput = Join-Path $DiagnosticOutputPath "layout-smoke"
         Invoke-Checked $application @("--layout-smoke", $layoutOutput)
+        return
+    }
+
+    if ($Action -eq "MapPreviewSmoke") {
+        if (-not (Test-Path -LiteralPath $MapPreviewPath -PathType Leaf)) {
+            throw "Map preview source does not exist: $MapPreviewPath"
+        }
+        Invoke-Checked $cmake @("--build", "--preset", $buildPreset, "--target", "SC2DataHelper")
+        $qtRoot = Resolve-QtRoot
+        $env:Path = "$(Join-Path $qtRoot 'bin');$env:Path"
+        $application = Join-Path $buildDirectory "$Configuration\SC2DataHelper.exe"
+        $previewOutput = Join-Path $DiagnosticOutputPath "real-map-preview"
+        $quotedPreviewPath = '"' + $MapPreviewPath.Replace('"', '\"') + '"'
+        $quotedPreviewOutput = '"' + $previewOutput.Replace('"', '\"') + '"'
+        $previewProcess = Start-Process -FilePath $application `
+            -ArgumentList @("--map-preview-smoke", $quotedPreviewPath, $quotedPreviewOutput) `
+            -Wait -PassThru -WindowStyle Hidden
+        if ($previewProcess.ExitCode -ne 0) {
+            throw "Map preview smoke failed with exit code $($previewProcess.ExitCode)."
+        }
+        $previewReport = Join-Path $previewOutput "real-map-preview.json"
+        if (-not (Test-Path -LiteralPath $previewReport)) {
+            throw "Map preview smoke did not create its JSON report: $previewReport"
+        }
         return
     }
 
