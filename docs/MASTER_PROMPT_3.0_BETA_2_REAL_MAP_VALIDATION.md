@@ -27,6 +27,36 @@ StarCraft-II-Data-Helper 3.0 Beta 2
 
 ---
 
+# 0A. ЛИМИТ 10 ЧАСОВ, МОДЕЛЬ И ПРИОРИТЕТЫ
+
+На весь автономный прогон этого prompt действует жёсткий wall-clock budget **10 часов** с момента начала работы. Используй наиболее сильную и подходящую доступную coding/agent model для сложного C++/Qt, MPQ, SC2 formats и реальных Editor-проверок. Основной выбор: **GPT-5.6 Sol с `xhigh` reasoning**; для самых рискованных safety/format решений допустим `max`, если это не ломает 10-часовой budget. При недоступности или перегрузке Sol допустим **GPT-5.6 Terra с `xhigh` reasoning**. Не трать время задачи на длительное обсуждение выбора модели.
+
+10 часов — это лимит исполнения, а не разрешение объявить непроверенное успешным. Невыполненный тест получает честный `NOT RUN`, `TIMEOUT` или `BLOCKED`, но никогда ложный `PASS`.
+
+Приоритеты:
+
+1. **P0:** безопасность оригиналов, корректность archive write, preflight, fresh verification.
+2. **P1:** обязательная миссия, настоящий SC2-map preview, точный выбор Region, корректный responsive UI без выпадающих кнопок.
+3. **P2:** Maximum Compatible Compression и доказательство Editor compatibility.
+4. **P3:** расширенный corpus, дополнительные visual layers и optional M3 preview.
+
+Ориентировочный timebox, который можно корректировать по фактам, но нельзя превышать суммарно:
+
+| Время | Результат |
+|---|---|
+| 00:00–00:30 | baseline, worktree audit, manifest, inventory установленного SC2 ModKit |
+| 00:30–02:30 | ModKit-backed map data pipeline и настоящий Map Canvas |
+| 02:30–03:30 | responsive layout, кнопки, удаление `Actors created per game tick` |
+| 03:30–05:00 | preflight/safety и Maximum Compatible Compression |
+| 05:00–07:30 | автоматические real-map runs и исправления по фактам |
+| 07:30–09:00 | Editor oracle: обязательная миссия и representative matrix |
+| 09:00–09:40 | portable package, clean-machine smoke, evidence collection |
+| 09:40–10:00 | финальный audit и честный отчёт |
+
+После 8-го часа не начинай optional Level C/M3 работу. Последние 40 минут зарезервированы для сборки, проверки артефактов и отчёта. Если P3 не помещается, урезай P3, а не P0/P1. Не останавливайся ради некритичных уточнений, которые можно безопасно разрешить чтением проекта, установленного ModKit и реальных карт.
+
+---
+
 # 0. ПРАВИЛА, КОТОРЫЕ НЕЛЬЗЯ НАРУШАТЬ
 
 1. Все исходные `.SC2Map`, `.SC2Mod`, `.SC2Campaign`, `.SC2Components` считать пользовательскими активами только для чтения.
@@ -270,12 +300,32 @@ StarCraft II Editor является внешним oracle совместимо�
    - итоговый archive-size estimate с пометкой, что это оценка.
 10. Архив создаётся только после успешного preflight. Пользователь не должен ждать несколько минут, чтобы в конце узнать о заранее обнаружимой сильной ссылке или invalid rename.
 11. После archive write выполнить fresh re-analysis и отдельный Editor oracle.
+12. Полностью убрать из UI, Settings, wizard, tooltips, локализации и обычного пользовательского workflow параметр **`Actors created per game tick` / `Action per tick`**. Generated public Galaxy API также не принимает этот параметр. Если безопасная генерация большого числа actors требует внутреннего yielding/chunking, это автоматическая implementation detail с доказанным default и без пользовательской настройки; она не должна менять семантику create/clear/restore.
 
 ---
 
-# 6. КАЧЕСТВЕННЫЙ MAP VIEWER / PREVIEW
+# 6. НАСТОЯЩИЙ MAP VIEWER НА БАЗЕ SC2 MOD TOOLS
 
-Пользователь предположительно имел в виду внешний SC2 mod/map toolkit или viewer от авторов/проектов, название которых звучит как `Tavk` / `Vise`. Это имя **не подтверждено**.
+Пользователь имел в виду **Modkit — StarCraft II modding for VS Code** от Talv/текущей команды toolkit. Канонические точки для обязательного аудита:
+
+```text
+Installed extension: C:\Users\Vladimir\.vscode\extensions\talv.sc2galaxy-1.10.5
+VS Code extension:   talv.sc2galaxy 1.10.5
+Core dependency:     plaxtony 1.10.5
+Legacy upstream:     https://github.com/Talv/vscode-sc2-galaxy
+Current toolkit:     https://github.com/sc2-arcade-watcher/sc2-galaxy-toolkit
+Marketplace:         https://marketplace.visualstudio.com/items?itemName=talv.sc2galaxy
+Current product:     Modkit — StarCraft II modding for VS Code (pre-release channel)
+Required features:   Modkit: Preview SC2Map / Modkit: Preview SC2Map in 3D
+```
+
+Локально установленная stable-версия `1.10.5` предшествует новому Modkit viewer и не является достаточным источником renderer. Получи и проинспектируй актуальный **pre-release Modkit** безопасно, не заменяя молча пользовательское расширение: скачай VSIX/source в diagnostics, зафиксируй version, SHA-256, canonical source commit и license. Актуальный Marketplace прямо заявляет viewers карт `.SC2Map`/`.s2ma` и команды `Preview SC2Map`/`Preview SC2Map in 3D`; поэтому «renderer не найден» нельзя объявлять, проверив только старую локальную 1.10.5.
+
+Задача — взять из актуального Modkit реальный map-preview pipeline: определить используемые archive readers, map/terrain decoders, coordinate transforms, shaders/canvas/webview renderer и dependency resolution; затем встроить разрешённые лицензией части через pinned adapter или аккуратно портировать их в C++/Qt с attribution и regression tests. Простое визуальное подражание Modkit, reuse только названия или возврат к собственному bounding-box renderer не считается выполнением требования.
+
+Используй реальные возможности toolkit для SC2 documents, archives, dependencies, catalog/trigger indexing и map metadata там, где они действительно существуют. Если 2D/3D viewer собран из закрытой или отсутствующей в canonical source части, зафиксируй доказательство и реализуй clean-room compatible Qt pipeline из реальных компонентов карты (`MapInfo`, `t3Terrain`, `Minimap`, `Regions`, `Objects`) с визуальным сравнением против Modkit и Galaxy Editor. Это fallback только на случай доказанного license/source blocker, а не способ пропустить исследование viewer.
+
+Production-приложение не должно зависеть от наличия VS Code или от изменяемой папки `%USERPROFILE%\.vscode\extensions`. После license/API audit используй pinned source/library, изолированный adapter либо перенеси только разрешённую минимальную логику с attribution и tests. Не копируй bundled Blizzard data/assets в repository или release.
 
 Запрещено:
 
@@ -312,16 +362,20 @@ decision: use / adapter / reference only / reject
 4. SC2 M3 viewers/loaders только для слоя models/doodads;
 5. DDS/TGA decoders для terrain/minimap textures.
 
-Если `Tavk/Vise` не удаётся однозначно идентифицировать, не блокируй всю фазу. Реализуй безопасный Level A и запиши точный вопрос пользователю в remaining limitations.
+Discovery report обязан отдельно ответить: какая точная pre-release версия Modkit проверена; где находится реализация `Preview SC2Map`/`Preview SC2Map in 3D`; какие части viewer реально интегрированы/портированы; какие функции дал Talv/plaxtony/current toolkit; какие части отсутствуют или запрещены лицензией; какая собственная Qt-часть понадобилась. Не выдавай использование названия Modkit за фактическую интеграцию.
 
 ## Level A — обязательный для Beta 2
 
-Сделать хороший интерактивный 2D Map Canvas:
+Сделать хороший интерактивный 2D Map Canvas. Текущий чёрный прямоугольник с тонкими контурами Regions и россыпью точек считается **FAILED PREVIEW** и не принимается как карта.
 
-- Graph-style background;
+- настоящий визуальный фон карты, а не пустой Graph-style background;
 - аппаратно ускоренный viewport с software fallback;
 - correct map aspect ratio;
-- Minimap/preview image без растягивания и ложного alignment;
+- `Minimap.tga`/другая реальная preview image без растягивания и ложного alignment, если она присутствует и декодируется;
+- если minimap отсутствует, raster preview строится из реальных terrain/map данных, а не из bounding box объектов;
+- если ни minimap, ни terrain доказанно не декодируются, показывать явный `MAP PREVIEW UNAVAILABLE: <reason>`, а не фальшивую чёрную «карту»;
+- точный world-to-screen transform из MapInfo/terrain dimensions с сохранением aspect ratio, origin, Y orientation и letterboxing;
+- terrain, playable bounds и camera/map bounds не смешивать;
 - world-coordinate ruler/grid;
 - exact Regions overlay;
 - Objects doodads/units/destructibles layers;
@@ -332,6 +386,8 @@ decision: use / adapter / reference only / reject
 - selected Region highlight;
 - candidate/static/blocked decor legend;
 - cached static layers, чтобы UI не лагал на 4–10 тысячах объектов.
+
+Regions рисовать поверх читаемой карты полупрозрачной заливкой и чётким outline. Невыбранные Regions не должны превращать terrain в нечитаемую сетку. Выбранный Region, decor candidates, static/blocked entries и объекты вне области имеют разные стабильные цвета. Карта должна быть визуально понятной без чтения списка снизу.
 
 ## Level B — только если формат доказан
 
@@ -346,6 +402,33 @@ decision: use / adapter / reference only / reject
 - texture/material resolution через локальные SC2 assets;
 - никакого bundling copyrighted assets;
 - отсутствие model/texture не должно блокировать Region optimization.
+
+## Responsive layout — обязательный для Beta 2
+
+Ни одна кнопка, вкладка, подпись или поле Map Performance не может выпадать за правую/нижнюю границу окна, обрезаться либо становиться недоступной из-за размера окна или DPI.
+
+Проверить минимум:
+
+```text
+1280x720  @ 100%
+1366x768  @ 100% и 125%
+1920x1080 @ 100%, 150% и 200%
+windowed, maximized и fullscreen
+Russian и English UI
+```
+
+Требования к компоновке:
+
+- Map Canvas и Region list находятся в корректных Qt layouts/splitters, без ручных абсолютных координат;
+- содержимое, которое физически не помещается, получает нормальный `QScrollArea`/model-view scrolling;
+- нижняя action bar с Preview/Create остаётся видимой либо предсказуемо переносится в одну/две строки;
+- кнопки имеют корректные `sizeHint`/`minimumSizeHint`, не перекрываются и не уходят за viewport;
+- длинный переведённый текст переносится или elide-ится с доступным tooltip, но не расширяет окно за экран;
+- tab order позволяет клавиатурой добраться до всех действий;
+- запрещены фиксированные высоты, из-за которых при 125–200% DPI исчезают controls;
+- изменение размера окна во время загрузки/preview не ломает layout и не замораживает UI.
+
+Добавить automated Qt layout smoke test: открыть Map Performance на каждом размере/DPI-профиле, дождаться layout, проверить геометрию всех видимых interactive controls относительно viewport и сохранить screenshots в diagnostics. Любой control outside viewport, overlap главных кнопок или отсутствующая доступная прокрутка — test failure.
 
 ---
 
@@ -545,9 +628,19 @@ Beta 2 candidate можно собрать только если:
 
 - exact Regions визуально совпадают с world-coordinate geometry;
 - map bounds/aspect доказаны или alignment помечен approximate;
+- вместо чёрной схемы показан реальный minimap/terrain-backed preview; если источник нельзя декодировать, UI честно показывает причину отсутствия preview;
+- discovery report доказывает реальное использование Talv/plaxtony/current SC2 Mod Tools либо честно фиксирует отсутствующие в toolkit renderer API;
 - выбор по карте и списку синхронизирован;
 - большая карта не замораживает UI;
 - software fallback работает.
+
+## UI layout
+
+- параметра `Actors created per game tick` / `Action per tick` нет ни в одном пользовательском экране, Settings, wizard или translation catalog;
+- все action buttons доступны при 1280x720 и при 200% DPI в проверяемых конфигурациях;
+- ни один главный control не выходит за viewport и не перекрывает соседний control;
+- layout smoke tests и screenshots приложены к diagnostics;
+- русский и английский текст не ломают размеры окна и кнопок.
 
 ## Packaging
 
@@ -585,11 +678,14 @@ BETA 2 BLOCKED
 13. compression strategy и codec/flag evidence;
 14. viewer/toolkit discovery report;
 15. rendering accuracy limitations;
-16. performance measurements;
-17. failure-injection results;
-18. portable smoke result;
-19. remaining limitations;
-20. exact manual checks left to the user.
+16. responsive-layout matrix и screenshots;
+17. proof that `Actors created per game tick` was removed from public UI/workflow;
+18. performance measurements;
+19. failure-injection results;
+20. portable smoke result;
+21. elapsed wall-clock time against the 10-hour budget;
+22. remaining limitations;
+23. exact manual checks left to the user.
 
 Обязательная таблица:
 
@@ -606,6 +702,9 @@ BETA 2 BLOCKED
 | Outside-scope preservation | | | | | |
 | Maximum compatible compression | | | | | |
 | Map Canvas | | | | | |
+| Talv/plaxtony/SC2 Mod Tools data integration | | | | | |
+| Responsive controls at required DPI | | | | | |
+| Removed per-tick user setting | | | | | |
 | GPU rendering/fallback | | | | | |
 | Background analysis/UI refresh | | | | | |
 
@@ -621,15 +720,16 @@ BETA 2 BLOCKED
 4. создай диагностический runner;
 5. зафиксируй baseline всего корпуса;
 6. исправь найденные safety/compatibility проблемы;
-7. реализуй Maximum Compatible Compression;
-8. доведи Map Canvas до Level A;
-9. отдельно исследуй и идентифицируй `Tavk/Vise` toolkit; не угадывай;
-10. реально создай оптимизированные копии всех подходящих карт;
-11. выполни fresh verification;
-12. прогони Editor oracle queue;
-13. собери portable `3.0 Beta 2`;
-14. подготовь полный evidence report;
-15. не публикуй релиз до ручного пользовательского теста.
+7. проинспектируй установленный Talv SC2Galaxy/plaxtony и current SC2 Mod Tools; зафиксируй реальные доступные API;
+8. замени чёрную схему настоящим ModKit-backed Map Canvas минимум обязательного Level A;
+9. исправь responsive layout на всей матрице разрешений/DPI и полностью убери пользовательский `Actors created per game tick`;
+10. реализуй Maximum Compatible Compression;
+11. реально создай оптимизированные копии всех подходящих карт;
+12. выполни fresh verification;
+13. прогони Editor oracle queue;
+14. собери portable `3.0 Beta 2`;
+15. подготовь полный evidence report и проверь 10-часовой budget;
+16. не публикуй релиз до ручного пользовательского теста.
 
 Главный критерий успеха:
 
