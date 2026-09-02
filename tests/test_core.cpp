@@ -4406,8 +4406,9 @@ void CoreTests::decorationStreamingInjectsGalaxyIncludeOnce()
                                          &error),
              qPrintable(error));
     QString text = QString::fromUtf8(rewritten);
-    QVERIFY(text.startsWith(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")));
-    QCOMPARE(text.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QVERIFY(text.startsWith(QStringLiteral("include \"scripts/sc2dh_decor_opt\"")));
+    QCOMPARE(text.count(QStringLiteral("include \"scripts/sc2dh_decor_opt\"")), 1);
+    QVERIFY(!text.contains(QStringLiteral("sc2dh_decor_opt.galaxy.galaxy")));
     QCOMPARE(text.count(QStringLiteral("DecorOpt_Init();")), 1);
     QVERIFY(text.contains(QStringLiteral("include \"TriggerLibs/NativeLib\"")));
     QVERIFY(!text.contains(QStringLiteral("DecorOpt_CreateZone(1);")));
@@ -4420,7 +4421,7 @@ void CoreTests::decorationStreamingInjectsGalaxyIncludeOnce()
                                          &error),
              qPrintable(error));
     text = QString::fromUtf8(twice);
-    QCOMPARE(text.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QCOMPARE(text.count(QStringLiteral("include \"scripts/sc2dh_decor_opt\"")), 1);
     QCOMPARE(text.count(QStringLiteral("DecorOpt_Init();")), 1);
 
     QVERIFY(!planner.injectGalaxyInclude(mapScript, QStringLiteral("scripts/not_galaxy.txt"), &rewritten, &error));
@@ -4479,7 +4480,7 @@ void CoreTests::decorationStreamingPreparesArchivePatch()
     QVERIFY(optimizedObjects.contains(QStringLiteral("StaticBlock")));
 
     const QString rewrittenMapScript = QString::fromUtf8(patch.replacementEntries.value(QStringLiteral("MapScript.galaxy")));
-    QCOMPARE(rewrittenMapScript.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QCOMPARE(rewrittenMapScript.count(QStringLiteral("include \"scripts/sc2dh_decor_opt\"")), 1);
     QCOMPARE(rewrittenMapScript.count(QStringLiteral("DecorOpt_Init();")), 1);
     QVERIFY(rewrittenMapScript.contains(QStringLiteral("include \"TriggerLibs/NativeLib\"")));
 
@@ -4788,7 +4789,7 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     QByteArray optimizedMapScript;
     QVERIFY2(optimized.readEntry(QStringLiteral("MapScript.galaxy"), &optimizedMapScript, &error), qPrintable(error));
     const QString mapScriptText = QString::fromUtf8(optimizedMapScript);
-    QCOMPARE(mapScriptText.count(QStringLiteral("include \"scripts/sc2dh_decor_opt.galaxy\"")), 1);
+    QCOMPARE(mapScriptText.count(QStringLiteral("include \"scripts/sc2dh_decor_opt\"")), 1);
     QCOMPARE(mapScriptText.count(QStringLiteral("DecorOpt_Init();")), 1);
     QVERIFY(mapScriptText.contains(QStringLiteral("include \"TriggerLibs/NativeLib\"")));
     QVERIFY(!mapScriptText.contains(QStringLiteral("DecorOpt_CreateZone(1);")));
@@ -4833,6 +4834,11 @@ void CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
                                   {
                                       {QStringLiteral("Objects"), objects},
                                       {QStringLiteral("MapScript.galaxy"), QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\nvoid InitMap() {\n}\n")},
+                                      {QStringLiteral("Regions"), QByteArrayLiteral(
+                                           "<Regions>"
+                                           "<region id=\"1\"><name value=\"Left\"/><shape type=\"rect\"><quad value=\"0,0,50,50\"/></shape></region>"
+                                           "<region id=\"2\"><name value=\"Right\"/><shape type=\"rect\"><quad value=\"100,0,150,50\"/></shape></region>"
+                                           "</Regions>")},
                                       {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog/>")}
                                   },
                                   &error),
@@ -4905,8 +4911,7 @@ void CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
     visibilityProcess.setArguments({
         sourcePath,
         visibilityOutputPath,
-        QStringLiteral("--zones"),
-        zonesPath,
+        QStringLiteral("--map-regions"),
         QStringLiteral("--visibility-only"),
         QStringLiteral("--prefix"),
         QStringLiteral("KSPDecor"),

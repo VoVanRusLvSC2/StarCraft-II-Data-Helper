@@ -1257,9 +1257,19 @@ bool DecorationStreamingPlanner::injectGalaxyInclude(const QByteArray &mapScript
     }
 
     QString script = QString::fromUtf8(mapScriptBytes);
-    const QString includeLine = QStringLiteral("include \"%1\"").arg(normalizedEntry);
-    const QRegularExpression existingInclude(QStringLiteral("^\\s*include\\s+\"%1\"\\s*;?\\s*$")
-                                                 .arg(QRegularExpression::escape(normalizedEntry)),
+    // Galaxy's map compiler treats imported script names as extensionless
+    // resource identifiers and appends ".galaxy" while regenerating the
+    // Created script. Supplying the physical MPQ extension here survives the
+    // first raw compile, but an Editor save turns it into
+    // "<name>.galaxy.galaxy". Keep the archive entry extension and inject the
+    // canonical extensionless reference instead.
+    QString includeReference = normalizedEntry;
+    includeReference.chop(QStringLiteral(".galaxy").size());
+    const QString includeLine = QStringLiteral("include \"%1\"").arg(includeReference);
+    const QRegularExpression existingInclude(
+        QStringLiteral("^\\s*include\\s+\"(?:%1|%2)\"\\s*;?\\s*$")
+            .arg(QRegularExpression::escape(includeReference),
+                 QRegularExpression::escape(normalizedEntry)),
                                              QRegularExpression::CaseInsensitiveOption
                                                  | QRegularExpression::MultilineOption);
 

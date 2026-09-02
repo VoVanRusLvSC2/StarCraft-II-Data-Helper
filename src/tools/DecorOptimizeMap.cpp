@@ -1,5 +1,6 @@
 #include "core/DecorationMapCopyService.h"
 #include "core/DecorationStreamingPlanner.h"
+#include "core/MapRegionRepository.h"
 #include "core/Sc2Archive.h"
 
 #include <QCoreApplication>
@@ -28,6 +29,8 @@ using sc2dh::decor::DecorZone;
 using sc2dh::decor::DoodadPlacement;
 using sc2dh::decor::GalaxyGenerationOptions;
 using sc2dh::decor::ZoneAssignment;
+using sc2dh::region::MapRegionRepository;
+using sc2dh::region::RegionReadResult;
 
 namespace
 {
@@ -308,6 +311,62 @@ bool buildAutoGridZones(const QString &sourceArchivePath,
     return true;
 }
 
+bool loadMapRegionZones(const QString &sourceArchivePath,
+                        QVector<DecorZone> *zones,
+                        QString *error)
+{
+    Sc2Archive archive;
+    if (!archive.load(sourceArchivePath, error))
+        return false;
+
+    QByteArray regionsBytes;
+    if (!archive.readEntry(QStringLiteral("Regions"), &regionsBytes, error))
+        return false;
+
+    const RegionReadResult parsed = MapRegionRepository().parse(regionsBytes, QStringLiteral("Regions"));
+    if (!parsed.success || !parsed.complete) {
+        if (error) {
+            *error = QStringLiteral("Exact map Regions could not be read completely: %1")
+                         .arg((parsed.errors + parsed.warnings).join(QStringLiteral("; ")));
+        }
+        return false;
+    }
+
+    QVector<DecorZone> result;
+    QSet<int> usedIds;
+    int generatedId = 1;
+    for (const auto &region : parsed.regions) {
+        if (!region.geometry.supported)
+            continue;
+        DecorZone zone;
+        bool idOk = false;
+        zone.id = region.id.toInt(&idOk);
+        if (!idOk)
+            zone.id = 0;
+        if (zone.id <= 0 || usedIds.contains(zone.id)) {
+            while (usedIds.contains(generatedId))
+                ++generatedId;
+            zone.id = generatedId++;
+        }
+        usedIds.insert(zone.id);
+        zone.name = region.name.isEmpty() ? QStringLiteral("Region_%1").arg(zone.id) : region.name;
+        zone.xMin = region.geometry.bounds.xMin;
+        zone.yMin = region.geometry.bounds.yMin;
+        zone.xMax = region.geometry.bounds.xMax;
+        zone.yMax = region.geometry.bounds.yMax;
+        zone.geometry = region.geometry;
+        result << zone;
+    }
+    if (result.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("The map contains no supported exact Regions.");
+        return false;
+    }
+    if (zones)
+        *zones = result;
+    return true;
+}
+
 QJsonObject zoneJson(const DecorZone &zone)
 {
     return QJsonObject{
@@ -418,6 +477,7 @@ struct CliOptions
     bool version = false;
     bool overwrite = false;
     bool visibilityOnly = false;
+    bool mapRegions = false;
     QString sourcePath;
     QString outputPath;
     QString zonesPath;
@@ -436,10 +496,12 @@ QString usageText()
         "Usage:\n"
         "  SC2DecorOptimizeMap <source.SC2Map> <output.SC2Map> --zones <zones.json> [options]\n"
         "  SC2DecorOptimizeMap <source.SC2Map> <output.SC2Map> --auto-grid <COLSxROWS> [options]\n"
+        "  SC2DecorOptimizeMap <source.SC2Map> <output.SC2Map> --map-regions [options]\n"
         "\n"
         "Options:\n"
         "  --zones <file>              JSON array/object with zones: id/name/xMin/yMin/xMax/yMax.\n"
         "  --auto-grid <COLSxROWS>     Build zones from current runtime-safe doodad bounds, e.g. 4x3.\n"
+        "  --map-regions              Use every supported exact Region from the map.\n"
         "  --visibility-only            Keep Objects unchanged; add hide/restore actor visibility API (requires --zones).\n"
         "  --padding <tiles>           Non-negative auto-grid padding. Default: 0.\n"
         "  --prefix <name>             Generated public function prefix. Default: NAME_OUT_FUNK.\n"
@@ -504,7 +566,8 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
             suppliedValue = argument.mid(equals + 1);
         }
 
-        if (name == QStringLiteral("--overwrite") || name == QStringLiteral("--visibility-only")) {
+        if (name == QStringLiteral("--overwrite") || name == QStringLiteral("--visibility-only")
+            || name == QStringLiteral("--map-regions")) {
             if (equals >= 0) {
                 if (error)
                     *error = QStringLiteral("%1 does not accept a value.").arg(name);
@@ -512,6 +575,8 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
             }
             if (name == QStringLiteral("--overwrite"))
                 options->overwrite = true;
+            else if (name == QStringLiteral("--map-regions"))
+                options->mapRegions = true;
             else
                 options->visibilityOnly = true;
         } else if (name == QStringLiteral("--zones")) {
@@ -552,14 +617,17 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
             *error = QStringLiteral("Expected exactly two positional arguments: source and output.");
         return false;
     }
-    if (options->zonesPath.isEmpty() == options->autoGridSpec.isEmpty()) {
+    const int zoneSources = int(!options->zonesPath.isEmpty())
+        + int(!options->autoGridSpec.isEmpty())
+        + int(options->mapRegions);
+    if (zoneSources != 1) {
         if (error)
-            *error = QStringLiteral("Specify exactly one of --zones or --auto-grid.");
+            *error = QStringLiteral("Specify exactly one of --zones, --auto-grid, or --map-regions.");
         return false;
     }
-    if (options->visibilityOnly && options->zonesPath.isEmpty()) {
+    if (options->visibilityOnly && !options->autoGridSpec.isEmpty()) {
         if (error)
-            *error = QStringLiteral("--visibility-only requires explicit --zones; --auto-grid is for actor recreation only.");
+            *error = QStringLiteral("--visibility-only requires --zones or --map-regions; --auto-grid is for actor recreation only.");
         return false;
     }
     options->sourcePath = positional.at(0);
@@ -606,6 +674,9 @@ int main(int argc, char *argv[])
     if (!cli.zonesPath.isEmpty()) {
         if (!loadZonesJson(cli.zonesPath, &zones, &error))
             return fail(error, 3);
+    } else if (cli.mapRegions) {
+        if (!loadMapRegionZones(sourcePath, &zones, &error))
+            return fail(QStringLiteral("Map Regions failed: %1").arg(error), 3);
     } else {
         int columns = 0;
         int rows = 0;
