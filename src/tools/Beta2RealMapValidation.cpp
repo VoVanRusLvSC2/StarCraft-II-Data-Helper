@@ -445,6 +445,15 @@ Baseline analyzeArchive(const QString &path,
     return result;
 }
 
+QString dependencyResolutionLabel(const Baseline &baseline)
+{
+    if (!baseline.archiveOpen || !baseline.dependencyInventoryComplete)
+        return QStringLiteral("BLOCKED_INCOMPLETE_DEPENDENCY_INVENTORY");
+    return baseline.dependencyResolution.missing.isEmpty()
+        ? QStringLiteral("RESOLVED")
+        : QStringLiteral("SKIPPED_MISSING_DEPENDENCY");
+}
+
 QJsonObject baselineJson(const Baseline &baseline)
 {
     return QJsonObject{
@@ -464,8 +473,7 @@ QJsonObject baselineJson(const Baseline &baseline)
         {QStringLiteral("dependencies"), stringsJson(baseline.dependencies)},
         {QStringLiteral("resolved_dependencies"), stringsJson(baseline.dependencyResolution.resolved)},
         {QStringLiteral("missing_dependencies"), stringsJson(baseline.dependencyResolution.missing)},
-        {QStringLiteral("dependency_resolution"), baseline.dependencyResolution.missing.isEmpty()
-             ? QStringLiteral("RESOLVED") : QStringLiteral("SKIPPED_MISSING_DEPENDENCY")},
+        {QStringLiteral("dependency_resolution"), dependencyResolutionLabel(baseline)},
         {QStringLiteral("parse_errors"), stringsJson(baseline.parseErrors)},
         {QStringLiteral("warnings"), stringsJson(baseline.warnings)}
     };
@@ -530,8 +538,7 @@ QJsonObject validateOne(const QString &sourcePath,
     report.insert(QStringLiteral("baseline"), baselineJson(baseline));
     report.insert(QStringLiteral("analysis_complete_before"), baseline.complete);
     report.insert(QStringLiteral("parse_errors_before"), stringsJson(baseline.parseErrors));
-    report.insert(QStringLiteral("dependency_resolution"), baseline.dependencyResolution.missing.isEmpty()
-                      ? QStringLiteral("RESOLVED") : QStringLiteral("SKIPPED_MISSING_DEPENDENCY"));
+    report.insert(QStringLiteral("dependency_resolution"), dependencyResolutionLabel(baseline));
     report.insert(QStringLiteral("missing_dependencies"), stringsJson(baseline.dependencyResolution.missing));
 
     if (!inventoryOnly && baseline.complete) {
