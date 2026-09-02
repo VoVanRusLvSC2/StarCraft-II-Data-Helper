@@ -129,7 +129,9 @@ QString regionGeometryLabel(const sc2dh::region::RegionGeometry &geometry)
             .arg(geometry.bounds.yMin, 0, 'f', 2)
             .arg(geometry.bounds.yMax, 0, 'f', 2);
     case sc2dh::region::RegionShapeKind::Polygon:
-        return translate("polygon | %1 points | x %2..%3 | y %4..%5")
+        return (geometry.rawType.compare(QStringLiteral("diamond"), Qt::CaseInsensitive) == 0
+                    ? translate("diamond | %1 points | x %2..%3 | y %4..%5")
+                    : translate("polygon | %1 points | x %2..%3 | y %4..%5"))
             .arg(geometry.points.size())
             .arg(geometry.bounds.xMin, 0, 'f', 2)
             .arg(geometry.bounds.xMax, 0, 'f', 2)

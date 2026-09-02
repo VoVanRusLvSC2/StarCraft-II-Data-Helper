@@ -53,6 +53,25 @@ function Existing-EditorProcesses {
     return @(Get-Process SC2Editor_x64,SC2Editor -ErrorAction SilentlyContinue)
 }
 
+function Test-EditorAlertTitle([string] $title) {
+    $errorStemRu = [string]([char]0x041E)+[char]0x0448+[char]0x0438+[char]0x0431 # Ошиб
+    $warningStemRu = [string]([char]0x041F)+[char]0x0440+[char]0x0435+[char]0x0434+[char]0x0443+[char]0x043F+[char]0x0440+[char]0x0435+[char]0x0436+[char]0x0434+[char]0x0435+[char]0x043D # Предупрежден
+    return $title -match '(?i)error|failed|dependency|warning|alert' `
+        -or $title.Contains($errorStemRu) `
+        -or $title.Contains($warningStemRu)
+}
+
+function Test-ProvenDocumentTitle([string] $title) {
+    $untitledStemRu = [string]([char]0x0411)+[char]0x0435+[char]0x0437+[char]0x044B+[char]0x043C+[char]0x044F+[char]0x043D+
+        [char]0x043D # Безымянн
+    if ([string]::IsNullOrWhiteSpace($title) -or $title.Contains($untitledStemRu) -or $title -match '(?i)untitled') {
+        return $false
+    }
+    # A generic Terrain/Messages main window is responsive but does not prove
+    # that the requested diagnostic document reached an interactive state.
+    return $title -match '\[[^\]]+\]'
+}
+
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $diagnosticRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'target\diag\beta2-real-maps'))
 function Full-ProjectPath([string] $path) {
@@ -153,8 +172,7 @@ if ((Existing-EditorProcesses).Count -gt 0) {
                 break
             }
             $title = $owned.MainWindowTitle
-            $errorWordRu = [string]([char]0x041E)+[char]0x0448+[char]0x0438+[char]0x0431+[char]0x043A+[char]0x0438
-            if ($title -match '(?i)error|failed|dependency' -or $title.Contains($errorWordRu)) {
+            if (Test-EditorAlertTitle $title) {
                 $acceptance = 'FAIL_EDITOR_ALERT'
                 $detail = "Editor displayed an error/alert window: $title"
                 break
@@ -162,8 +180,13 @@ if ((Existing-EditorProcesses).Count -gt 0) {
             if ($owned.Responding -and $owned.MainWindowHandle -ne [IntPtr]::Zero -and -not [string]::IsNullOrWhiteSpace($title)) {
                 if ($null -eq $stableSince) { $stableSince = Get-Date }
                 if (((Get-Date) - $stableSince).TotalSeconds -ge 10) {
-                    $acceptance = 'OPENED_INTERACTIVE'
-                    $detail = 'Editor reached a responsive stable window without an automatic error dialog. Trigger compilation and runtime are not proven by this signal.'
+                    if (Test-ProvenDocumentTitle $title) {
+                        $acceptance = 'OPENED_INTERACTIVE'
+                        $detail = 'Editor reached a responsive, document-titled window without an automatic error dialog. Trigger compilation and runtime are not proven by this signal.'
+                    } else {
+                        $acceptance = 'NOT_PROVEN_DOCUMENT_READY'
+                        $detail = "Editor was responsive, but its window title did not prove that the requested diagnostic copy reached document-ready state: $title"
+                    }
                     break
                 }
             } else { $stableSince = $null }
@@ -208,7 +231,7 @@ $report = [ordered]@{
     available_candidates = $available.Count
     selected_distinct_documents = $candidates.Count
     representative_matrix_complete = $matrixComplete
-    acceptance_rule = 'OPENED_INTERACTIVE proves only a responsive Editor window; trigger/runtime remain separate and are never inferred as PASS.'
+    acceptance_rule = 'OPENED_INTERACTIVE requires a responsive, non-untitled document window and no detected alert. Generic Terrain/Messages windows are NOT_PROVEN_DOCUMENT_READY; trigger/runtime remain separate.'
     results = $results
 }
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputFullPath 'editor-oracle.json') -Encoding UTF8

@@ -126,6 +126,24 @@ bool writeJson(const QString &path, const QJsonObject &object, QString *error)
     return true;
 }
 
+bool writeDiagnosticBytes(const QString &path, const QByteArray &bytes, QString *error)
+{
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+        if (error)
+            *error = QStringLiteral("Unable to create diagnostic directory for %1").arg(path);
+        return false;
+    }
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)
+        || file.write(bytes) != bytes.size()
+        || !file.commit()) {
+        if (error)
+            *error = QStringLiteral("Unable to commit diagnostic entry %1: %2").arg(path, file.errorString());
+        return false;
+    }
+    return true;
+}
+
 QJsonArray stringsJson(const QStringList &values)
 {
     QJsonArray result;
@@ -742,7 +760,9 @@ int main(int argc, char *argv[])
     const QCommandLineOption requiredOption(QStringLiteral("required-map"), QStringLiteral("Required oracle map path."), QStringLiteral("map"));
     const QCommandLineOption outputOption(QStringLiteral("output"), QStringLiteral("Diagnostic output root."), QStringLiteral("folder"));
     const QCommandLineOption inventoryOption(QStringLiteral("inventory-only"), QStringLiteral("Create manifest and read-only baselines only."));
-    parser.addOptions({corpusOption, requiredOption, outputOption, inventoryOption});
+    const QCommandLineOption dumpRegionsOption(QStringLiteral("dump-regions"),
+                                                QStringLiteral("Write read-only Regions components below the diagnostic output root."));
+    parser.addOptions({corpusOption, requiredOption, outputOption, inventoryOption, dumpRegionsOption});
     parser.process(app);
 
     if (!parser.isSet(corpusOption) || !parser.isSet(requiredOption) || !parser.isSet(outputOption)) {
@@ -822,6 +842,24 @@ int main(int argc, char *argv[])
                                          corpusByName,
                                          gameRoot,
                                          parser.isSet(inventoryOption));
+        if (parser.isSet(dumpRegionsOption)) {
+            Sc2Archive archive;
+            QByteArray regionsBytes;
+            QString dumpError;
+            if (archive.load(path, &dumpError)
+                && archive.readEntry(QStringLiteral("Regions"), &regionsBytes, &dumpError)) {
+                const QString hash = report.value(QStringLiteral("source_sha256")).toString().left(12);
+                const QString dumpPath = QDir(outputRoot).absoluteFilePath(
+                    QStringLiteral("region-components/%1-%2/Regions")
+                        .arg(safeSlug(path), hash.isEmpty() ? QStringLiteral("unknown") : hash));
+                if (!writeDiagnosticBytes(dumpPath, regionsBytes, &dumpError))
+                    report.insert(QStringLiteral("region_dump_error"), dumpError);
+                else
+                    report.insert(QStringLiteral("region_dump_path"), dumpPath);
+            } else if (!dumpError.isEmpty()) {
+                report.insert(QStringLiteral("region_dump_error"), dumpError);
+            }
+        }
         reports.append(report);
         if (report.value(QStringLiteral("source_unchanged")).toBool())
             ++unchangedSources;

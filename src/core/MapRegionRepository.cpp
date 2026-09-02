@@ -135,6 +135,30 @@ sc2dh::region::RegionGeometry parseShape(const pugi::xml_node &shape)
                 }
             }
         }
+    } else if (type == QStringLiteral("diamond")) {
+        geometry.kind = RegionShapeKind::Polygon;
+        bool widthOk = false;
+        bool heightOk = false;
+        const double width = childValue(shape, "width").toDouble(&widthOk);
+        const double height = childValue(shape, "height").toDouble(&heightOk);
+        if (pointFrom(childValue(shape, "center"), &geometry.center)
+            && widthOk && heightOk
+            && width > 0.0 && height > 0.0
+            && std::isfinite(width) && std::isfinite(height)) {
+            const double halfWidth = width * 0.5;
+            const double halfHeight = height * 0.5;
+            // SC2 serializes a diamond by its full axis-aligned Size and Center.
+            // Preserve that exact primitive as four vertices rather than treating
+            // its bounding box as a rectangle.
+            geometry.points = {
+                {geometry.center.x, geometry.center.y + halfHeight},
+                {geometry.center.x + halfWidth, geometry.center.y},
+                {geometry.center.x, geometry.center.y - halfHeight},
+                {geometry.center.x - halfWidth, geometry.center.y}
+            };
+            geometry.bounds = boundsFromPoints(geometry.points);
+            geometry.supported = true;
+        }
     } else if (type == QStringLiteral("polygon") || type == QStringLiteral("poly")) {
         geometry.kind = RegionShapeKind::Polygon;
         for (pugi::xml_node parameter : shape.children()) {
@@ -150,8 +174,19 @@ sc2dh::region::RegionGeometry parseShape(const pugi::xml_node &shape)
     }
 
     if (!geometry.supported) {
+        QStringList parameterDetails;
+        QStringList parameterNames = geometry.rawParameters.keys();
+        std::sort(parameterNames.begin(), parameterNames.end(), [](const QString &left, const QString &right) {
+            return left.compare(right, Qt::CaseInsensitive) < 0;
+        });
+        for (const QString &name : std::as_const(parameterNames))
+            parameterDetails << QStringLiteral("%1=%2").arg(name, geometry.rawParameters.value(name).join(QStringLiteral(" | ")));
         geometry.unsupportedReason = shape
-            ? QStringLiteral("Unsupported or incomplete region shape '%1'.").arg(geometry.rawType)
+            ? QStringLiteral("Unsupported or incomplete region shape '%1'%2.")
+                  .arg(geometry.rawType,
+                       parameterDetails.isEmpty()
+                           ? QString()
+                           : QStringLiteral(" (%1)").arg(parameterDetails.join(QStringLiteral(", "))))
             : QStringLiteral("Region has no shape element.");
     }
     return geometry;

@@ -3854,12 +3854,14 @@ void CoreTests::readsRealSc2RegionXmlAndPreservesGeometry()
         "<region id=\"77\"><name value=\"Boss Floors\"/>"
         "<shape type=\"rect\"><quad value=\"0,0,10,10\"/></shape>"
         "<shape type=\"rect\"><quad value=\"30,0,40,10\"/></shape></region>"
+        "<region id=\"88\"><name value=\"Ramp\"/>"
+        "<shape type=\"diamond\"><center value=\"100,200\"/><width value=\"8\"/><height value=\"4\"/></shape></region>"
         "</Regions>");
 
     const sc2dh::region::RegionReadResult parsed = sc2dh::region::MapRegionRepository().parse(regions);
     QVERIFY2(parsed.success, qPrintable(parsed.errors.join(QStringLiteral("; "))));
     QVERIFY2(parsed.complete, qPrintable(parsed.warnings.join(QStringLiteral("; "))));
-    QCOMPARE(parsed.regions.size(), 3);
+    QCOMPARE(parsed.regions.size(), 4);
     QCOMPARE(parsed.regions.at(0).id, QStringLiteral("17"));
     QCOMPARE(parsed.regions.at(0).name, QStringLiteral("Spawn [Region #17]"));
     QCOMPARE(parsed.regions.at(0).geometry.kind, sc2dh::region::RegionShapeKind::Circle);
@@ -3876,6 +3878,17 @@ void CoreTests::readsRealSc2RegionXmlAndPreservesGeometry()
     QCOMPARE(parsed.regions.at(2).geometry.classify(5.0, 5.0), sc2dh::region::SpatialRelation::Inside);
     QCOMPARE(parsed.regions.at(2).geometry.classify(35.0, 5.0), sc2dh::region::SpatialRelation::Inside);
     QCOMPARE(parsed.regions.at(2).geometry.classify(20.0, 5.0), sc2dh::region::SpatialRelation::Outside);
+    const auto &diamond = parsed.regions.at(3).geometry;
+    QCOMPARE(diamond.kind, sc2dh::region::RegionShapeKind::Polygon);
+    QCOMPARE(diamond.rawType, QStringLiteral("diamond"));
+    QCOMPARE(diamond.points.size(), 4);
+    QCOMPARE(diamond.bounds.xMin, 96.0);
+    QCOMPARE(diamond.bounds.xMax, 104.0);
+    QCOMPARE(diamond.bounds.yMin, 198.0);
+    QCOMPARE(diamond.bounds.yMax, 202.0);
+    QCOMPARE(diamond.classify(100.0, 200.0), sc2dh::region::SpatialRelation::Inside);
+    QCOMPARE(diamond.classify(104.0, 200.0), sc2dh::region::SpatialRelation::Boundary);
+    QCOMPARE(diamond.classify(103.0, 201.0), sc2dh::region::SpatialRelation::Outside);
 }
 
 void CoreTests::realMapRegionReader()
