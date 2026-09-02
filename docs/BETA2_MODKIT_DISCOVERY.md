@@ -57,5 +57,6 @@ coordinates even when only approximate background alignment is available.
 - Level C M3/material rendering is not implemented.
 - The canvas uses a `QOpenGLWidget` viewport with cached static layers. The
   automated layout matrix records a valid context in automatic mode and with
-  `QT_OPENGL=software`; real-map first-paint timing remains to be measured.
+  `QT_OPENGL=software`; the required mission reached its first ready paint in
+  51,096 ms while loading 4,853 positioned objects off the UI thread.
 - Visual parity still requires comparison with the Editor on real maps.
