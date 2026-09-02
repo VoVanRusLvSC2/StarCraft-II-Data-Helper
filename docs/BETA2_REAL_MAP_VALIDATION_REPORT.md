@@ -23,6 +23,7 @@ Primary machine-readable evidence:
 
 - `target/diag/beta2-real-maps/final-run/manifest.json`
 - `target/diag/beta2-real-maps/final-run/aggregate-report-audited.json`
+- `target/diag/beta2-real-maps/final-run/source-hash-final-audit.json`
 - `target/diag/beta2-real-maps/final-run/editor-oracle/editor-oracle-audited.json`
 - `target/diag/beta2-real-maps/real-map-preview/real-map-preview.json`
 - `target/diag/beta2-real-maps/portable-smoke-f524c73/portable-smoke.json`
