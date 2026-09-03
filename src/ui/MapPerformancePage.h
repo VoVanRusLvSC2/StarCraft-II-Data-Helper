@@ -63,7 +63,7 @@ private:
     sc2dh::decor::DecorationSafetyContext decorationSafetyContextFromDoodadTable() const;
     void populateZoneTable(const QVector<sc2dh::decor::DecorZone> &zones);
     void populateDoodadTable(const QVector<sc2dh::decor::DoodadPlacement> &doodads);
-    void updateDoodadTableState(const sc2dh::decor::DecorationStreamingPlan &plan);
+    void updateDoodadTableState(const sc2dh::decor::DecorationVisibilityPlan &plan);
     QString detailTextForCell(const sc2dh::perf::MapPerformanceCell &cell) const;
 
     AnalysisResult m_result;
@@ -76,7 +76,7 @@ private:
     sc2dh::perf::MapPerformanceReport m_report;
     QVector<sc2dh::decor::DoodadPlacement> m_allDoodads;
     QVector<sc2dh::decor::DecorZone> m_decorZones;
-    sc2dh::decor::DecorationOptimizedArtifacts m_decorPreview;
+    sc2dh::decor::DecorationVisibilityArtifacts m_decorPreview;
     QLabel *m_summaryLabel = nullptr;
     QLabel *m_warningLabel = nullptr;
     QWidget *m_heatmap = nullptr;

@@ -228,6 +228,18 @@ public:
         update();
     }
 
+    void setDecorPlan(const sc2dh::decor::DecorationVisibilityPlan &plan)
+    {
+        sc2dh::decor::DecorationStreamingPlan displayPlan;
+        displayPlan.doodads = plan.doodads;
+        displayPlan.zones = plan.zones;
+        displayPlan.staticOnlyDoodads = plan.staticOnlyDoodads;
+        displayPlan.unassignedDoodads = plan.unassignedDoodads;
+        displayPlan.boundaryDoodads = plan.boundaryDoodads;
+        displayPlan.warnings = plan.warnings;
+        setDecorPlan(displayPlan);
+    }
+
     void setRegions(const QVector<sc2dh::region::MapRegion> &regions)
     {
         m_regions = regions;
@@ -851,52 +863,50 @@ QString decorDoodadLabel(const sc2dh::decor::DoodadPlacement &doodad)
         .arg(doodad.y, 0, 'f', 2);
 }
 
-QString decorationPreviewText(const sc2dh::decor::DecorationOptimizedArtifacts &artifacts,
+QString decorationPreviewText(const sc2dh::decor::DecorationVisibilityArtifacts &artifacts,
                               const QVector<sc2dh::decor::DecorZone> &zones,
                               const sc2dh::decor::GalaxyGenerationOptions &options)
 {
-    const sc2dh::decor::DecorationStreamingPlan &plan = artifacts.plan;
+    const sc2dh::decor::DecorationVisibilityPlan &plan = artifacts.plan;
     QString text;
     text += QStringLiteral("DECORATION STREAMING PREVIEW / 3.0 BETA\n");
     text += QStringLiteral("Function prefix: %1\n").arg(options.functionPrefix);
-    text += QStringLiteral("Actor creation is yielded automatically for responsive gameplay.\n\n");
+    text += QStringLiteral("Objects is preserved byte-for-byte. Existing doodad actors are controlled by ID.\n\n");
     text += QStringLiteral("How to use in Galaxy:\n");
-    text += QStringLiteral("  - Create/load zone: %1_Create_1(); or DecorOpt_CreateZone(1);\n").arg(options.functionPrefix);
-    text += QStringLiteral("  - Clear created actors from zone: %1_Clear_1(); or DecorOpt_ClearZone(1);\n").arg(options.functionPrefix);
-    text += QStringLiteral("  - Create all zones: %1_CreateAll(); or DecorOpt_CreateAll();\n").arg(options.functionPrefix);
-    text += QStringLiteral("  - Clear all created dynamic actors: %1_ClearAll(); or DecorOpt_ClearAll();\n").arg(options.functionPrefix);
-    text += QStringLiteral("  - Check loaded state: DecorOpt_IsZoneLoaded(1);\n\n");
+    text += QStringLiteral("  - Hide zone: %1_Hide_1(); or DecorOpt_HideZone(1);\n").arg(options.functionPrefix);
+    text += QStringLiteral("  - Restore zone: %1_Restore_1(); or DecorOpt_RestoreZone(1);\n").arg(options.functionPrefix);
+    text += QStringLiteral("  - Hide all zones: %1_HideAll(); or DecorOpt_HideAll();\n").arg(options.functionPrefix);
+    text += QStringLiteral("  - Restore all zones: %1_RestoreAll(); or DecorOpt_RestoreAll();\n").arg(options.functionPrefix);
+    text += QStringLiteral("  - Check hidden state: DecorOpt_IsZoneHidden(1);\n\n");
     text += QStringLiteral("Important:\n");
-    text += QStringLiteral("  - Create Decor-Optimized Map Copy removes listed dynamic visual doodads from Objects in the COPY only.\n");
+    text += QStringLiteral("  - Create Decor-Control Map Copy does not remove any doodad from Objects.\n");
     text += QStringLiteral("  - Original map is not modified.\n");
     text += QStringLiteral("  - Static-only doodads stay in Objects.\n\n");
 
     int assigned = 0;
     for (const sc2dh::decor::ZoneAssignment &zone : plan.zones)
         assigned += zone.doodadIndices.size();
-    text += QStringLiteral("Summary: %1 doodad(s), %2 will be moved to dynamic Galaxy actors, %3 static-only, %4 outside scope, %5 boundary/ambiguous.\n")
+    text += QStringLiteral("Summary: %1 doodad(s), %2 can be hidden/restored by Galaxy, %3 blocked, %4 outside scope, %5 boundary/ambiguous.\n")
                 .arg(plan.doodads.size())
                 .arg(assigned)
                 .arg(plan.staticOnlyDoodads.size())
                 .arg(plan.unassignedDoodads.size())
                 .arg(plan.boundaryDoodads.size());
-    text += QStringLiteral("Round-trip proof: %1 | Outside-scope preservation: %2\n\n")
-                .arg(artifacts.roundTripVerified ? QStringLiteral("PASS") : QStringLiteral("BLOCKED"),
-                     artifacts.outsideScopePreserved ? QStringLiteral("PASS") : QStringLiteral("BLOCKED"));
+    text += QStringLiteral("Objects preservation: %1\n\n")
+                .arg(artifacts.objectsPreserved ? QStringLiteral("PASS") : QStringLiteral("BLOCKED"));
 
-    text += QStringLiteral("ZONES / FUNCTIONS / DECOR THAT WILL BE REMOVED FROM OBJECTS\n");
+    text += QStringLiteral("ZONES / FUNCTIONS / EXISTING DECOR ACTORS\n");
     for (const sc2dh::decor::ZoneAssignment &zone : plan.zones) {
         text += QStringLiteral("\n[%1] %2\n").arg(zone.zoneId).arg(decorZoneName(zones, zone.zoneId));
-        text += QStringLiteral("Function: %1_%2()\n").arg(options.functionPrefix).arg(zone.zoneId);
-        text += QStringLiteral("API call: DecorOpt_CreateZone(%1)\n").arg(zone.zoneId);
-        text += QStringLiteral("Clear call: DecorOpt_ClearZone(%1)\n").arg(zone.zoneId);
+        text += QStringLiteral("Hide function: %1_Hide_%2()\n").arg(options.functionPrefix).arg(zone.zoneId);
+        text += QStringLiteral("Restore function: %1_Restore_%2()\n").arg(options.functionPrefix).arg(zone.zoneId);
         if (zone.doodadIndices.isEmpty()) {
             text += QStringLiteral("  - no dynamic doodads assigned\n");
             continue;
         }
         for (int doodadIndex : zone.doodadIndices) {
             if (doodadIndex >= 0 && doodadIndex < plan.doodads.size())
-                text += QStringLiteral("  - DELETE FROM OBJECTS COPY + recreate as actor: %1\n")
+                text += QStringLiteral("  - KEEP IN OBJECTS + control existing actor: %1\n")
                             .arg(decorDoodadLabel(plan.doodads.at(doodadIndex)));
         }
     }
@@ -915,7 +925,7 @@ QString decorationPreviewText(const sc2dh::decor::DecorationOptimizedArtifacts &
         }
     }
 
-    text += QStringLiteral("\nUNASSIGNED DYNAMIC DOODADS / NOT DELETED UNTIL ASSIGNED\n");
+    text += QStringLiteral("\nUNASSIGNED DOODADS / KEPT UNCHANGED\n");
     if (plan.unassignedDoodads.isEmpty()) {
         text += QStringLiteral("  - none\n");
     } else {
@@ -987,7 +997,7 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     title->setObjectName(QStringLiteral("panelTitle"));
     headerLayout->addWidget(title);
 
-    m_summaryLabel = new QLabel(tr("Choose a real map Region. Decor inside its exact shape can be removed from Objects in a copy and recreated by generated Galaxy actor functions."), header);
+    m_summaryLabel = new QLabel(tr("Choose a real map Region. Decor inside its exact shape stays in Objects and can be hidden or restored by generated Galaxy functions."), header);
     m_summaryLabel->setProperty("sc2dh.mapPerformanceRole", QStringLiteral("summary"));
     m_summaryLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
     m_summaryLabel->setWordWrap(true);
@@ -1063,8 +1073,8 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     decorControls->addLayout(form, 1);
 
     auto *buttonLayout = new QVBoxLayout();
-    m_previewButton = new QPushButton(tr("2. PREVIEW REMOVED DECOR + GALAXY"), decorGroup);
-    m_createCopyButton = new QPushButton(tr("3. CREATE OPTIMIZED MAP COPY"), decorGroup);
+    m_previewButton = new QPushButton(tr("2. PREVIEW DECOR CONTROL + GALAXY"), decorGroup);
+    m_createCopyButton = new QPushButton(tr("3. CREATE DECOR-CONTROL MAP COPY"), decorGroup);
     m_compressButton = new QPushButton(tr("MAXIMUM COMPATIBLE COMPRESSION"), decorGroup);
     m_previewButton->setObjectName(QStringLiteral("decorPreviewButton"));
     m_createCopyButton->setObjectName(QStringLiteral("decorCreateCopyButton"));
@@ -1072,8 +1082,8 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     m_previewButton->setMinimumHeight(44);
     m_createCopyButton->setMinimumHeight(44);
     m_compressButton->setMinimumHeight(44);
-    m_previewButton->setToolTip(tr("Calculate the exact decor removed from Objects and show the generated Galaxy functions."));
-    m_createCopyButton->setToolTip(tr("Create a new map archive. The original stays unchanged; selected safe visual doodads are removed only from the copy."));
+    m_previewButton->setToolTip(tr("Show existing decor actors controlled by generated Galaxy hide/restore functions."));
+    m_createCopyButton->setToolTip(tr("Create a new map archive with Galaxy control functions. The original and the copy's Objects entry stay unchanged."));
     m_compressButton->setToolTip(tr("Create a separate archive using verified MPQ compaction only. Assets and logical entry bytes are not removed or changed."));
     buttonLayout->addWidget(m_previewButton);
     buttonLayout->addWidget(m_createCopyButton);
@@ -1106,7 +1116,7 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     decorLayout->addWidget(selectedRegionsLabel);
     decorLayout->addWidget(m_zoneTable);
 
-    auto *doodadLabel = new QLabel(tr("Preview result: only decor inside the selected exact Regions is listed. Check Keep Static to exclude an item; the Action column states what will be removed from the Objects copy."), decorGroup);
+    auto *doodadLabel = new QLabel(tr("Preview result: only decor inside the selected exact Regions is listed. Check Keep Static to exclude an item; no decor is removed from Objects."), decorGroup);
     doodadLabel->setObjectName(QStringLiteral("inspectorSubtitle"));
     doodadLabel->setWordWrap(true);
     decorLayout->addWidget(doodadLabel);
@@ -1136,7 +1146,7 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     m_galaxyPreview->setObjectName(QStringLiteral("decorGalaxyPreview"));
     m_galaxyPreview->setReadOnly(true);
     m_galaxyPreview->setMinimumHeight(150);
-    m_galaxyPreview->setPlaceholderText(QStringLiteral("Preview will show: zone function names, doodads removed from Objects in the optimized copy, clear functions, and generated Galaxy code."));
+    m_galaxyPreview->setPlaceholderText(QStringLiteral("Preview will show: zone hide/restore functions, controlled existing doodads, and generated Galaxy code. Objects remains unchanged."));
     decorLayout->addWidget(m_galaxyPreview);
 
     connect(m_previewButton, &QPushButton::clicked, this, &MapPerformancePage::updateDecorPreview);
@@ -1863,7 +1873,7 @@ void MapPerformancePage::populateDoodadTable(const QVector<sc2dh::decor::DoodadP
     m_doodadTable->resizeColumnsToContents();
 }
 
-void MapPerformancePage::updateDoodadTableState(const sc2dh::decor::DecorationStreamingPlan &plan)
+void MapPerformancePage::updateDoodadTableState(const sc2dh::decor::DecorationVisibilityPlan &plan)
 {
     if (!m_doodadModel)
         return;
@@ -1886,11 +1896,11 @@ void MapPerformancePage::updateDoodadTableState(const sc2dh::decor::DecorationSt
         if (doodadIndex < 0 || doodadIndex >= plan.doodads.size())
             continue;
         if (zoneByDoodadIndex.contains(doodadIndex)) {
-            state->setText(QStringLiteral("Will be deleted from Objects copy; recreate in zone %1").arg(zoneByDoodadIndex.value(doodadIndex)));
+            state->setText(QStringLiteral("Keep in Objects; hide/restore actor in zone %1").arg(zoneByDoodadIndex.value(doodadIndex)));
         } else if (unassigned.contains(doodadIndex)) {
-            state->setText(QStringLiteral("Dynamic candidate, but not inside any zone; will stay in Objects"));
+            state->setText(QStringLiteral("Not inside a selected Region; stays unchanged"));
         } else {
-            const QString reason = plan.doodads.at(doodadIndex).staticOnlyReason;
+            const QString reason = plan.doodads.at(doodadIndex).visibilityStaticOnlyReason;
             state->setText(reason.isEmpty() ? QStringLiteral("Keep static in Objects") : reason);
         }
     }
@@ -1901,12 +1911,12 @@ void MapPerformancePage::updateDecorPreview()
 {
     if (!m_hasObjects) {
         m_decorPreview = {};
-        static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorPlan({});
+        static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorPlan(sc2dh::decor::DecorationVisibilityPlan{});
         m_decorSummaryLabel->setText(QStringLiteral("No readable Objects entry: open a map archive or extracted map folder with Objects first."));
         m_galaxyPreview->setPlainText(QStringLiteral(
             "NO OBJECTS ENTRY LOADED\n\n"
             "Open a .SC2Map/.SC2Mod archive or extracted map folder with the root Objects file.\n"
-            "After that this panel will list every ObjectDoodad, show which function creates each zone, and create a copy with dynamic decor removed from Objects.\n"));
+            "After that this panel will list every ObjectDoodad and publish Galaxy hide/restore functions without removing decor from Objects.\n"));
         m_createCopyButton->setEnabled(false);
         return;
     }
@@ -1915,15 +1925,15 @@ void MapPerformancePage::updateDecorPreview()
     static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorZones(m_decorZones);
     if (m_decorZones.isEmpty()) {
         m_decorPreview = {};
-        static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorPlan({});
+        static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorPlan(sc2dh::decor::DecorationVisibilityPlan{});
         m_decorSummaryLabel->setText(tr("No real map Region selected. Click an exact outlined Region on the map or click its row in the list."));
         m_galaxyPreview->setPlainText(QStringLiteral(
             "SELECT A MAP REGION FIRST\n\n"
             "Only exact Regions loaded from the map are accepted.\n"
             "Then Preview will show:\n"
             "- NAME_OUT_FUNK_N() function names;\n"
-            "- which doodads will be deleted from Objects in the optimized copy;\n"
-            "- DecorOpt_ClearZone(N) / DecorOpt_ClearAll();\n"
+            "- which existing doodad actors Galaxy can hide and restore;\n"
+            "- DecorOpt_HideZone(N) / DecorOpt_RestoreZone(N);\n"
             "- full generated Galaxy script.\n"));
         m_createCopyButton->setEnabled(false);
         return;
@@ -1936,19 +1946,19 @@ void MapPerformancePage::updateDecorPreview()
     options.batchLimit = InternalActorBatchLimit;
 
     const sc2dh::decor::DecorationSafetyContext safetyContext = decorationSafetyContextFromDoodadTable();
-    m_decorPreview = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(m_objectsBytes,
-                                                                                         m_decorZones,
-                                                                                         safetyContext,
-                                                                                         options);
+    m_decorPreview = sc2dh::decor::DecorationStreamingPlanner().createVisibilityArtifacts(m_objectsBytes,
+                                                                                           m_decorZones,
+                                                                                           safetyContext,
+                                                                                           options);
     static_cast<MapHeatmapWidget *>(m_heatmap)->setDecorPlan(m_decorPreview.plan);
-    const sc2dh::decor::DecorationStreamingPlan &plan = m_decorPreview.plan;
+    const sc2dh::decor::DecorationVisibilityPlan &plan = m_decorPreview.plan;
     populateDoodadTable(plan.doodads);
     updateDoodadTableState(plan);
     int dynamicAssigned = 0;
     for (const sc2dh::decor::ZoneAssignment &assignment : plan.zones)
         dynamicAssigned += assignment.doodadIndices.size();
 
-    QString summary = QStringLiteral("%1 doodad(s), %2 will be deleted from Objects in the optimized copy and recreated by Galaxy, %3 static-only, %4 unassigned. Prefix/function example: %5_1(). Runtime yielding is automatic.")
+    QString summary = QStringLiteral("%1 doodad(s), %2 can be hidden/restored by Galaxy, %3 blocked, %4 outside selected Regions. Objects will remain byte-identical. Function example: %5_Hide_1().")
                           .arg(plan.doodads.size())
                           .arg(dynamicAssigned)
                           .arg(plan.staticOnlyDoodads.size())
@@ -1984,7 +1994,7 @@ QString MapPerformancePage::defaultDecorOutputPath() const
         return {};
     const QFileInfo info(source);
     const QString suffix = info.suffix().isEmpty() ? QStringLiteral("SC2Map") : info.suffix();
-    return QDir(info.absolutePath()).absoluteFilePath(QStringLiteral("%1_DecorOptimized.%2").arg(info.completeBaseName(), suffix));
+    return QDir(info.absolutePath()).absoluteFilePath(QStringLiteral("%1_DecorControl.%2").arg(info.completeBaseName(), suffix));
 }
 
 void MapPerformancePage::createDecorOptimizedMapCopy()
@@ -1992,7 +2002,7 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
     const QString source = sourceArchivePath();
     if (source.isEmpty()) {
         QMessageBox::warning(this,
-                             QStringLiteral("Create Decor-Optimized Map Copy"),
+                             QStringLiteral("Create Decor-Control Map Copy"),
                              QStringLiteral("This action currently requires an opened .SC2Map/.SC2Mod archive source. The original map will not be modified."));
         return;
     }
@@ -2000,13 +2010,13 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
     const QVector<sc2dh::decor::DecorZone> zones = zonesFromModel();
     if (zones.isEmpty()) {
         QMessageBox::warning(this,
-                             QStringLiteral("Create Decor-Optimized Map Copy"),
+                             QStringLiteral("Create Decor-Control Map Copy"),
                              QStringLiteral("Create at least one decoration zone first."));
         return;
     }
 
     const QString selectedOutput = QFileDialog::getSaveFileName(this,
-                                                                QStringLiteral("Create Decor-Optimized Map Copy"),
+                                                                QStringLiteral("Create Decor-Control Map Copy"),
                                                                 defaultDecorOutputPath(),
                                                                 QStringLiteral("SC2 archives (*.SC2Map *.SC2Mod *.SC2Campaign);;All files (*)"));
     if (selectedOutput.isEmpty())
@@ -2034,6 +2044,7 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
         : m_prefixEdit->text().trimmed();
     request.galaxyOptions.batchLimit = InternalActorBatchLimit;
     request.safetyContext = decorationSafetyContextFromDoodadTable();
+    request.mode = sc2dh::decor::DecorationOptimizationMode::VisibilityOnly;
     request.overwriteExisting = overwrite;
 
     m_createCopyButton->setEnabled(false);
@@ -2066,9 +2077,11 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
             return;
         }
 
-        QString message = QStringLiteral("Created structural-verified copy:\n%1\n\nRemoved dynamic visual doodads: %2\nFull re-analysis: %3 file(s), %4 data node(s).\nOriginal SHA-256 unchanged: %5")
+        QString message = QStringLiteral("Created structural-verified decor-control copy:\n%1\n\nRemoved doodads: %2\nGalaxy-controlled existing doodads: %3\nObjects byte-preserved: %4\nFull re-analysis: %5 file(s), %6 data node(s).\nOriginal SHA-256 unchanged: %7")
                               .arg(QDir::toNativeSeparators(result.outputArchivePath))
                               .arg(result.removedDoodads)
+                              .arg(result.visibilityControlledDoodads)
+                              .arg(result.objectsPreserved ? QStringLiteral("PASS") : QStringLiteral("FAIL"))
                               .arg(result.verifiedScannedFiles)
                               .arg(result.verifiedDataNodes)
                               .arg(result.sourceUnchanged ? QStringLiteral("PASS") : QStringLiteral("FAIL"));
@@ -2079,7 +2092,7 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
         operation.outcome = OperationOutcome::Succeeded;
         operation.title = tr("Create decor-optimized map copy");
         operation.selected = m_decorPreview.plan.doodads.size();
-        operation.applied = result.removedDoodads;
+        operation.applied = result.visibilityControlledDoodads;
         operation.skipped = m_decorPreview.plan.unassignedDoodads.size();
         operation.blocked = m_decorPreview.plan.staticOnlyDoodads.size();
         operation.outputPath = result.outputArchivePath;
