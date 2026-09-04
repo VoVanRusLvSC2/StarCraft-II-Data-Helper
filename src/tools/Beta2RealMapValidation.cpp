@@ -760,7 +760,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationVersion(QStringLiteral(SC2DH_VERSION_NUMBER));
 
     QCommandLineParser parser;
-    parser.setApplicationDescription(QStringLiteral("StarCraft-II-Data-Helper 3.0 Beta 2 real-map validation harness"));
+    parser.setApplicationDescription(QStringLiteral("StarCraft-II-Data-Helper 3.0 Beta 3 real-map validation harness"));
     parser.addHelpOption();
     parser.addVersionOption();
     const QCommandLineOption corpusOption(QStringLiteral("corpus"), QStringLiteral("Recursively scan this corpus."), QStringLiteral("folder"));

@@ -6,7 +6,7 @@ project(SC2DataHelper VERSION 3.0.0 LANGUAGES CXX)
 # Consumers that compare versions must use SC2DH_VERSION_NUMBER, which remains
 # a valid QVersionNumber / installer / release-tag value.
 set(SC2DH_VERSION_NUMBER "${PROJECT_VERSION}")
-set(SC2DH_VERSION_LABEL "3.0 Beta 2")
+set(SC2DH_VERSION_LABEL "3.0 Beta 3")
 set(SC2DH_GUI_TITLE "StarCraft-II-Data-Helper ${SC2DH_VERSION_LABEL}")
 
 function(sc2dh_apply_version_definitions target)
