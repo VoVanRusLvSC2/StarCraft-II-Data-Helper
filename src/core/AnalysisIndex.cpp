@@ -1,3 +1,4 @@
+#include "core/CatalogProtection.h"
 #include "core/AnalysisIndex.h"
 
 AnalysisIndex::AnalysisIndex(const AnalysisResult &analysis)
@@ -14,5 +15,5 @@ AnalysisIndex::AnalysisIndex(const AnalysisResult &analysis)
 
 QString AnalysisIndex::typeIdKey(const QString &elementName, const QString &id)
 {
-    return elementName.toLower() + QChar(0x1f) + id.toLower();
+    return sc2dh::catalogIdentityKey(elementName, id);
 }

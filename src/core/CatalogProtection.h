@@ -9,6 +9,7 @@
 
 namespace sc2dh
 {
+QString structuralCatalogIdentityScope(const QString &elementName);
 
 inline QString catalogTokenKey(const QString &token)
 {
@@ -243,6 +244,8 @@ inline bool isSafeAutomaticObjectId(const QString &id)
 
 inline QString catalogIdentityScope(const QString &elementName)
 {
+    const QString structural = structuralCatalogIdentityScope(elementName);
+    if (!structural.isEmpty()) return structural;
     const QString type = elementName.trimmed().toCaseFolded();
     if (type.isEmpty())
         return {};

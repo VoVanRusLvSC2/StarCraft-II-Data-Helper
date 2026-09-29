@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Catalog>
+    <CUnit id="SC2DHOverrideProbe" parent="Marine">
+        <LifeMax value="330"/>
+    </CUnit>
+</Catalog>

@@ -1,8 +1,14 @@
+#include "core/CatalogLinkSchema.h"
 #include "core/AnalysisModels.h"
 
 #include <QCryptographicHash>
+#include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QSettings>
+
+#include <algorithm>
 
 int AnalysisResult::totalXmlFiles() const
 {
@@ -75,6 +81,63 @@ SourceRevision captureSourceRevision(const QString &filePath, QString *errorMess
     const QFileInfo info(file);
     revision.size = info.exists() ? info.size() : -1;
     revision.lastModifiedUtc = info.lastModified().toUTC();
+    if (info.isDir())
+    {
+        const QString root = QDir::fromNativeSeparators(info.canonicalFilePath());
+        if (info.isSymLink() || root.isEmpty())
+        {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Dependency folder is not a canonical directory: %1").arg(revision.filePath);
+            return revision;
+        }
+        QStringList files;
+        QDirIterator iterator(root, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot,
+                              QDirIterator::Subdirectories);
+        while (iterator.hasNext())
+        {
+            iterator.next();
+            const QFileInfo child = iterator.fileInfo();
+            const QString canonical = QDir::fromNativeSeparators(child.canonicalFilePath());
+            if (child.isSymLink() || canonical.isEmpty()
+                || !canonical.startsWith(root + QLatin1Char('/'), Qt::CaseInsensitive)
+                || (!child.isFile() && !child.isDir()))
+            {
+                if (errorMessage)
+                    *errorMessage = QStringLiteral("Dependency folder contains an unsupported or escaping entry: %1")
+                        .arg(iterator.filePath());
+                return revision;
+            }
+            if (child.isFile()) files.append(canonical);
+        }
+        std::sort(files.begin(), files.end(), [&](const QString &a, const QString &b) {
+            return QDir(root).relativeFilePath(a) < QDir(root).relativeFilePath(b);
+        });
+        QCryptographicHash folderHash(QCryptographicHash::Sha256);
+        revision.size = 0;
+        for (const QString &childPath : files)
+        {
+            QString childError;
+            const SourceRevision child = captureSourceRevision(childPath, &childError);
+            if (!childError.isEmpty() || child.sha256.isEmpty())
+            {
+                if (errorMessage)
+                    *errorMessage = childError.isEmpty()
+                        ? QStringLiteral("Dependency folder entry could not be hashed: %1").arg(childPath)
+                        : childError;
+                revision.sha256.clear();
+                return revision;
+            }
+            const QByteArray relative = QDir(root).relativeFilePath(childPath).replace('\\', '/').toUtf8();
+            folderHash.addData(relative);
+            folderHash.addData("\0", 1);
+            folderHash.addData(QByteArray::number(child.size));
+            folderHash.addData("\0", 1);
+            folderHash.addData(child.sha256);
+            revision.size += child.size;
+        }
+        revision.sha256 = folderHash.result();
+        return revision;
+    }
     if (!info.exists() || !info.isFile())
     {
         if (errorMessage)
@@ -128,6 +191,17 @@ bool sourceRevisionMatches(const SourceRevision &revision, QString *reason)
         return false;
     }
     return true;
+}
+
+QByteArray optimizationSettingsFingerprint()
+{
+    QSettings settings;
+    settings.sync();
+    const QByteArray canonical = QByteArrayLiteral("optimization-settings-v1\nclosedProjectMode=")
+        + (settings.value(QStringLiteral("optimization/closedProjectMode"), false).toBool() ? "1" : "0")
+        + QByteArrayLiteral("\nbackupEnabled=")
+        + (settings.value(QStringLiteral("backup/enabled"), true).toBool() ? "1" : "0");
+    return QCryptographicHash::hash(canonical, QCryptographicHash::Sha256);
 }
 
 void updateAnalysisCompleteness(AnalysisResult *result)
@@ -202,6 +276,17 @@ DestructiveOperationPermission canApplyDestructiveChanges(const AnalysisResult &
     {
         permission.errorCode = OperationErrorCode::SourceChanged;
         permission.reason = QStringLiteral("Analysis source revision is unavailable. Re-analysis is required.");
+        return permission;
+    }
+    if (!analysis.catalogSchemaRevision.isEmpty() && analysis.catalogSchemaRevision != sc2dh::catalogSchemaFingerprint()) {
+        permission.errorCode = OperationErrorCode::SourceChanged;
+        permission.reason = QStringLiteral("Catalog schema or GUI type bindings changed after analysis. Re-analysis is required.");
+        return permission;
+    }
+    if (analysis.optimizationSettingsRevision.isEmpty()
+        || analysis.optimizationSettingsRevision != optimizationSettingsFingerprint()) {
+        permission.errorCode = OperationErrorCode::SourceChanged;
+        permission.reason = QStringLiteral("Optimization or backup settings changed after analysis. Re-analysis is required.");
         return permission;
     }
     for (const SourceRevision &revision : analysis.sourceRevisions)

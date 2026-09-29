@@ -1,3 +1,4 @@
+#include "core/XmlParsePolicy.h"
 #include "core/CatalogEnumRepair.h"
 
 #include <pugixml.hpp>
@@ -116,7 +117,7 @@ bool repairKnownCatalogEnumDamage(QByteArray *xmlBytes, int *changes, QString *e
         return true;
 
     pugi::xml_document document;
-    const pugi::xml_parse_result parsed = document.load_buffer(xmlBytes->constData(), size_t(xmlBytes->size()));
+    const pugi::xml_parse_result parsed = document.load_buffer(xmlBytes->constData(), size_t(xmlBytes->size()), sc2dh::xmlParseFlags);
     if (!parsed) {
         if (errorMessage)
             *errorMessage = QStringLiteral("Unable to parse XML for catalog enum repair: %1").arg(QString::fromUtf8(parsed.description()));

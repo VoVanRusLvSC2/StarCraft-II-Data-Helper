@@ -35,6 +35,7 @@ class BackupManager
 public:
     using StagedValidator = std::function<bool(const QString &stagingFolder, QString *errorMessage)>;
     using CommittedValidator = std::function<bool(QString *errorMessage)>;
+    using AfterFileCommit = std::function<void(int fileIndex, const QString &relativePath)>;
 
     bool createBackup(const QString &filePath, QString *backupPath, QString *errorMessage,
                       bool requirePersistentBackup = false) const;
@@ -53,5 +54,7 @@ public:
         const QString &plannedChangesText,
         const StagedValidator &stagedValidator = {},
         const CommittedValidator &committedValidator = {},
-        const QString &failureInjectionStep = {}) const;
+        const QString &failureInjectionStep = {},
+        const AfterFileCommit &afterFileCommit = {},
+        const QByteArray &expectedSettingsRevision = {}) const;
 };

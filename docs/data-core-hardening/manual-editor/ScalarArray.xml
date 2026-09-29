@@ -1,0 +1,7 @@
+<Catalog>
+<CUnit id="AuditScalarBase" default="1"><LifeMax value="100"/></CUnit>
+<CUnit id="AuditScalarChild" parent="AuditScalarBase"><LifeMax value="100"/></CUnit>
+<CEffectDamage id="AuditDamage"/>
+<CEffectSet id="AuditSetBase" default="1"><EffectArray value="AuditDamage"/></CEffectSet>
+<CEffectSet id="AuditSetChild" parent="AuditSetBase"><EffectArray value="AuditDamage"/></CEffectSet>
+</Catalog>

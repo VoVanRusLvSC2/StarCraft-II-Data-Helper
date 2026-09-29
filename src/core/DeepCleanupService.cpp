@@ -1,3 +1,5 @@
+#include "core/CatalogLinkSchema.h"
+#include "core/XmlParsePolicy.h"
 #include "core/DeepCleanupService.h"
 
 #include "core/AnalysisIndex.h"
@@ -183,10 +185,18 @@ namespace
 
         const pugi::xml_attribute termsAttr = node.attribute("Terms");
         const pugi::xml_attribute sendAttr = node.attribute("Send");
-        const QString terms = QString::fromUtf8(termsAttr.value()).trimmed();
-        const QString send = QString::fromUtf8(sendAttr.value()).trimmed();
-        const bool missingTerms = !termsAttr || terms.isEmpty();
-        const bool missingSend = !sendAttr || send.isEmpty();
+        const auto carrierValue = [&](const char *name, pugi::xml_attribute attribute) {
+            if (attribute && !QString::fromUtf8(attribute.value()).trimmed().isEmpty())
+                return QString::fromUtf8(attribute.value()).trimmed();
+            const pugi::xml_node child = node.child(name);
+            if (child.attribute("value"))
+                return QString::fromUtf8(child.attribute("value").value()).trimmed();
+            return QString::fromUtf8(child.child_value()).trimmed();
+        };
+        const QString terms = carrierValue("Terms", termsAttr);
+        const QString send = carrierValue("Send", sendAttr);
+        const bool missingTerms = terms.isEmpty();
+        const bool missingSend = send.isEmpty();
 
         if (missingTerms && missingSend)
             return QStringLiteral("Actor event has no triggering Terms and no Send action.");
@@ -241,10 +251,10 @@ namespace
                 candidate.detail = xml.left(600);
                 if (existing == 0)
                 {
-                    candidate.action = DeepCleanupAction::RemoveXmlNode;
-                    candidate.state = CandidateState::Safe;
-                    candidate.recommended = true;
-                    candidate.reason = QStringLiteral("Actor event references only missing typed IDs: %1").arg(refs.join(QStringLiteral(", ")));
+                    candidate.action = DeepCleanupAction::ReportOnly;
+                    candidate.state = CandidateState::Risky;
+                    candidate.recommended = false;
+                    candidate.reason = QStringLiteral("Actor targets are absent from the local tree; dependency/macro resolution is not established: %1").arg(refs.join(QStringLiteral(", ")));
                     candidates->append(candidate);
                     return;
                 }
@@ -272,7 +282,7 @@ namespace
         {
             pugi::xml_document document;
             const QByteArray bytes = it.value().toUtf8();
-            if (!document.load_buffer(bytes.constData(), size_t(bytes.size())))
+            if (!document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags))
                 continue;
             for (const DataNode &node : analysis.nodes)
             {
@@ -344,8 +354,31 @@ namespace
                 candidate.label = QStringLiteral("%1.%2").arg(node.id, QString::fromUtf8(child.name()));
                 candidate.xmlLocation = node.originalLocation + QLatin1Char('/') + sc2dh::xmlcleanup::locationSegmentForNode(child);
                 candidate.reason = QStringLiteral("Child XML node is identical to inherited parent object %1.").arg(parent->id);
+                const QString childName=QString::fromUtf8(child.name());
+                const auto resolvedAt=[&](const DataNode &owner,const QString &location) -> const sc2dh::ResolvedValue * {
+                    for(const auto &value:owner.resolvedValues)
+                        if(value.field.path==location && value.field.carrier==QStringLiteral("value"))
+                            return &value;
+                    return nullptr;
+                };
+                const QString parentLocation=parent->originalLocation+QLatin1Char('/')
+                    +sc2dh::xmlcleanup::locationSegmentForNode(parentRoot.child(child.name()));
+                const auto *before=resolvedAt(node,candidate.xmlLocation);
+                const auto *afterRemoval=resolvedAt(*parent,parentLocation);
+                const bool scalarProof=before && afterRemoval && before->known && afterRemoval->known
+                    && before->presence==sc2dh::ValuePresence::Present
+                    && afterRemoval->presence==sc2dh::ValuePresence::Present
+                    && before->declaration.object.id==node.id
+                    && before->effective==afterRemoval->effective
+                    && node.resolutionIssues.isEmpty() && parent->resolutionIssues.isEmpty();
+                const bool unproved=!sc2dh::scalarCatalogField(node.elementName,childName,false) || childName.contains(QStringLiteral("Array")) || child.attribute("index") || child.attribute("removed") || childName==QStringLiteral("On") || node.serializedXml.contains(QStringLiteral("<?token")) || parent->serializedXml.contains(QStringLiteral("<?token")) || !scalarProof;
+                if(unproved) {
+                    candidate.action=DeepCleanupAction::ReportOnly; candidate.state=CandidateState::Risky;
+                    candidate.reason=QStringLiteral("Equal raw XML lacks a unique, matching effective scalar proof.");
+                }
+
                 candidate.detail = serializeNode(child).left(600);
-                candidate.recommended = true;
+                candidate.recommended = candidate.state == CandidateState::Safe;
                 candidates->append(candidate);
             }
         }
@@ -586,8 +619,29 @@ void DeepCleanupService::populateCandidates(AnalysisResult *analysis) const
             candidate.xmlLocation = node.originalLocation;
             candidate.attributeName = attr;
             candidate.reason = QStringLiteral("Attribute equals the local parent object value (%1).").arg(parent->id);
+            const auto resolvedAttribute=[&](const DataNode &owner) -> const sc2dh::ResolvedValue * {
+                for(const auto &value:owner.resolvedValues)
+                    if(value.field.path==owner.originalLocation && value.field.carrier==attr)
+                        return &value;
+                return nullptr;
+            };
+            const auto *before=resolvedAttribute(node);
+            const auto *afterRemoval=resolvedAttribute(*parent);
+            const bool scalarProof=before && afterRemoval && before->known && afterRemoval->known
+                && before->presence==sc2dh::ValuePresence::Present
+                && afterRemoval->presence==sc2dh::ValuePresence::Present
+                && before->declaration.object.id==node.id
+                && before->effective==afterRemoval->effective
+                && node.resolutionIssues.isEmpty() && parent->resolutionIssues.isEmpty();
+            if(!sc2dh::scalarCatalogField(node.elementName,attr,true) || !scalarProof
+                || node.serializedXml.contains(QStringLiteral("<?token"))
+                || parent->serializedXml.contains(QStringLiteral("<?token"))) {
+                candidate.action=DeepCleanupAction::ReportOnly; candidate.state=CandidateState::Risky;
+                candidate.reason=QStringLiteral("Scalar inheritance proof is unavailable for this field/token context.");
+            }
+
             candidate.detail = QStringLiteral("%1=\"%2\"").arg(attr, it.value());
-            candidate.recommended = true;
+            candidate.recommended = candidate.state==CandidateState::Safe;
             append(candidate);
         }
     }
@@ -782,7 +836,7 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
         const QByteArray bytes = file.readAll();
         file.close();
         pugi::xml_document document;
-        const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+        const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
         if (!parsed)
         {
             result.error = QStringLiteral("Unable to parse XML for cleanup: %1").arg(parsed.description());
@@ -875,7 +929,7 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
             }
             const QByteArray bytes = file.readAll();
             pugi::xml_document document;
-            const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+            const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
             if (!parsed)
             {
                 if (validationError)
@@ -898,7 +952,7 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
             }
             const QByteArray bytes = file.readAll();
             pugi::xml_document document;
-            const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+            const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
             if (!parsed)
             {
                 if (validationError)
@@ -938,7 +992,7 @@ DeepCleanupApplyResult DeepCleanupService::apply(const AnalysisResult &analysis,
 
     const FolderSaveTransactionResult transaction = BackupManager().applyFolderTransaction(
         rootFolder, changes, analysis.analysisReportText, analysis.plannedChangesReportText,
-        stagedValidator, committedValidator);
+        stagedValidator, committedValidator, {}, {}, analysis.optimizationSettingsRevision);
     result.backupFolder = transaction.backupFolder;
     if (!transaction.success)
     {

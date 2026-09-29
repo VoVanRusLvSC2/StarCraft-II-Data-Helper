@@ -52,9 +52,9 @@ QString buildSummaryText(const AnalysisResult &result)
         else ++allowedBodies;
     }
     const QString destructiveState = result.completeness == AnalysisCompleteness::Complete
-        ? QStringLiteral("AVAILABLE")
+        ? QStringLiteral("AVAILABLE FOR SUPPORTED CANDIDATES")
         : QStringLiteral("BLOCKED");
-    return QStringLiteral("Analysis: %1 | Destructive optimization: %2 | %3 files scanned | %4 XML files | %5 objects | %6 automatic merges | %7 manual duplicate reviews | %8 allowed body matches | %9 cleanup candidates")
+    return QStringLiteral("Source coverage: %1 | Destructive optimization: %2 | %3 files scanned | %4 XML files | %5 objects | %6 automatic merges | %7 manual duplicate reviews | %8 allowed body matches | %9 cleanup candidates")
         .arg(analysisCompletenessName(result.completeness), destructiveState)
         .arg(result.totalFilesScanned())
         .arg(result.totalXmlFiles())

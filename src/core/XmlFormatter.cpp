@@ -1,3 +1,4 @@
+#include "core/XmlParsePolicy.h"
 #include "core/XmlFormatter.h"
 
 #include <pugixml.hpp>
@@ -7,7 +8,7 @@
 QString XmlFormatter::formatDocument(const QByteArray &xmlBytes, QString *errorMessage) const
 {
     pugi::xml_document document;
-    const pugi::xml_parse_result result = document.load_buffer(xmlBytes.constData(), static_cast<size_t>(xmlBytes.size()));
+    const pugi::xml_parse_result result = document.load_buffer(xmlBytes.constData(), static_cast<size_t>(xmlBytes.size()), sc2dh::xmlParseFlags);
     if (!result)
     {
         if (errorMessage)

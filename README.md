@@ -1,5 +1,9 @@
 # StarCraft II Data Helper
 
+> **ПРОЕКТ БЫЛ ОСТАНОВЛЕН.** Mod Kit покрывает большую часть его функциональности. Вы можете использовать **StarCraft II Data Helper Beta 4.0**, если у вас не установлен Mod Kit или вам важна версия с графическим интерфейсом (GUI). Эта бета-версия работает, но дальнейшее развитие проекта остановлено; перед применением изменений проверяйте предварительный просмотр и сохраняйте резервную копию карты или мода.
+>
+> **Development has stopped.** Mod Kit covers much of this tool's functionality. Beta 4.0 remains available if you do not have Mod Kit installed or prefer a GUI. Review changes and keep a backup before applying them.
+
 StarCraft II Data Helper is a Windows desktop tool for analyzing and optimizing
 StarCraft II catalog XML in `.SC2Map`, `.SC2Mod`, extracted component folders,
 and standalone XML files.

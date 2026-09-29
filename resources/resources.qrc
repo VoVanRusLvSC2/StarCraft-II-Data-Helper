@@ -143,6 +143,8 @@
   </qresource>
   <qresource prefix="/">
     <file>catalog_link_schema.tsv</file>
+    <file>catalog_type_index.json</file>
+    <file>gui_type_bindings.json</file>
     <file>styles/dark.qss</file>
     <file>styles/dark/00_foundation.qss</file>
     <file>styles/dark/10_controls.qss</file>

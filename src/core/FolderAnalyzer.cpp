@@ -1,3 +1,7 @@
+#include "core/ScannedFileReader.h"
+#include "core/CatalogDataModel.h"
+#include "core/DependencySourceResolver.h"
+#include "core/LayeredDeclarationIndex.h"
 #include "core/FolderAnalyzer.h"
 
 #include "core/CatalogLinkSchema.h"
@@ -206,7 +210,7 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
         const DataNode &node = result->nodes[i];
         if (!node.id.isEmpty())
         {
-            idGroups[node.id].append(i);
+            idGroups[sc2dh::catalogIdentityKey(node.elementName, node.id)].append(i);
         }
         if (!node.elementName.isEmpty() && !node.contentHash.isEmpty() && !isProtectedObject(node)
             && sc2dh::isSafeAutomaticObjectId(node.id))
@@ -233,7 +237,7 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
         }
 
         DuplicateIdGroup group;
-        group.id = it.key();
+        group.id = result->nodes[it.value().front()].id;
         group.nodeIndices = it.value();
 
         QSet<QString> files;
@@ -308,65 +312,62 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
         }
     }
 
+
     QHash<QString, int> inboundReferences;
     QHash<QString, int> dataCollectionReferences;
-    QHash<QString, QStringList> inboundSources;
-    QHash<QString, QStringList> outboundTargets;
-    QHash<QString, QStringList> collectionMemberships;
-    for (const DataNode &sourceNode : result->nodes)
-    {
-        for (const QString &reference : sourceNode.referencedIds)
-        {
-            if (!reference.isEmpty() && reference != sourceNode.id)
-            {
-                if (sourceNode.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive))
-                {
-                    ++dataCollectionReferences[reference];
-                    collectionMemberships[reference].append(sourceNode.id);
-                }
-                else
-                {
-                    ++inboundReferences[reference];
-                    inboundSources[reference].append(sourceNode.id);
-                    outboundTargets[sourceNode.id].append(reference);
+    QHash<QString, QStringList> inboundSources, outboundTargets, collectionMemberships;
+    QHash<QString, QVector<int>> scopedNodes, unscopedNodes;
+    for (int i=0;i<result->nodes.size();++i) {
+        const auto &node=result->nodes[i];
+        if (node.id.isEmpty()) continue;
+        scopedNodes[sc2dh::catalogIdentityKey(node.elementName,node.id)].append(i);
+        unscopedNodes[node.id.toCaseFolded()].append(i);
+    }
+    const auto targetsFor = [&](const QString &reference) {
+        return reference.startsWith(QStringLiteral("*")+QChar(0x1f))
+            ? unscopedNodes.value(reference.section(QChar(0x1f),1)) : scopedNodes.value(reference);
+    };
+    for (const auto &sourceNode:result->nodes) {
+        const QString sourceKey=sc2dh::catalogIdentityKey(sourceNode.elementName,sourceNode.id);
+        for (const QString &reference:sourceNode.referenceKeys) {
+            for(int targetIndex:targetsFor(reference)) {
+                const auto &target=result->nodes[targetIndex];
+                const QString targetKey=sc2dh::catalogIdentityKey(target.elementName,target.id);
+                if(sourceKey==targetKey) continue;
+                if(sourceNode.elementName.startsWith(QStringLiteral("CDataCollection"),Qt::CaseInsensitive)) {
+                    ++dataCollectionReferences[targetKey]; collectionMemberships[targetKey].append(sourceNode.id);
+                } else {
+                    ++inboundReferences[targetKey]; inboundSources[targetKey].append(sourceNode.id);
+                    outboundTargets[sourceKey].append(target.id);
                 }
             }
         }
     }
 
     QHash<QString, int> scriptReferences;
+    QHash<QString, QStringList> blockingScriptSources;
     QHash<QString, QStringList> externalSources;
-    QSet<QString> scriptReferenceIds;
-    for (const DataNode &node : result->nodes)
-        if (!node.id.isEmpty() && sc2dh::isSafeAutomaticObjectId(node.id))
-            scriptReferenceIds.insert(node.id);
-    for (const ScannedFileInfo &fileInfo : result->scannedFiles)
-    {
-        if (fileInfo.isXml || !fileInfo.isSc2DataLike || scriptReferenceIds.isEmpty())
-            continue;
-        QFile file(fileInfo.filePath);
-        if (!file.open(QIODevice::ReadOnly))
-            continue;
-        const QString text = QString::fromUtf8(file.readAll());
-        const QHash<QString, int> matchesById = countKnownScriptTokens(text, scriptReferenceIds);
-        for (auto match = matchesById.cbegin(); match != matchesById.cend(); ++match) {
-            scriptReferences[match.key()] += match.value();
-            if (match.value() > 0)
-                externalSources[match.key()].append(QFileInfo(fileInfo.filePath).fileName());
-        }
-    }
     sc2dh::refs::UnifiedReferenceIndex unifiedReferences;
     unifiedReferences.build(*result);
+    result->incompleteSources += unifiedReferences.coverageIssues();
     for (const sc2dh::refs::ReferenceRecord &reference : unifiedReferences.records()) {
         if (reference.targetId.isEmpty())
             continue;
         const bool rootReference =
             reference.kind == sc2dh::refs::ReferenceKind::ScriptText
             || reference.kind == sc2dh::refs::ReferenceKind::PlacementRoot
-            || reference.kind == sc2dh::refs::ReferenceKind::BinaryUnconfirmed;
+            || reference.kind == sc2dh::refs::ReferenceKind::BinaryUnconfirmed
+            || (reference.kind == sc2dh::refs::ReferenceKind::TypedXml && reference.strength == sc2dh::refs::ReferenceStrength::Blocking);
         if (!rootReference)
             continue;
-        ++scriptReferences[reference.targetId];
+        const QVector<int> targetIndices=reference.targetCatalog.isEmpty()
+            ? unscopedNodes.value(reference.targetId.toCaseFolded())
+            : scopedNodes.value(reference.targetCatalog+QChar(0x1f)+reference.targetId.toCaseFolded());
+        for(int targetIndex:targetIndices) {
+            const auto &target=result->nodes[targetIndex];const QString targetKey=sc2dh::catalogIdentityKey(target.elementName,target.id);
+            ++scriptReferences[targetKey];
+            if(reference.strength == sc2dh::refs::ReferenceStrength::Blocking)blockingScriptSources[targetKey].append(reference.detail);
+        }
         QString source = reference.sourceFile;
         if (reference.lineNumber > 0)
             source += QStringLiteral(":%1").arg(reference.lineNumber);
@@ -374,7 +375,9 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
             source += QStringLiteral(" (binary non-rewritable)");
         else if (reference.kind == sc2dh::refs::ReferenceKind::PlacementRoot)
             source += QStringLiteral(" (placement root)");
-        externalSources[reference.targetId].append(source);
+        for(int targetIndex:targetIndices) {
+            const auto &target=result->nodes[targetIndex];externalSources[sc2dh::catalogIdentityKey(target.elementName,target.id)].append(source);
+        }
     }
 
     // Reachability deliberately ignores Data Collection records: catalog grouping
@@ -388,7 +391,7 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
     QQueue<int> queue;
     for (int i = 0; i < result->nodes.size(); ++i) {
         const DataNode &node = result->nodes[i];
-        const bool external = scriptReferences.value(node.id) > 0;
+        const bool external = scriptReferences.value(sc2dh::catalogIdentityKey(node.elementName,node.id)) > 0;
         if (whitelistIds.contains(node.id) || isProtectedObject(node) || isExternalRootType(node) || external) {
             reachable[i] = true;
             rootPrefix[i] = external ? QStringLiteral("Script/Trigger/Placement") : usageLabel(node);
@@ -398,9 +401,9 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
     while (!queue.isEmpty()) {
         const int sourceIndex = queue.dequeue();
         const DataNode &source = result->nodes[sourceIndex];
-        for (const QString &targetId : source.referencedIds) {
+        for (const QString &targetId : source.referenceKeys) {
             if (source.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)) continue;
-            for (int targetIndex : nodesById.value(targetId)) {
+            for (int targetIndex : targetsFor(targetId)) {
                 if (reachable[targetIndex]) continue;
                 reachable[targetIndex] = true;
                 predecessor[targetIndex] = sourceIndex;
@@ -417,15 +420,15 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
             continue;
         UnusedCandidateInfo info;
         info.nodeIndex = i;
-        info.incomingXmlReferences = inboundReferences.value(node.id);
-        info.dataCollectionReferences = dataCollectionReferences.value(node.id);
-        info.scriptReferences = scriptReferences.value(node.id);
+        info.incomingXmlReferences = inboundReferences.value(sc2dh::catalogIdentityKey(node.elementName,node.id));
+        info.dataCollectionReferences = dataCollectionReferences.value(sc2dh::catalogIdentityKey(node.elementName,node.id));
+        info.scriptReferences = scriptReferences.value(sc2dh::catalogIdentityKey(node.elementName,node.id));
         info.whitelisted = whitelistIds.contains(node.id);
         info.protectedObject = isProtectedObject(node);
-        info.incomingXmlSources = inboundSources.value(node.id);
-        info.outgoingXmlTargets = outboundTargets.value(node.id);
-        info.dataCollectionMemberships = collectionMemberships.value(node.id);
-        info.externalReferenceSources = externalSources.value(node.id);
+        info.incomingXmlSources = inboundSources.value(sc2dh::catalogIdentityKey(node.elementName,node.id));
+        info.outgoingXmlTargets = outboundTargets.value(sc2dh::catalogIdentityKey(node.elementName,node.id));
+        info.dataCollectionMemberships = collectionMemberships.value(sc2dh::catalogIdentityKey(node.elementName,node.id));
+        info.externalReferenceSources = externalSources.value(sc2dh::catalogIdentityKey(node.elementName,node.id));
         info.incomingXmlSources.removeDuplicates();
         info.outgoingXmlTargets.removeDuplicates();
         info.dataCollectionMemberships.removeDuplicates();
@@ -442,6 +445,10 @@ void FolderAnalyzer::populateDuplicateAndCandidateFlags(AnalysisResult *result,
                 ? UsageState::Blocked : UsageState::Used;
             info.state = CandidateState::Blocked;
             info.removalSafety = RemovalSafety::Unsafe;
+            if (!info.whitelisted && !info.protectedObject && !blockingScriptSources.value(sc2dh::catalogIdentityKey(node.elementName,node.id)).isEmpty()) {
+                info.removalSafety = RemovalSafety::Unknown;
+                info.reason = QStringLiteral("Unknown reference coverage: %1").arg(blockingScriptSources.value(sc2dh::catalogIdentityKey(node.elementName,node.id)).join(QStringLiteral("; ")));
+            }
             info.riskLevel = QStringLiteral("high");
         } else {
             const bool disconnected = info.incomingXmlReferences == 0 && info.outgoingXmlTargets.isEmpty();
@@ -497,7 +504,9 @@ bool FolderAnalyzer::analyzeFolder(const QString &rootFolder,
                                    AnalysisResult *result,
                                    QString *errorMessage,
                                    const std::function<void(int, int, const QString &)> &progress,
-                                   const std::function<bool()> &isCancelled) const
+                                   const std::function<bool()> &isCancelled,
+                                   const QStringList &dependencySearchRoots,
+                                   const QHash<QString, QString> &dependencyHandleMappings) const
 {
     if (!result)
     {
@@ -538,6 +547,46 @@ bool FolderAnalyzer::analyzeFolder(const QString &rootFolder,
             if (errorMessage)
                 *errorMessage = QStringLiteral("Analysis canceled.");
             return false;
+        }
+    }
+
+    std::sort(filePaths.begin(), filePaths.end(), [](const QString &a, const QString &b) {
+        const int folded = QString::compare(a, b, Qt::CaseInsensitive);
+        return folded == 0 ? a < b : folded < 0;
+    });
+    QStringList manifestFiles;
+    QHash<QString, QStringList> filesByRelativePath;
+    for (const QString &path : filePaths) {
+        const QString relative = QDir(rootFolder).relativeFilePath(path).replace('\\', '/');
+        filesByRelativePath[relative.toCaseFolded()].append(path);
+        if (relative.compare(QStringLiteral("Base.SC2Data/GameData.xml"), Qt::CaseInsensitive) == 0)
+            manifestFiles.append(path);
+    }
+    QSet<QString> selectedGameDataFiles;
+    bool hasParsedIncludeManifest = false;
+    if (manifestFiles.size() > 1) {
+        result->incompleteSources << QStringLiteral("Multiple local GameData include manifests require explicit selection.");
+    } else if (manifestFiles.size() == 1) {
+        const QString manifestPath = manifestFiles.first();
+        QFile manifestFile(manifestPath);
+        if (QFileInfo(manifestPath).size() > 16ll * 1024ll * 1024ll
+            || !manifestFile.open(QIODevice::ReadOnly)) {
+            result->incompleteSources << QStringLiteral("Local GameData include manifest is unreadable or oversized: %1")
+                .arg(manifestPath);
+        } else {
+            QStringList includes;
+            hasParsedIncludeManifest = sc2dh::parseGameDataCatalogIncludes(
+                manifestFile.readAll(), manifestPath, &includes, &result->incompleteSources);
+            for (const QString &include : includes) {
+                const QString expected = QStringLiteral("Base.SC2Data/") + include;
+                const QStringList matches = filesByRelativePath.value(expected.toCaseFolded());
+                if (matches.size() != 1) {
+                    result->incompleteSources << QStringLiteral("Local GameData include has %1 matching files: %2")
+                        .arg(matches.size()).arg(expected);
+                    continue;
+                }
+                selectedGameDataFiles.insert(matches.first().toCaseFolded());
+            }
         }
     }
 
@@ -602,6 +651,14 @@ bool FolderAnalyzer::analyzeFolder(const QString &rootFolder,
         file.close();
         result->sourceXmlByFile.insert(filePath, QString::fromUtf8(xmlBytes));
 
+        const QString relative = QDir(rootFolder).relativeFilePath(filePath).replace('\\', '/');
+        if (hasParsedIncludeManifest
+            && relative.startsWith(QStringLiteral("Base.SC2Data/GameData/"), Qt::CaseInsensitive)
+            && !selectedGameDataFiles.contains(filePath.toCaseFolded())) {
+            result->inactiveGameDataSources.append(filePath);
+            continue;
+        }
+
         QVector<DataNode> fileNodes;
         QString parseError;
         if (!loader.extractNodes(filePath, xmlBytes, &fileNodes, &parseError))
@@ -625,25 +682,138 @@ bool FolderAnalyzer::analyzeFolder(const QString &rootFolder,
                                       if (progress)
                                           progress(filePaths.size(), filePaths.size(), QString());
                                   },
-                                  isCancelled);
+                                  isCancelled, dependencySearchRoots, dependencyHandleMappings);
 }
 
 bool FolderAnalyzer::finalizeAnalysisResult(AnalysisResult *result,
                                             const QSet<QString> &whitelistIds,
                                             QString *errorMessage,
                                             const std::function<void()> &heartbeat,
-                                            const std::function<bool()> &isCancelled) const
+                                            const std::function<bool()> &isCancelled,
+                                            const QStringList &dependencySearchRoots,
+                                            const QHash<QString, QString> &dependencyHandleMappings) const
 {
+    const QByteArray settingsAtStart = optimizationSettingsFingerprint();
+    result->optimizationSettingsRevision = settingsAtStart;
+    // A declared mod is not a loaded dependency layer. The current resolver
+    // supports an explicit local source tree; dependency stacks remain partial.
+    ScannedFileReader metadataReader(*result);
+    bool hasGameDataXml = false;
+    QStringList unselectedGameDataPaths;
+    for (const auto &file : result->scannedFiles) {
+        const QString relative = ScannedFileReader::relativePath(result->rootFolder, file.filePath).replace('\\', '/');
+        if (!file.isXml) continue;
+        const bool localGameData = relative.startsWith(QStringLiteral("GameData/"), Qt::CaseInsensitive)
+            || relative.startsWith(QStringLiteral("Base.SC2Data/GameData/"), Qt::CaseInsensitive);
+        if (localGameData || relative.contains(QStringLiteral("/GameData/"), Qt::CaseInsensitive))
+            hasGameDataXml = true;
+        if (!localGameData && relative.contains(QStringLiteral("/GameData/"), Qt::CaseInsensitive)
+            && unselectedGameDataPaths.size() < 8)
+            unselectedGameDataPaths << relative;
+    }
+    int componentLists = 0;
+    bool gameDataComponentActive = false;
+    for (const auto &file : result->scannedFiles) {
+        if (QFileInfo(file.filePath).fileName().compare(QStringLiteral("ComponentList.SC2Components"), Qt::CaseInsensitive) != 0)
+            continue;
+        ++componentLists;
+        QByteArray bytes;
+        if (!metadataReader.readBytes(file, 16ll * 1024ll * 1024ll, &bytes)) {
+            result->incompleteSources << QStringLiteral("%1: component list is unreadable.").arg(file.filePath);
+            continue;
+        }
+        pugi::xml_document components; QString parseError;
+        if (!XmlLoader().loadDocument(bytes, &components, &parseError)
+            || QString::fromUtf8(components.document_element().name()) != QStringLiteral("Components")) {
+            result->incompleteSources << QStringLiteral("%1: component list is malformed: %2").arg(file.filePath, parseError);
+            continue;
+        }
+        for (const pugi::xml_node child : components.document_element().children("DataComponent")) {
+            if (QString::fromUtf8(child.attribute("Type").value()) != QStringLiteral("gada"))
+                continue;
+            const QString path = QString::fromUtf8(child.child_value()).trimmed().replace('\\', '/');
+            if (path.compare(QStringLiteral("GameData"), Qt::CaseInsensitive) == 0
+                || path.compare(QStringLiteral("Base.SC2Data/GameData"), Qt::CaseInsensitive) == 0)
+                gameDataComponentActive = true;
+            else
+                result->incompleteSources << QStringLiteral("%1: GameData component path %2 is not resolved.")
+                    .arg(file.filePath, path);
+        }
+    }
+    if (componentLists > 1)
+        result->incompleteSources << QStringLiteral("Multiple component lists require explicit active-layer selection.");
+    if (hasGameDataXml && componentLists > 0 && !gameDataComponentActive)
+        result->incompleteSources << QStringLiteral("GameData XML exists but is not listed as an active GameData component.");
+    if (componentLists > 0 && !unselectedGameDataPaths.isEmpty())
+        result->incompleteSources << QStringLiteral("GameData XML outside the selected local component requires layer resolution: %1")
+            .arg(unselectedGameDataPaths.join(QStringLiteral(", ")));
+    result->declaredDependencies.clear();
+    QVector<ScannedFileInfo> documentInfoFiles;
+    for(const auto &file:result->scannedFiles)
+        if(QFileInfo(file.filePath).fileName().compare(QStringLiteral("DocumentInfo"),Qt::CaseInsensitive)==0)
+            documentInfoFiles.append(file);
+    std::sort(documentInfoFiles.begin(),documentInfoFiles.end(),[](const auto &a,const auto &b) {
+        const int folded=QString::compare(a.filePath,b.filePath,Qt::CaseInsensitive);
+        return folded==0 ? a.filePath<b.filePath : folded<0;
+    });
+    if(documentInfoFiles.size()>1)
+        result->incompleteSources << QStringLiteral("Multiple DocumentInfo files require explicit active-layer selection.");
+    for(const auto &file:documentInfoFiles) {
+        QByteArray bytes;
+        if(!metadataReader.readBytes(file,16ll*1024ll*1024ll,&bytes)) {
+            result->incompleteSources << QStringLiteral("%1: DocumentInfo is unreadable.").arg(file.filePath);
+            continue;
+        }
+        QVector<DependencyDeclaration> declarations;QString parseError;
+        if(!sc2dh::parseDocumentInfoDependencies(bytes,file.filePath,&declarations,&parseError)) {
+            result->incompleteSources << QStringLiteral("%1: %2").arg(file.filePath,parseError);continue;
+        }
+        for(const auto &declaration:declarations) {
+            result->declaredDependencies.append(declaration);
+            result->incompleteSources << QStringLiteral("%1: declared dependency layer not resolved: %2")
+                .arg(file.filePath,declaration.raw);
+        }
+    }
+    if(!sc2dh::locateDependencySources(result,dependencySearchRoots,dependencyHandleMappings,isCancelled,errorMessage)) return false;
+    if(!sc2dh::loadDependencyLayerData(result,isCancelled,errorMessage)) return false;
+    result->dependencySourcesLocated=sc2dh::dependencySourcesLocated(*result);
+    result->hypotheticalLayerOrder=sc2dh::hypotheticalLayerOrder(*result);
+    sc2dh::refreshCatalogSchema();
+    const QByteArray schemaAtStart=sc2dh::catalogSchemaFingerprint();
     if (!populateReferenceIds(result, heartbeat, isCancelled))
     {
         if (errorMessage)
             *errorMessage = QStringLiteral("Analysis canceled.");
         return false;
     }
+    result->catalogSchemaRevision = schemaAtStart;
+    if (!sc2dh::catalogSchemaAvailable())
+        result->incompleteSources.append(QStringLiteral("Structural catalog schema index is missing or incompatible."));
+    sc2dh::indexLayeredDeclarations(result);
+    sc2dh::resolveCatalogReferences(result);
+    sc2dh::markUnresolvedLayerEffects(result);
     result->referenceExtractionComplete = true;
     populateDuplicateAndCandidateFlags(result, whitelistIds);
-    result->dependencyGraphComplete = true;
+    result->dependencyGraphComplete = result->declaredDependencies.isEmpty();
     DeepCleanupService().populateCandidates(result);
+    QHash<QString, QStringList> unknownByCatalog;
+    for (const auto &node:result->nodes) {
+        if (!node.resolutionIssues.isEmpty()) unknownByCatalog[sc2dh::catalogIdentityScope(node.elementName)] += node.resolutionIssues;
+        for (const QString &catalog:node.unknownReferenceCatalogs) unknownByCatalog[catalog] += node.resolutionIssues;
+    }
+    for (auto &candidate:result->unusedCandidates) {
+        auto &node=result->nodes[candidate.nodeIndex];
+        const auto issues=unknownByCatalog.value(sc2dh::catalogIdentityScope(node.elementName));
+        if (candidate.state==CandidateState::Safe && !issues.isEmpty()) {
+            candidate.state=CandidateState::Blocked;
+            candidate.removalSafety=RemovalSafety::Unknown;
+            candidate.usageState=UsageState::Blocked;
+            candidate.reason=QStringLiteral("Unknown semantic coverage in this catalog: %1").arg(issues.join(QStringLiteral("; ")));
+            node.candidateUnused=false;
+            result->possibleUnusedNodeIndices.removeAll(candidate.nodeIndex);
+        }
+    }
+
 
     for (const SourceRevision &revision : result->sourceRevisions)
     {
@@ -654,6 +824,16 @@ bool FolderAnalyzer::finalizeAnalysisResult(AnalysisResult *result,
         if (!revisionError.isEmpty() && !result->incompleteSources.contains(revisionError))
             result->incompleteSources.append(revisionError);
     }
+    if(schemaAtStart!=sc2dh::catalogSchemaFingerprint()) {
+        result->sourceChangedDuringAnalysis=true;
+        result->incompleteSources << QStringLiteral("Catalog schema changed during analysis.");
+    }
+    if (settingsAtStart != optimizationSettingsFingerprint()) {
+        result->sourceChangedDuringAnalysis = true;
+        result->incompleteSources << QStringLiteral("Optimization or backup settings changed during analysis.");
+    }
+    sc2dh::collectEditorLayeredScalarDiagnostics(result);
+    result->incompleteSources.removeDuplicates();
     updateAnalysisCompleteness(result);
     enforceAnalysisCompletenessSafety(result);
     result->analysisReportText = buildAnalysisReport(*result);
@@ -666,7 +846,23 @@ QString FolderAnalyzer::buildAnalysisReport(const AnalysisResult &result) const
     QString report;
     report += QStringLiteral("SC2 Data Helper Analysis Report\n");
     report += QStringLiteral("Root folder: %1\n").arg(result.rootFolder);
-    report += QStringLiteral("Analysis completeness: %1\n").arg(analysisCompletenessName(result.completeness));
+    report += QStringLiteral("Source and local graph coverage: %1\n").arg(analysisCompletenessName(result.completeness));
+    if (!result.declaredDependencies.isEmpty()) {
+        report += QStringLiteral("Dependency source archives located: %1 (diagnostic only)\n")
+            .arg(result.dependencySourcesLocated ? QStringLiteral("yes") : QStringLiteral("no"));
+        if (!result.hypotheticalLayerOrder.isEmpty())
+            report += QStringLiteral("Hypothetical dependency-first order, not runtime proof: %1\n")
+                .arg(result.hypotheticalLayerOrder.join(QStringLiteral(" -> ")));
+    }
+    for(const auto &diagnostic:result.editorLayeredScalars)
+        report += QStringLiteral("Editor-observed scalar diagnostic (not runtime/Safe proof): %1/%2 %3=%4 from %5\n")
+            .arg(diagnostic.object.catalog,diagnostic.object.id,diagnostic.field,
+                 diagnostic.value,diagnostic.selectedDeclaration.source);
+    int unresolvedDeclarations = 0, unknownCandidates = 0;
+    for (const DataNode &node : result.nodes) if (!node.resolutionIssues.isEmpty()) ++unresolvedDeclarations;
+    for (const auto &candidate : result.unusedCandidates) if (candidate.removalSafety == RemovalSafety::Unknown) ++unknownCandidates;
+    report += QStringLiteral("Semantic coverage: %1 unresolved declarations, %2 Unknown removal candidates; supported subset only\n")
+        .arg(unresolvedDeclarations).arg(unknownCandidates);
     report += QStringLiteral("Total files scanned: %1\n").arg(result.totalFilesScanned());
     report += QStringLiteral("Total XML files: %1\n").arg(result.totalXmlFiles());
     report += QStringLiteral("Total data nodes found: %1\n").arg(result.totalDataNodes());
@@ -946,45 +1142,39 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
             validRows.append(row);
     }
 
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        QSet<QString> selectedIds;
-        for (int row : validRows)
-            selectedIds.insert(result.nodes[row].id);
-
-        QVector<int> keptRows;
-        for (int row : validRows) {
-            const auto candidate = std::find_if(result.unusedCandidates.cbegin(), result.unusedCandidates.cend(),
-                                                [row](const UnusedCandidateInfo &info) { return info.nodeIndex == row; });
-            bool keep = true;
-            if (candidate != result.unusedCandidates.cend()) {
-                for (const QString &sourceId : candidate->incomingXmlSources) {
-                    if (!selectedIds.contains(sourceId)) {
-                        keep = false;
-                        break;
-                    }
-                }
-            }
-            if (keep) {
-                keptRows.append(row);
-            } else {
-                changed = true;
-                if (skippedNodes)
-                    ++(*skippedNodes);
+    bool changed=true;
+    while(changed) {
+        changed=false;
+        QSet<int> selected;
+        QSet<QString> selectedKeys,blocked;
+        for(int row:validRows) {selected.insert(row); selectedKeys.insert(sc2dh::catalogIdentityKey(result.nodes[row].elementName,result.nodes[row].id));}
+        for(int source=0;source<result.nodes.size();++source) {
+            if(selected.contains(source) || result.nodes[source].elementName.startsWith(QStringLiteral("CDataCollection"),Qt::CaseInsensitive)) continue;
+            for(const QString &reference:result.nodes[source].referenceKeys) {
+                if(selectedKeys.contains(reference)) blocked.insert(reference);
+                else if(reference.startsWith(QStringLiteral("*")+QChar(0x1f)))
+                    for(const QString &target:selectedKeys)
+                        if(target.section(QChar(0x1f),1)==reference.section(QChar(0x1f),1)) blocked.insert(target);
             }
         }
-        validRows = keptRows;
+        QVector<int> kept;
+        for(int row:validRows) {
+            if(blocked.contains(sc2dh::catalogIdentityKey(result.nodes[row].elementName,result.nodes[row].id))) {changed=true; if(skippedNodes) ++*skippedNodes;}
+            else kept.append(row);
+        }
+        validRows=kept;
     }
 
     QHash<QString, QSet<QString>> locationsByFile;
     QSet<QString> removedIds;
+    QSet<QString> removedObjectKeys;
     int plannedRemovals = 0;
     for (int row : validRows) {
         const DataNode &node = result.nodes[row];
         const int beforeCount = locationsByFile[node.sourceFile].size();
         locationsByFile[node.sourceFile].insert(node.originalLocation);
         removedIds.insert(node.id);
+        removedObjectKeys.insert(sc2dh::catalogIdentityKey(node.elementName,node.id));
         if (locationsByFile[node.sourceFile].size() > beforeCount)
             ++plannedRemovals;
     }
@@ -1003,6 +1193,10 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
         if (!locationsByFile.value(node.sourceFile).contains(node.originalLocation)) idsStillPresent.insert(node.id);
     }
     for (const QString &id : idsStillPresent) removedIds.remove(id);
+    // Removing one duplicate declaration does not remove the catalog object.
+    for (const DataNode &node : result.nodes)
+        if (!locationsByFile.value(node.sourceFile).contains(node.originalLocation))
+            removedObjectKeys.remove(sc2dh::catalogIdentityKey(node.elementName,node.id));
 
     const QString analysisReport = buildAnalysisReport(result);
     const QString plannedChanges = buildPlannedChangesReport(result, selectedRows);
@@ -1086,11 +1280,11 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
             return false;
         }
         for (const DataNode &node : verified.nodes) {
-            if (removedIds.contains(node.id)) {
+            if (removedObjectKeys.contains(sc2dh::catalogIdentityKey(node.elementName,node.id))) {
                 if (validationError) *validationError = QStringLiteral("Post-delete verification failed: ID %1 still exists.").arg(node.id);
                 return false;
             }
-            for (const QString &reference : node.referencedIds) if (removedIds.contains(reference)) {
+            for (const QString &reference : node.referenceKeys) if (removedObjectKeys.contains(reference) || (reference.startsWith(QStringLiteral("*")+QChar(0x1f)) && removedIds.contains(reference.section(QChar(0x1f),1)))) {
                 if (node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive))
                     continue;
                 if (validationError) *validationError = QStringLiteral("Post-delete verification failed: %1 still references %2.").arg(node.id, reference);
@@ -1143,7 +1337,8 @@ bool FolderAnalyzer::applySelectedChanges(const AnalysisResult &result,
     };
 
     const FolderSaveTransactionResult transaction = BackupManager().applyFolderTransaction(
-        rootFolder, transactionChanges, analysisReport, plannedChanges, validateStaged, validateCommitted);
+        rootFolder, transactionChanges, analysisReport, plannedChanges, validateStaged, validateCommitted,
+        {}, {}, result.optimizationSettingsRevision);
     if (!transaction.success) {
         if (errorMessage) *errorMessage = QStringLiteral("[%1] %2")
                                               .arg(operationErrorCodeName(transaction.errorCode), transaction.error);

@@ -1,0 +1,13 @@
+# Separate dependency GameData layers (2026-09-28)
+
+For each uniquely located dependency archive, the analyzer now checks its root `ComponentList.SC2Components` for one supported `gada`/GameData component before reading `Base.SC2Data/GameData/*.xml`. It keeps the parsed `DataNode` declarations in a `DependencyLayerData` record with archive path, SHA-256, selected XML entries and diagnostics. These nodes do not enter the local map's `AnalysisResult.nodes` or destructive candidate list. An absent/malformed component list, unsupported component path, unreadable or oversized XML, and parse failures remain incomplete evidence.
+
+The synthetic two-mod regression checks a transitive A -> B -> A metadata cycle while both archives contribute separate GameData declarations with original source coordinates; the local map retains only its own object. Another regression places valid GameData XML in a dependency archive with no component list and verifies that the XML is not activated by guesswork.
+
+Read-only analysis of the copied City map using an explicit root with two copied mods found Protis as one active layer (9 XML entries, 171 objects) and Spectre as another (16 XML entries, 1176 objects), with no component diagnostics. The local City map still has 12,856 objects. The dependency graph is incomplete (two direct and two transitive sources missing), source completeness is Partial and there are zero Safe unused candidates. The fresh probe took 39,990 ms and peaked at 506 MiB. One run does not establish a performance trend. Evidence: `benchmark-dependency-layer-city.json`.
+
+This stage loads source declarations separately. It does not yet establish Blizzard's dependency precedence, class-default/parent override order, effective scalar/array/index/removed values across layers, or that a `bnet:` handle matches the local file fallback. The layer list's traversal order is discovery order and must not be used as runtime precedence. Editor/gameplay acceptance is NOT_RUN.
+
+Final Release: 5/5 CTest, 164 core passed / 0 failed / 4 unavailable fixture skips, 97.37 s total. Final Debug: 5/5 CTest, 164 core passed / 0 failed / 4 unavailable fixture skips, 278.04 s total.
+
+Current portable checkpoint: `dist/SC2DataHelper-3.0-beta3-dependency-layers-20260928.zip`, SHA-256 `bc4c2d29199c4c80d8003c0519748c99d4559f10d6180be8b48a99ef3206945e`, 194 verified ZIP entries/resources. Outside-source layout smoke generated 14 PNGs; read-only Mercs map preview returned ready=true and source_unchanged=true with 75 archive entries. Offscreen OpenGL unavailable; Editor/gameplay acceptance NOT_RUN.

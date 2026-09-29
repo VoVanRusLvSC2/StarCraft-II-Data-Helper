@@ -1,3 +1,4 @@
+#include "core/XmlParsePolicy.h"
 #include "core/XmlCleanupUtils.h"
 
 #include <QStringList>
@@ -54,9 +55,14 @@ QString locationSegmentForNode(const pugi::xml_node &node)
 
 QString canonicalNode(const pugi::xml_node &node, bool lenient, bool objectRoot)
 {
+    if (node.type() == pugi::node_pi) {
+        const QString name = QString::fromUtf8(node.name());
+        const QString value = QString::fromUtf8(node.value());
+        return QStringLiteral("P%1:%2=%3:%4").arg(name.size()).arg(name).arg(value.size()).arg(value);
+    }
     if (node.type() == pugi::node_pcdata || node.type() == pugi::node_cdata) {
-        const QString text = QString::fromUtf8(node.value()).trimmed();
-        return text.isEmpty() ? QString() : QStringLiteral("T%1:%2").arg(text.size()).arg(text);
+        const QString text = QString::fromUtf8(node.value());
+        return text.trimmed().isEmpty() ? QString() : QStringLiteral("T%1:%2").arg(text.size()).arg(text);
     }
     if (node.type() != pugi::node_element)
         return {};
@@ -94,7 +100,7 @@ bool loadSerializedRoot(const QString &serializedXml, pugi::xml_document *docume
     if (!document || !root)
         return false;
     const QByteArray bytes = serializedXml.toUtf8();
-    if (!document->load_buffer(bytes.constData(), size_t(bytes.size())))
+    if (!document->load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags))
         return false;
     *root = firstElementChild(*document);
     return bool(*root);

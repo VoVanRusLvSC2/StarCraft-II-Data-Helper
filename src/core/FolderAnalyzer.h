@@ -18,7 +18,9 @@ public:
                        AnalysisResult *result,
                        QString *errorMessage,
                        const std::function<void(int, int, const QString &)> &progress = {},
-                       const std::function<bool()> &isCancelled = {}) const;
+                       const std::function<bool()> &isCancelled = {},
+                       const QStringList &dependencySearchRoots = {},
+                       const QHash<QString, QString> &dependencyHandleMappings = {}) const;
 
     QString buildAnalysisReport(const AnalysisResult &result) const;
     QString buildDryRunReport(const AnalysisResult &result, const QVector<int> &selectedRows) const;
@@ -27,7 +29,9 @@ public:
                                 const QSet<QString> &whitelistIds,
                                 QString *errorMessage,
                                 const std::function<void()> &heartbeat = {},
-                                const std::function<bool()> &isCancelled = {}) const;
+                                const std::function<bool()> &isCancelled = {},
+                                const QStringList &dependencySearchRoots = {},
+                                const QHash<QString, QString> &dependencyHandleMappings = {}) const;
     bool populateReferenceIds(AnalysisResult *result,
                               const std::function<void()> &heartbeat = {},
                               const std::function<bool()> &isCancelled = {}) const;

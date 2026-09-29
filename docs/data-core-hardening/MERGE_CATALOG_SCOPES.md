@@ -1,0 +1,14 @@
+# Catalog-scoped merge continuation - 2026-09-28
+
+Four behavior regressions were recorded before their fixes:
+
+- mergeTypedConsumersUseCatalogWhenIdsOverlap: Unit and Actor share SharedAudit. Single/batch merge previously deleted the Unit while retaining its old GUI value. GUI/Galaxy typed consumers now receive the full redirect map and choose the target catalog; unscoped consumers receive only unambiguous redirects. Actor call, display, comments and Actor declaration stay unchanged.
+- mergeXmlReferencesUseTargetCatalog: Unit merge previously rewrote Actor parent to the Unit keep ID. XSD-derived field domains, top-level parent domain and the proven UnitBirth carrier now select the redirect catalog. SpawnUnit and UnitBirth update, Actor parent/identity remain unchanged. The post-merge node audit now uses referenceKeys rather than a flat ID list.
+- mergeVerifierFindsDanglingTypedConsumersWithoutTarget: the old audit passed a dangling typed consumer once the target declaration disappeared. The verifier now reads GUI registry references and freshly scans Galaxy independently of known target IDs. Negative tests cover absent targets with/without a retained Actor; positive Actor/display consumers remain outside the removed Unit scope.
+- mergeAmbiguousUnscopedConsumerBlocksRemoval: a strong MapScript.txt token with no established catalog previously allowed deletion while its redirect was omitted. Such a consumer now blocks the matching cross-catalog ID in preview and batch selection.
+
+All four tests exercise meaningful inputs rather than mirroring the implementation. Before logs and the closest after log are kept alongside this document. The closest pass includes previous positive actor/non-XML paths, binary diagnostics and rollback. Final Release: 5/5 CTest; 147 core passed / 0 failed / 4 unavailable fixture skips; total 87.20 s. Final Debug: 5/5 CTest; 147 core passed / 0 failed / 4 unavailable fixture skips; total 247.68 s. Actual archive tests use the Mercs Episode 2 copy.
+
+An earlier identity-preservation fixture used an unsupported CActor effect attribute. It now uses the XSD-declared CUnit PowerupEffect attribute, preserving the same assertions: the surviving same-ID declaration keeps its identity while its Effect reference changes. The old identity test was not removed or reduced to a no-op assertion.
+
+Limits: unknown unique-ID XML carriers and broad legacy actor/text grammar still use the existing compatibility path. They do not establish full precise-span XML rewriting. Objects typing, case-policy consistency across all callbacks, raw XML independent verification, token/runtime identity equivalence, full dependency/default/effective values and concurrency/settings coverage remain incomplete. The verifier does not prove all SC2 runtime semantics. D05 and D29 remain PARTIAL. The earlier portable package is historical and does not contain these source changes. Editor NOT_RUN. Full assignment stays active.

@@ -60,6 +60,20 @@ function Resolve-QtRoot {
 function Stage-Executable([string] $qtRoot) {
     $deployTool = Join-Path $qtRoot "bin\windeployqt.exe"
     Invoke-Checked $deployTool @("--$($Configuration.ToLowerInvariant())", "--no-translations", $executable)
+    # Headless acceptance uses this plugin; windeployqt selects only qwindows.
+    $offscreen = Join-Path $qtRoot "plugins\platforms\qoffscreen.dll"
+    if ($Configuration -eq "Debug") { $offscreen = Join-Path $qtRoot "plugins\platforms\qoffscreend.dll" }
+    if (Test-Path -LiteralPath $offscreen) {
+        Copy-Item -LiteralPath $offscreen -Destination (Join-Path $buildDirectory "$Configuration\platforms") -Force
+    }
+    # CLI schema provenance and offline helpers must work outside the source tree.
+    foreach ($resourceDirectory in @("resources", "scripts")) {
+        $destination = Join-Path $buildDirectory "$Configuration\$resourceDirectory"
+        New-Item -ItemType Directory -Path $destination -Force | Out-Null
+        Get-ChildItem -LiteralPath (Join-Path $projectRoot $resourceDirectory) |
+            Copy-Item -Destination $destination -Recurse -Force
+    }
+
 }
 
 $cmake = Find-Tool "cmake" @(

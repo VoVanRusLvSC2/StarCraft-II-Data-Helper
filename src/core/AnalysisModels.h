@@ -174,9 +174,77 @@ struct DeepCleanupCandidate
     bool recommended = false;
 };
 
+struct DependencyDeclaration
+{
+    QString sourceFile;
+    int ordinal = -1;
+    QString raw;
+    QString bnetHandle;
+    QString fileFallback;
+};
+
+enum class DependencySourceStatus
+{
+    SearchRootsAbsent,
+    Missing,
+    Ambiguous,
+    InvalidFallback,
+    Cycle,
+    DepthLimit,
+    MetadataUnavailable,
+    Located
+};
+
+struct DependencySource
+{
+    DependencyDeclaration declaration;
+    QString ownerSource;
+    QString sourcePath;
+    QString resolvedFileFallback;
+    bool explicitHandleMapping = false;
+    QByteArray sha256;
+    int depth = 0;
+    DependencySourceStatus status = DependencySourceStatus::SearchRootsAbsent;
+    QString issue;
+};
+
+struct DependencyLayerData
+{
+    QString sourcePath;
+    QByteArray sha256;
+    bool activeGameData = false;
+    bool includeManifestPresent = false;
+    QStringList inactiveGameDataEntries;
+    QStringList gameDataEntries;
+    QVector<DataNode> nodes;
+    QStringList issues;
+};
+
+struct LayeredDeclarationRef
+{
+    sc2dh::DeclarationKey declaration;
+    QString elementName;
+    QString rawId;
+    int dependencyLayerIndex = -1; // -1 is the editable local source.
+    int nodeIndex = -1;
+};
+
+// Diagnostic only. This Editor-observed subset is not a runtime or mutation proof.
+struct EditorLayeredScalarDiagnostic
+{
+    sc2dh::ObjectKey object;
+    QString field;
+    QString value;
+    sc2dh::DeclarationKey selectedDeclaration;
+    QVector<sc2dh::DeclarationKey> declarationsInOrder;
+    QString evidence;
+};
+
 struct AnalysisResult
 {
     QString rootFolder;
+    QByteArray catalogSchemaRevision;
+    QByteArray optimizationSettingsRevision;
     // A standalone SC2Mod may expose catalog IDs and assets to maps or extension
     // mods that are not part of this analysis. Absence of a local reference is
     // not proof that an exported object or asset is unused.
@@ -185,10 +253,21 @@ struct AnalysisResult
     bool sourceDiscoveryComplete = false;
     bool referenceExtractionComplete = false;
     bool dependencyGraphComplete = false;
+    bool dependencySourcesLocated = false; // diagnostic only; never grants destructive permission
+    QStringList hypotheticalLayerOrder; // dependencies first, local source last; not a runtime proof
     bool sourceChangedDuringAnalysis = false;
     QStringList unreadableSources;
     QStringList unsupportedSources;
     QStringList incompleteSources;
+    QVector<DependencyDeclaration> declaredDependencies;
+    QStringList dependencySearchRoots;
+    QHash<QString, QString> dependencyHandleMappings;
+    QVector<DependencySource> dependencySources;
+    QVector<DependencyLayerData> dependencyLayers;
+    QStringList inactiveGameDataSources; // discovered files excluded by an explicit local include manifest
+    QHash<QString, QVector<LayeredDeclarationRef>> layeredNamedDeclarations;
+    QHash<QString, QVector<LayeredDeclarationRef>> layeredClassDefaults;
+    QVector<EditorLayeredScalarDiagnostic> editorLayeredScalars;
     QVector<SourceRevision> sourceRevisions;
     QVector<ScannedFileInfo> scannedFiles;
     QVector<DataNode> nodes;
@@ -213,6 +292,7 @@ QString operationErrorCodeName(OperationErrorCode errorCode);
 QString destructiveOperationPermissionText(const DestructiveOperationPermission &permission);
 SourceRevision captureSourceRevision(const QString &filePath, QString *errorMessage = nullptr);
 bool sourceRevisionMatches(const SourceRevision &revision, QString *reason = nullptr);
+QByteArray optimizationSettingsFingerprint();
 void updateAnalysisCompleteness(AnalysisResult *result);
 void enforceAnalysisCompletenessSafety(AnalysisResult *result);
 DestructiveOperationPermission canApplyDestructiveChanges(const AnalysisResult &analysis);

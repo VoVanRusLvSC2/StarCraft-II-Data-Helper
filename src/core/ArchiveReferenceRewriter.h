@@ -8,6 +8,7 @@ struct AnalysisResult;
 
 namespace sc2dh
 {
+namespace gui { class Registry; }
 
 struct ArchiveReferenceRewriteReport
 {
@@ -20,13 +21,17 @@ bool rewriteArchiveReferenceFiles(const QString &rootFolder,
                                   const QStringList &relativeFiles,
                                   const QHash<QString, QString> &renames,
                                   ArchiveReferenceRewriteReport *report,
-                                  QString *errorMessage);
+                                  QString *errorMessage,
+                                  const QHash<QString, QString> &catalogs = {},
+                                  const gui::Registry *guiRegistry = nullptr);
 
 bool previewArchiveReferenceFileRewrites(const QString &rootFolder,
                                          const QStringList &relativeFiles,
                                          const QHash<QString, QString> &renames,
                                          ArchiveReferenceRewriteReport *report,
-                                         QString *errorMessage);
+                                         QString *errorMessage,
+                                  const QHash<QString, QString> &catalogs = {},
+                                  const gui::Registry *guiRegistry = nullptr);
 
 QHash<QString, QString> unambiguousArchiveReferenceRenames(const AnalysisResult &analysis,
                                                            const QHash<QString, QString> &renames,

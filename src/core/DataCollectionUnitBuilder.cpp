@@ -1,3 +1,4 @@
+#include "core/XmlParsePolicy.h"
 #include "core/DataCollectionUnitBuilder.h"
 
 #include "core/BackupManager.h"
@@ -190,7 +191,7 @@ QString defaultCategoriesFor(const DataNode &root)
     QString objectType = dataGroup == QStringLiteral("Unit") ? QStringLiteral("Unit") : QStringLiteral("Other");
 
     pugi::xml_document fragment;
-    if (fragment.load_string(root.serializedXml.toUtf8().constData())) {
+    if (fragment.load_string(root.serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags)) {
         const pugi::xml_node node = fragment.first_child();
         race = QString::fromUtf8(node.attribute("race").value()).trimmed();
         const QString categories = QString::fromUtf8(node.child("EditorCategories").attribute("value").value());
@@ -530,7 +531,7 @@ void validatePatternInheritance(const AnalysisResult &analysis, const DataNode *
         if (node.elementName.startsWith(QStringLiteral("CDataCollectionPattern"), Qt::CaseInsensitive)) {
             patterns.insert(node.id.toLower());
             pugi::xml_document fragment;
-            if (fragment.load_string(node.serializedXml.toUtf8().constData())) {
+            if (fragment.load_string(node.serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags)) {
                 const pugi::xml_node value = fragment.first_child();
                 parentByPattern.insert(node.id.toLower(), QString::fromUtf8(value.attribute("parent").value()));
                 directPatternEntityFlags.insert(node.id.toLower(), patternReferenceEntityFlags(value));
@@ -539,7 +540,7 @@ void validatePatternInheritance(const AnalysisResult &analysis, const DataNode *
             QString nodeParent;
             QString nodePattern;
             pugi::xml_document fragment;
-            if (fragment.load_string(node.serializedXml.toUtf8().constData())) {
+            if (fragment.load_string(node.serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags)) {
                 const pugi::xml_node value = fragment.first_child();
                 nodeParent = QString::fromUtf8(value.attribute("parent").value());
                 nodePattern = QString::fromUtf8(value.child("Pattern").attribute("value").value());
@@ -581,7 +582,7 @@ void validatePatternInheritance(const AnalysisResult &analysis, const DataNode *
     auto fields = [](const DataNode *node, QString *parent, QString *pattern) {
         if (!node) return;
         pugi::xml_document fragment;
-        if (!fragment.load_string(node->serializedXml.toUtf8().constData())) return;
+        if (!fragment.load_string(node->serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags)) return;
         const pugi::xml_node value = fragment.first_child();
         *parent = QString::fromUtf8(value.attribute("parent").value());
         *pattern = QString::fromUtf8(value.child("Pattern").attribute("value").value());
@@ -650,7 +651,7 @@ QByteArray addMigrationTargets(const QByteArray &source, const AnalysisResult &a
 {
     if (!sourceFamily.strictOwnership || moves->isEmpty()) return source;
     pugi::xml_document document;
-    const pugi::xml_parse_result parsed = document.load_buffer(source.constData(), size_t(source.size()));
+    const pugi::xml_parse_result parsed = document.load_buffer(source.constData(), size_t(source.size()), sc2dh::xmlParseFlags);
     if (!parsed) {
         *error = QStringLiteral("Cannot stage Data Collection migration: %1").arg(parsed.description());
         return {};
@@ -762,7 +763,7 @@ QByteArray buildCollectionDocument(const QString &targetFile, const QString &ele
     QByteArray existingTargetBytes;
     if (QFileInfo::exists(targetFile)) {
         if (!readBytes(targetFile, &existingTargetBytes, error)) return {};
-        const auto parsed = doc.load_buffer(existingTargetBytes.constData(), size_t(existingTargetBytes.size()));
+        const auto parsed = doc.load_buffer(existingTargetBytes.constData(), size_t(existingTargetBytes.size()), sc2dh::xmlParseFlags);
         if (!parsed) { *error = QStringLiteral("Cannot parse DataCollectionData.xml: %1").arg(parsed.description()); return {}; }
     } else {
         auto declaration = doc.append_child(pugi::node_declaration);
@@ -837,7 +838,7 @@ DataCollectionAuditSummary auditDataCollections(const AnalysisResult &analysis)
         if (!node.elementName.startsWith(QStringLiteral("CDataCollection"), Qt::CaseInsensitive)
             || node.elementName.startsWith(QStringLiteral("CDataCollectionPattern"), Qt::CaseInsensitive)) continue;
         pugi::xml_document fragment;
-        if (!fragment.load_string(node.serializedXml.toUtf8().constData())) continue;
+        if (!fragment.load_string(node.serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags)) continue;
         const pugi::xml_node collection = fragment.first_child();
         if (QString::fromUtf8(collection.attribute("default").value()) == QStringLiteral("1")) continue;
         ++summary.collections;
@@ -1011,7 +1012,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     QSet<QString> migrationTargets;
     if (existingCollectionNode) {
         pugi::xml_document fragment;
-        if (fragment.load_string(existingCollectionNode->serializedXml.toUtf8().constData())) {
+        if (fragment.load_string(existingCollectionNode->serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags)) {
             const QStringList allExisting = existingEntries(fragment.first_child(), &result.duplicateRecordsSkipped);
             for (const QString &entry : allExisting) {
                 const QString entryKey = entry.toLower();
@@ -1108,7 +1109,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     QString existingParent;
     if (existingCollectionNode) {
         pugi::xml_document fragment;
-        if (fragment.load_string(existingCollectionNode->serializedXml.toUtf8().constData()))
+        if (fragment.load_string(existingCollectionNode->serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags))
             existingParent = QString::fromUtf8(fragment.first_child().attribute("parent").value());
     }
     const QString effectiveParent = !request.parent.trimmed().isEmpty() ? request.parent.trimmed()
@@ -1144,7 +1145,7 @@ DataCollectionPreviewReport DataCollectionUnitBuilder::preview(const AnalysisRes
     QString categories = request.editorCategories.trimmed();
     if (categories.isEmpty() && existingCollectionNode) {
         pugi::xml_document fragment;
-        if (fragment.load_string(existingCollectionNode->serializedXml.toUtf8().constData()))
+        if (fragment.load_string(existingCollectionNode->serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags))
             categories = QString::fromUtf8(fragment.first_child().child("EditorCategories").attribute("value").value());
     }
     if (categories.isEmpty()) categories = defaultCategoriesFor(rootNode);
@@ -1244,7 +1245,7 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
         }
         pugi::xml_document stagedDocument;
         const pugi::xml_parse_result parsed = stagedDocument.load_buffer(
-            stagedBytes.constData(), size_t(stagedBytes.size()));
+            stagedBytes.constData(), size_t(stagedBytes.size()), sc2dh::xmlParseFlags);
         if (!parsed || !stagedDocument.child("Catalog")) {
             if (validationError)
                 *validationError = QStringLiteral("Staged Data Collection XML validation failed: %1")
@@ -1279,7 +1280,7 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
         }
         pugi::xml_document verifiedDocument;
         const pugi::xml_parse_result parsed = verifiedDocument.load_buffer(
-            verifiedBytes.constData(), size_t(verifiedBytes.size()));
+            verifiedBytes.constData(), size_t(verifiedBytes.size()), sc2dh::xmlParseFlags);
         if (!parsed) {
             if (validationError)
                 *validationError = QStringLiteral("Collection verification failed: %1")
@@ -1353,7 +1354,8 @@ DataCollectionApplyResult DataCollectionUnitBuilder::apply(const AnalysisResult 
         transactionFailureInjection = QStringLiteral("after-first-commit");
     const FolderSaveTransactionResult transaction = BackupManager().applyFolderTransaction(
         rootFolder, changes, analysis.analysisReportText, plan.reportText,
-        stagedValidator, committedValidator, transactionFailureInjection);
+        stagedValidator, committedValidator, transactionFailureInjection, {},
+        analysis.optimizationSettingsRevision);
     result.backupFolder = transaction.backupFolder;
     if (!transaction.success) {
         result.error = transaction.error;

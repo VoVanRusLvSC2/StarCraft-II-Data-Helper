@@ -1,0 +1,18 @@
+﻿﻿# XML carrier boundaries - 2026-09-28
+
+Three failures were reproduced before the corresponding fixes:
+
+1. An unknown CUnit attribute, child value and child text containing AuditOld left its CEffectDamage target apparently safe to delete. The shared reference index now compares unknown carriers with known identities and emits a nonrewritable Blocking record with source, catalog and ordinal XML location. Merge, batch merge and rename reject the affected target. A separate Effect remains Safe in the same fixture. A second failing-before run showed nested unknown id/parent were missed; only the declaration root's identity/parent are excluded now.
+2. CModel.Model has XSD type CModelPath, but rename changed Assets/SharedAudit.m3 when the model SharedAudit was renamed. XSD-declared scalar/non-Link carriers are now excluded from merge/rename token substitution. Declared Link carriers still use their XSD catalog type; CEffectCreateUnit.SpawnUnit and CAbilArmMagazine.Alert have positive rename/merge coverage.
+3. An earlier test expected CAbilArmMagazine.Alert to remain unresolved by rename. The structural XSD link now rewrites it correctly, so that test checks a positive ID+Link rewrite. Other unknown-carrier negative tests continue to verify rejection and byte-identical inputs.
+
+The positive XML carrier regression places a token PI, an escaped unknown attribute, and a comment alongside a typed SpawnUnit link. Merge and rename change the typed link while preserving the neighbors' semantic content. The tests use a temporary folder and the real analyzer/services. Existing actor/enum/filter/parent/rollback tests were retained; test-only unsupported catalog fields were corrected to XSD-declared carriers while preserving their assertions about redirects and unchanged fields. CPlacedUnit.Unit remains an explicit known carrier outside catalogsData.xsd, matching the existing Objects/placement analysis rule. CDataCollection DataRecord.Entry uses a separate proven comma/catalog prefix rule; Unit,BatchUnit now follows a Unit rename, while generic XSD scalar values still do not.
+
+Evidence: xml-unknown-before.txt, xml-nested-before.txt, xml-asset-before.txt and xml-typed-final-closest.txt. Final Release: 5/5 CTest, 150 core passed / 0 failed / 4 unavailable fixture skips, 90.18 s total. Final Debug: 5/5 CTest, 150 core passed / 0 failed / 4 unavailable fixture skips, 258.79 s total. The Mercs Episode 2 archive checks used a copy.
+
+This does not prove complete XML span-level rewriting: changed catalog XML is still serialized through pugixml, legacy actor event grammar and untyped unique-ID compatibility paths remain, and namespace/default/effective-value/dependency work is incomplete. The existing portable ZIP predates these changes. Editor acceptance remains NOT_RUN; full task remains active.
+
+Fresh sequential read-only Release probe runs on archive copies: Mercs Episode 2: 2,754 ms, 158 MiB peak, 863 objects, 13,212 indexed references; City of Tempest: 39,997 ms, 467 MiB peak, 12,856 objects, 149,502 references. Prior current-code probes before XML carrier scanning were 2,728 ms/158 MiB and 49,448 ms/465 MiB; original baseline was 2,006 ms/47 MiB and 38,384 ms/238 MiB. Single runs have cache variance; the added XML checks do not establish a performance improvement. Current probes identify 0 Safe and 853/12,805 Unknown candidates respectively because full dependency/effective coverage is incomplete. JSON evidence: benchmark-xml-carriers-small.json and benchmark-xml-carriers-large.json.
+
+
+Subsequent case-variant and independent raw XML output verification are documented in CASE_AND_OUTPUT_VERIFICATION.md. The 150-test numbers above are historical; current final Debug/Release each passed 153 core tests and 5/5 CTest.

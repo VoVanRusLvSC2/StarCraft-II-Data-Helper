@@ -54,6 +54,10 @@ public:
                                 const QSet<QString> &whitelistIds,
                                 const std::function<void(int, int, const QString &)> &progress = {}) const;
 
+    static bool verifyRemovedReferences(const AnalysisResult &analysis,
+                                        const QHash<QString, QSet<QString>> &removedScopesById,
+                                        QString *error);
+
     static int replaceIdTokens(QString *value, const QString &oldId, const QString &newId);
     static int countIdTokens(const QString &value, const QString &id);
 

@@ -1,0 +1,13 @@
+# Explicit dependency source discovery (2026-09-28)
+
+The analyzer accepts an explicit list of dependency search roots. For each `file:` fallback it checks only the same relative path under those roots. A unique archive is recorded with its canonical path and SHA-256 source revision; its `DocumentInfo` is read recursively, preserving parent source, declaration ordinal and depth. An absent path, two distinct matches, path traversal, a cycle, an unreadable/malformed archive or a depth above 32 is reported with a distinct status. Resolved archive revisions join the stale-source checks. The optional probe syntax is `SC2CatalogAnalysisProbe <input> <output.json> --dependency-root <directory>`; multiple `--dependency-root` pairs are allowed.
+
+This pass locates package metadata. It does **not** load the dependency's GameData into the effective catalog model, verify a `bnet:` handle against the fallback archive, prove runtime precedence or mark the dependency graph complete. Destructive candidates remain blocked when dependencies are declared. A name-only search outside the provided roots is not used.
+
+Synthetic MPQ regressions cover A -> B -> A cycle detection, archive hash capture and stale detection after an external edit, ambiguity across two roots, and rejection of `../` traversal. Earlier direct-declaration ordering and no-false-Safe regressions remain.
+
+On a copied City map with a staged explicit root, the read-only probe located and hashed the copied `Protis and stuff.SC2Mod` and `SpectreHeroPack Backup.SC2Mod` archives. It then reported their missing Swarm Campaign and Swarm Mod dependencies. The direct `Left 2 Die` Battle.net-only source and `SwarmStory.SC2Campaign` were also missing. Six source edges total: two Located, four Missing. The result stayed Partial, `dependency_graph_complete=false`, and zero Safe. Evidence: `benchmark-explicit-dependency-city.json`.
+
+Final Release: 5/5 CTest, 163 core passed / 0 failed / 4 unavailable fixture skips, 99.08 s total. Final Debug: 5/5 CTest, 163 core passed / 0 failed / 4 unavailable fixture skips, 279.87 s total. The copied City probe took 39,898 ms / 504 MiB and still reported 12,805 Unknown unused candidates; one run is not a speed claim.
+
+Current portable checkpoint: `dist/SC2DataHelper-3.0-beta3-dependency-sources-20260928.zip`, SHA-256 `2fa2f78cf12915aed98f2e4f31e0451a99af0726d66a91d3d139f3558f6dfc13`, 194 entries/resources verified. Outside-source layout smoke generated 14 PNGs. Copied Mercs map preview returned ready=true and source_unchanged=true with 75 archive entries. Offscreen OpenGL unavailable; Editor/gameplay acceptance NOT_RUN.

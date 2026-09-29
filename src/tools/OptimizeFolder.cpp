@@ -1,4 +1,5 @@
 #include "core/ConfigManager.h"
+#include "core/CatalogProtection.h"
 #include "core/FolderAnalyzer.h"
 #include "core/MergeService.h"
 
@@ -113,10 +114,16 @@ int main(int argc, char *argv[])
 
     QVector<int> safeUnused;
     QJsonArray unusedIds;
+    QJsonArray unusedObjects;
     for (const UnusedCandidateInfo &candidate : analysis.unusedCandidates) {
         if (candidate.state != CandidateState::Safe) continue;
         safeUnused.append(candidate.nodeIndex);
-        unusedIds.append(analysis.nodes.at(candidate.nodeIndex).id);
+        const auto &node = analysis.nodes.at(candidate.nodeIndex);
+        unusedIds.append(node.id);
+        unusedObjects.append(QJsonObject{{QStringLiteral("catalog"), sc2dh::catalogIdentityScope(node.elementName)},
+            {QStringLiteral("id"), node.id}, {QStringLiteral("element"), node.elementName},
+            {QStringLiteral("source"), QDir(folder).relativeFilePath(node.sourceFile).replace('\\', '/')},
+            {QStringLiteral("location"), node.originalLocation}});
     }
 
     int removedUnused = 0;
@@ -137,11 +144,20 @@ int main(int argc, char *argv[])
         err << "Final verification failed: " << error << '\n';
         return 10;
     }
-    for (const QJsonValue &value : deleteUnused ? unusedIds : QJsonArray{}) {
-        const QString removedId = value.toString();
+    for (const QJsonValue &value : deleteUnused ? unusedObjects : QJsonArray{}) {
+        const auto removed = value.toObject();
+        const QString id = removed.value(QStringLiteral("id")).toString();
+        const QString catalog = removed.value(QStringLiteral("catalog")).toString();
+        const QString identity = catalog + QChar(0x1f) + id.toCaseFolded();
         for (const DataNode &node : verified.nodes) {
-            if (node.id == removedId || node.referencedIds.contains(removedId)) {
-                err << "Removed unused ID remains after verification: " << removedId << '\n';
+            const bool declarationRemains = sc2dh::catalogIdentityScope(node.elementName) == catalog
+                && node.id.compare(id, Qt::CaseInsensitive) == 0;
+            bool referenceRemains = node.referenceKeys.contains(identity);
+            for (const auto &reference : node.referenceKeys)
+                if (reference.startsWith(QChar(0x1f)) && reference.section(QChar(0x1f), 1).compare(id, Qt::CaseInsensitive) == 0)
+                    referenceRemains = true;
+            if (declarationRemains || referenceRemains) {
+                err << "Removed unused catalog identity remains after verification: " << catalog << '/' << id << '\n';
                 return 11;
             }
         }
@@ -157,11 +173,14 @@ int main(int argc, char *argv[])
     report.insert(QStringLiteral("unusedObjectsRemoved"), removedUnused);
     report.insert(QStringLiteral("unusedObjectsSkipped"), skippedUnused);
     report.insert(QStringLiteral("unusedSafeCandidatesPreviewed"), safeUnused.size());
-    report.insert(QStringLiteral("unusedApplyMode"), deleteUnused
-                      ? QStringLiteral("applied")
-                      : QStringLiteral("preview-only: archive binary references are not fully analyzable"));
+    report.insert(QStringLiteral("unusedApplyMode"), !deleteUnused
+                      ? QStringLiteral("preview-only: archive binary references are not fully analyzable")
+                      : safeUnused.isEmpty() ? QStringLiteral("no-safe-candidates")
+                      : removedUnused == 0 ? QStringLiteral("attempted-no-removal")
+                                           : QStringLiteral("applied"));
     report.insert(QStringLiteral("merges"), merges);
     report.insert(QStringLiteral("unusedIds"), unusedIds);
+    report.insert(QStringLiteral("unusedObjects"), unusedObjects);
     report.insert(QStringLiteral("finalDuplicateMergeCandidates"),
                   int(std::count_if(verified.duplicateContentGroups.cbegin(), verified.duplicateContentGroups.cend(),
                                     [](const DuplicateContentGroup &g) { return g.autoRecommended; })));

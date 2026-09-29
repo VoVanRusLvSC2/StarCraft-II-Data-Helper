@@ -1,3 +1,11 @@
+#include "core/GalaxyReferenceSpans.h"
+#include "core/GuiReferenceSpans.h"
+#include "core/ObjectsReferenceSpans.h"
+#include "core/CatalogProtection.h"
+#include "core/CatalogLinkSchema.h"
+#include "core/XmlLoader.h"
+#include <QJsonDocument>
+#include <QJsonArray>
 #include "core/UnifiedReferenceIndex.h"
 
 #include "core/AssetFileRules.h"
@@ -156,7 +164,7 @@ bool isSafeTextFile(const QString &relativePath, const ScannedFileInfo &file)
 {
     const QString normalized = relativePath.toLower();
     const QString suffix = QFileInfo(relativePath).suffix().toLower();
-    if (file.isXml || file.isSc2DataLike)
+    if (file.isXml || file.isSc2DataLike || sc2dh::gui::isGuiPath(relativePath))
         return true;
     if (normalized == QStringLiteral("objects")
         || normalized.endsWith(QStringLiteral("/objects"))
@@ -207,31 +215,6 @@ bool isStrongTextPath(const QString &relativePath)
         || kind == sc2dh::refs::ReferenceKind::ScriptText;
 }
 
-QString unquote(QString value)
-{
-    value = value.trimmed();
-    if (value.size() >= 2 && value.front() == QLatin1Char('"') && value.back() == QLatin1Char('"'))
-        return value.mid(1, value.size() - 2);
-    return value;
-}
-
-QStringList placementTargets(const QString &text, qsizetype *lastOffset = nullptr)
-{
-    QStringList targets;
-    static const QRegularExpression field(QStringLiteral("\\b(?:Type|Unit|Doodad)\\b\\s*(?:=|:)\\s*(\"[^\"]*\"|[^\\s,;}]+)"),
-                                          QRegularExpression::CaseInsensitiveOption);
-    auto matches = field.globalMatch(text);
-    while (matches.hasNext()) {
-        const QRegularExpressionMatch match = matches.next();
-        targets << unquote(match.captured(1));
-        if (lastOffset)
-            *lastOffset = match.capturedStart(1);
-    }
-    targets.removeAll(QString());
-    targets.removeDuplicates();
-    return targets;
-}
-
 } // namespace
 
 namespace sc2dh::refs
@@ -240,14 +223,26 @@ namespace sc2dh::refs
 void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
 {
     m_records.clear();
+    m_coverageIssues.clear();
     m_byId.clear();
     m_byAsset.clear();
 
+    QHash<QString, QVector<const DataNode *>> guiTargetsById;
+    const auto guiRegistry = sc2dh::gui::projectRegistry(analysis);
+    m_coverageIssues += guiRegistry.issues();
+    QHash<QString, QVector<const DataNode *>> galaxyTargetsByCatalog;
+    QHash<QString, QVector<const DataNode *>> galaxyTargetsByIdentity;
+    QVector<const DataNode *> galaxyTargets;
     QSet<QString> knownIdKeys;
     QHash<QString, QString> canonicalIdByKey;
     for (const DataNode &node : analysis.nodes) {
         if (node.id.isEmpty())
             continue;
+        const QString domain = sc2dh::catalogIdentityScope(node.elementName);
+        galaxyTargets.append(&node);
+        guiTargetsById[foldedKey(node.id)].append(&node);
+        galaxyTargetsByCatalog[domain].append(&node);
+        galaxyTargetsByIdentity[domain + QLatin1Char('|') + foldedKey(node.id)].append(&node);
         const QString key = foldedKey(node.id);
         knownIdKeys.insert(key);
         canonicalIdByKey.insert(key, node.id);
@@ -285,6 +280,48 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
         assetPatterns.append({it.key(), it.key()});
     const TokenSetMatcher assetMatcher(assetPatterns);
 
+    // Unknown XML carriers are evidence of uncertainty, not established links.
+    // Match against known identities, retaining only the affected target scope.
+    for (const DataNode &node : analysis.nodes) {
+        pugi::xml_document document;
+        const QByteArray bytes = node.serializedXml.toUtf8();
+        if (!document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags)) continue;
+        const auto inspect = [&](pugi::xml_node element, const QString &field, const QString &value) {
+            const QString name = QString::fromUtf8(element.name());
+            if (((field == QStringLiteral("id") || field == QStringLiteral("parent")) && element == document.document_element())
+                || field == QStringLiteral("index") || field == QStringLiteral("removed")
+                || field == QStringLiteral("default") || field.startsWith(QStringLiteral("xmlns"))) return;
+            if (field == QStringLiteral("refs") && qEnvironmentVariableIsSet("SC2DH_ENABLE_TEST_REFS")) return;
+            if (field == QStringLiteral("unitName") && name.startsWith(QStringLiteral("CActorUnit"))) return;
+            if (sc2dh::isNonReferenceCatalogFieldName(field) || sc2dh::isNonReferenceCatalogFieldName(name)
+                || sc2dh::catalogFieldDeclared(element, field)) return;
+            const auto matches = foldedIdMatcher.firstMatches(foldedCharacters(value));
+            for (auto match = matches.cbegin(); match != matches.cend(); ++match)
+                for (const DataNode *target : guiTargetsById.value(match.key())) {
+                    ReferenceRecord record;
+                    record.kind = ReferenceKind::TypedXml; record.strength = ReferenceStrength::Blocking;
+                    record.targetId = target->id; record.targetCatalog = sc2dh::catalogIdentityScope(target->elementName);
+                    record.sourceId = node.id; record.sourceType = node.elementName; record.sourceFile = node.sourceFile;
+                    const XmlLoader loader;
+                    const QString localPath = loader.buildNodeLocation(element);
+                    const QString rootPath = loader.buildNodeLocation(document.document_element());
+                    record.fieldPath = node.originalLocation + localPath.mid(rootPath.size())
+                        + (field.isEmpty() ? QStringLiteral("/text()") : QStringLiteral("/@") + field);
+                    record.detail = QStringLiteral("Unknown XML carrier %1 contains %2; reference grammar is not established").arg(record.fieldPath, target->id);
+                    record.rewritable = false; addRecord(record);
+                }
+        };
+        std::function<void(pugi::xml_node)> visit = [&](pugi::xml_node element) {
+            if (element.type() != pugi::node_element) return;
+            for (const auto &attribute : element.attributes()) inspect(element, QString::fromUtf8(attribute.name()), QString::fromUtf8(attribute.value()));
+            for (auto child : element.children()) {
+                if (child.type() == pugi::node_pcdata || child.type() == pugi::node_cdata) inspect(element, {}, QString::fromUtf8(child.value()));
+                else if (child.type() == pugi::node_element) visit(child);
+            }
+        };
+        visit(document.document_element());
+    }
+
     for (const DataNode &node : analysis.nodes) {
         for (const QString &reference : node.referencedIds) {
             if (reference.trimmed().isEmpty())
@@ -293,6 +330,7 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
             record.kind = ReferenceKind::TypedXml;
             record.strength = ReferenceStrength::Strong;
             record.targetId = reference.trimmed();
+            record.sourceToken = reference.trimmed();
             record.sourceId = node.id;
             record.sourceType = node.elementName;
             record.sourceFile = node.sourceFile;
@@ -303,14 +341,50 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
         }
     }
 
+
+    for (const DataNode &node:analysis.nodes) {
+        for (const auto &edge:node.referenceEdges) {
+            ReferenceRecord record;
+            record.kind=ReferenceKind::TypedXml; record.strength=ReferenceStrength::Strong;
+            record.targetId=edge.target.id; record.targetCatalog=edge.target.catalog;
+            record.sourceToken=edge.target.id;
+            record.sourceId=node.id; record.sourceType=node.elementName; record.sourceFile=node.sourceFile;
+            record.fieldPath=edge.field.path+QStringLiteral("/@")+edge.field.carrier;
+            record.detail=edge.evidence; record.rewritable=edge.rewritable;
+            addRecord(record);
+        }
+    }
+    QHash<QString, QStringList> unknownByCatalog;
+    for (const DataNode &node:analysis.nodes) {
+        if (node.resolutionIssues.isEmpty()) continue;
+        QStringList domains=node.unknownReferenceCatalogs;
+        domains << sc2dh::catalogIdentityScope(node.elementName);
+        for (const QString &domain:domains) {
+            if (unknownByCatalog[domain].size()<8)
+                unknownByCatalog[domain] << QStringLiteral("%1 %2: %3").arg(node.sourceFile,node.id,node.resolutionIssues.join(QStringLiteral("; ")));
+        }
+    }
+    for (const DataNode &target:analysis.nodes) {
+        const QString domain=sc2dh::catalogIdentityScope(target.elementName);
+        if(target.id.isEmpty() || !unknownByCatalog.contains(domain)) continue;
+        ReferenceRecord record;
+        record.kind=ReferenceKind::ScriptText; record.strength=ReferenceStrength::Blocking;
+        record.targetId=target.id; record.targetCatalog=domain;
+        record.sourceFile=QStringLiteral("<semantic coverage>");
+        record.detail=unknownByCatalog.value(domain).join(QStringLiteral("; ")); record.rewritable=false;
+        addRecord(record);
+    }
+
     ScannedFileReader reader(analysis);
     for (const ScannedFileInfo &file : analysis.scannedFiles) {
         const QString relative = ScannedFileReader::relativePath(analysis.rootFolder, file.filePath).replace('\\', '/');
         const bool text = isSafeTextFile(relative, file);
 
         QByteArray bytes;
-        if (!reader.readBytes(file, 16ll * 1024ll * 1024ll, &bytes))
+        if (!reader.readBytes(file, 16ll * 1024ll * 1024ll, &bytes)) {
+            if(text) m_coverageIssues << QStringLiteral("%1: reference source unreadable or exceeds 16 MiB limit").arg(file.filePath);
             continue;
+        }
 
         if (!text) {
             const auto matches = binaryIdMatcher.firstMatches(QString::fromLatin1(bytes));
@@ -329,30 +403,120 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
             continue;
         }
 
-        const QString content = QString::fromUtf8(bytes);
-        const LineNumberIndex lines(content);
+        QString content;
         if (isPlacementFile(relative)) {
-            qsizetype lastOffset = -1;
-            for (const QString &target : placementTargets(content, &lastOffset)) {
-                const QString key = foldedKey(target);
-                if (!knownIdKeys.contains(key))
-                    continue;
-                ReferenceRecord record;
-                record.kind = ReferenceKind::PlacementRoot;
-                record.strength = ReferenceStrength::Strong;
-                record.targetId = canonicalIdByKey.value(key, target);
-                record.sourceFile = relative;
-                record.lineNumber = lines.at(lastOffset);
-                record.detail = QStringLiteral("Objects placement/runtime root");
-                record.rewritable = true;
-                addRecord(record);
+            if (!sc2dh::objects::decodeText(bytes, &content)) {
+                m_coverageIssues << relative + QStringLiteral(": Objects encoding is unsupported or invalid");
+                continue;
+            }
+        } else {
+            content = QString::fromUtf8(bytes);
+        }
+        const LineNumberIndex lines(content);
+        const bool galaxySource=relative.endsWith(QStringLiteral(".galaxy"),Qt::CaseInsensitive);
+        if (galaxySource) {
+            const auto parsed=sc2dh::galaxy::scan(content);
+            QSet<QString> unknownCatalogs;
+            for(const auto &reference:parsed.references) {
+                if(reference.value.isEmpty()) {
+                    if(unknownCatalogs.contains(reference.catalog))continue;
+                    unknownCatalogs.insert(reference.catalog);
+                }
+                const auto targets = reference.catalog.isEmpty() ? galaxyTargets
+                    : reference.value.isEmpty() ? galaxyTargetsByCatalog.value(reference.catalog)
+                    : galaxyTargetsByIdentity.value(reference.catalog + QLatin1Char('|') + foldedKey(reference.value));
+                for(const auto *target:targets) {
+                    const auto &node=*target;
+                    const QString domain=sc2dh::catalogIdentityScope(node.elementName);
+                    ReferenceRecord record;record.kind=ReferenceKind::ScriptText;record.targetId=node.id;record.targetCatalog=domain;
+                    record.sourceToken=reference.value;
+                    record.sourceFile=relative;record.lineNumber=lines.at(reference.start);record.detail=reference.reason;
+                    record.strength=reference.value.isEmpty()?ReferenceStrength::Blocking:ReferenceStrength::Strong;
+                    record.rewritable=reference.rewritable;addRecord(record);
+                }
+            }
+            for(const auto &literal:parsed.opaqueStrings) {
+                const auto matches=foldedIdMatcher.firstMatches(foldedCharacters(literal.value));
+                for(auto it=matches.begin();it!=matches.end();++it) {
+                    ReferenceRecord record;record.kind=ReferenceKind::ScriptText;record.strength=ReferenceStrength::Blocking;
+                    record.targetId=canonicalIdByKey.value(it.key());record.sourceFile=relative;record.lineNumber=lines.at(literal.start);
+                    record.detail=QStringLiteral("Opaque Galaxy string has no established reference grammar");record.rewritable=false;addRecord(record);
+                }
+            }
+            if(!parsed.complete) m_coverageIssues << relative+QStringLiteral(": incomplete Galaxy lexical/call coverage");
+        }
+
+        const bool guiSource = guiRegistry.isGuiFile(relative);
+        if (guiSource) {
+            QSet<QString> unknownDomains;
+            for (const auto &reference : guiRegistry.references(relative)) {
+                if (reference.value.isEmpty()) {
+                    if (unknownDomains.contains(reference.catalog)) continue;
+                    unknownDomains.insert(reference.catalog);
+                }
+                const auto targets = reference.catalog.isEmpty()
+                    ? reference.value.isEmpty() ? galaxyTargets : guiTargetsById.value(foldedKey(reference.value))
+                    : reference.value.isEmpty() ? galaxyTargetsByCatalog.value(reference.catalog)
+                    : galaxyTargetsByIdentity.value(reference.catalog + QLatin1Char('|') + foldedKey(reference.value));
+                for (const auto *target : targets) {
+                    ReferenceRecord record; record.kind = ReferenceKind::ScriptText;
+                    record.strength = reference.rewritable ? ReferenceStrength::Strong : ReferenceStrength::Blocking;
+                    record.targetId = target->id; record.targetCatalog = sc2dh::catalogIdentityScope(target->elementName);
+                    record.sourceToken = reference.value;
+                    record.sourceFile = relative; record.fieldPath = reference.fieldPath;
+                    record.lineNumber = reference.start >= 0 ? lines.at(QString::fromUtf8(bytes.left(reference.start)).size()) : -1;
+                    record.detail = reference.reason; record.rewritable = reference.rewritable;
+                    addRecord(record);
+                }
+            }
+        }
+
+        if (isPlacementFile(relative)) {
+            const auto parsed = sc2dh::objects::scan(content, knownIdKeys);
+            for (const auto &occurrence : parsed.occurrences) {
+                const QString key = foldedKey(occurrence.value);
+                const auto targets = occurrence.catalog.isEmpty()
+                    ? guiTargetsById.value(key)
+                    : galaxyTargetsByIdentity.value(occurrence.catalog + QLatin1Char('|') + key);
+                for (const DataNode *target : targets) {
+                    ReferenceRecord record;
+                    record.kind = ReferenceKind::PlacementRoot;
+                    record.strength = occurrence.rewritable ? ReferenceStrength::Strong : ReferenceStrength::Blocking;
+                    record.targetId = target->id;
+                    record.targetCatalog = sc2dh::catalogIdentityScope(target->elementName);
+                    record.sourceToken = occurrence.value;
+                    record.sourceFile = relative;
+                    record.lineNumber = lines.at(occurrence.start);
+                    record.detail = occurrence.reason;
+                    record.rewritable = occurrence.rewritable;
+                    addRecord(record);
+                }
+            }
+            if (!parsed.complete) {
+                m_coverageIssues << relative + QStringLiteral(": ") + parsed.issue;
+                const auto uncertain = foldedIdMatcher.firstMatches(foldedCharacters(content));
+                for (auto match = uncertain.cbegin(); match != uncertain.cend(); ++match) {
+                    for (const DataNode *target : guiTargetsById.value(match.key())) {
+                        ReferenceRecord record;
+                        record.kind = ReferenceKind::PlacementRoot;
+                        record.strength = ReferenceStrength::Blocking;
+                        record.targetId = target->id;
+                        record.targetCatalog = sc2dh::catalogIdentityScope(target->elementName);
+                        record.sourceToken = content.mid(match.value(), target->id.size());
+                        record.sourceFile = relative;
+                        record.lineNumber = lines.at(match.value());
+                        record.detail = parsed.issue;
+                        addRecord(record);
+                    }
+                }
             }
         }
 
         const ReferenceKind textKind = textKindForPath(relative);
         const bool strongText = isStrongTextPath(relative);
         const QString foldedContent = foldedCharacters(content);
-        const auto idMatches = foldedIdMatcher.firstMatches(foldedContent);
+        const auto idMatches = (galaxySource || guiSource || isPlacementFile(relative))
+            ? QHash<QString, qsizetype>{} : foldedIdMatcher.firstMatches(foldedContent);
         for (auto match = idMatches.cbegin(); match != idMatches.cend(); ++match) {
             const QString idKey = match.key();
             const QString canonical = canonicalIdByKey.value(idKey);
@@ -360,6 +524,7 @@ void UnifiedReferenceIndex::build(const AnalysisResult &analysis)
             record.kind = textKind;
             record.strength = strongText ? ReferenceStrength::Strong : ReferenceStrength::Weak;
             record.targetId = canonical;
+            record.sourceToken = content.mid(match.value(), canonical.size());
             record.sourceFile = relative;
             record.lineNumber = lines.at(match.value());
             record.detail = strongText ? QStringLiteral("token-aware text reference")
@@ -419,10 +584,10 @@ QVector<ReferenceRecord> UnifiedReferenceIndex::strongReferencesToId(const QStri
     return out;
 }
 
-bool UnifiedReferenceIndex::hasNonRewritableStrongReferenceToId(const QString &id) const
+bool UnifiedReferenceIndex::hasNonRewritableStrongReferenceToId(const QString &id, const QString &catalog) const
 {
     for (const ReferenceRecord &record : strongReferencesToId(id)) {
-        if (!record.rewritable)
+        if (!record.rewritable && (catalog.isEmpty() || record.targetCatalog.isEmpty() || record.targetCatalog==catalog))
             return true;
     }
     return false;

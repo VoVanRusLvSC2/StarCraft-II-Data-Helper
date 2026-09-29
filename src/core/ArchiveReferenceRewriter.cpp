@@ -2,6 +2,9 @@
 
 #include "core/AnalysisModels.h"
 #include "core/CatalogProtection.h"
+#include "core/GalaxyReferenceSpans.h"
+#include "core/GuiReferenceSpans.h"
+#include "core/ObjectsReferenceSpans.h"
 
 #include <QDir>
 #include <QFile>
@@ -196,7 +199,9 @@ bool rewriteArchiveReferenceFiles(const QString &rootFolder,
                                   const QStringList &relativeFiles,
                                   const QHash<QString, QString> &renames,
                                   ArchiveReferenceRewriteReport *report,
-                                  QString *errorMessage)
+                                  QString *errorMessage,
+                                  const QHash<QString, QString> &catalogs,
+                                  const gui::Registry *guiRegistry)
 {
     if (report)
         *report = {};
@@ -222,17 +227,43 @@ bool rewriteArchiveReferenceFiles(const QString &rootFolder,
         const QByteArray original = file.readAll();
         file.close();
 
-        if (!containsTokenBytes(original, renames))
+        if (!(guiRegistry && guiRegistry->isGuiFile(relative)) && !containsTokenBytes(original, renames))
             continue;
 
+        QString objectsIssue;
+        QSet<QString> targetIds;for(auto it=renames.cbegin();it!=renames.cend();++it)targetIds.insert(it.key());
+        const auto rewrite = [&](const QString &source, int *count) {
+            if(sc2dh::objects::isPlacementPath(relative)) {
+                QString changed;
+                if(!sc2dh::objects::rewrite(source,targetIds,[&](const QString &catalog,const QString &id) {
+                    return catalogs.value(id)==catalog ? renames.value(id) : QString();
+                },&changed,count,&objectsIssue)) return source;
+                return changed;
+            }
+            if (!relative.endsWith(QStringLiteral(".galaxy"), Qt::CaseInsensitive))
+                return rewriteText(source, renames, count);
+            return sc2dh::galaxy::rewrite(source, [&](const QString &catalog, const QString &id) {
+                return !catalog.isEmpty() && catalogs.value(id) == catalog ? renames.value(id) : QString();
+            }, count);
+        };
         QByteArray rewritten;
         int replacements = 0;
-        if (looksLikeUtf8Text(original)) {
-            rewritten = rewriteText(QString::fromUtf8(original), renames, &replacements).toUtf8();
+        if (guiRegistry && guiRegistry->isGuiFile(relative)) {
+            if (!guiRegistry->rewrite(relative, original, [&](const QString &catalog, const QString &id) {
+                    return !catalog.isEmpty() && catalogs.value(id) == catalog ? renames.value(id) : QString();
+                }, &rewritten, &replacements)) {
+                if (errorMessage) *errorMessage = QStringLiteral("GUI source changed after type resolution: %1").arg(relative);
+                return false;
+            }
+        } else if (gui::isGuiPath(relative)) {
+            if (errorMessage) *errorMessage = QStringLiteral("GUI reference rewrite requires an established type registry: %1").arg(relative);
+            return false;
+        } else if (looksLikeUtf8Text(original)) {
+            rewritten = rewrite(QString::fromUtf8(original), &replacements).toUtf8();
         } else if (looksLikeUtf16LeText(original)) {
             const auto *data = reinterpret_cast<const char16_t *>(original.constData());
             const QString text = QString::fromUtf16(data, original.size() / 2);
-            const QString changed = rewriteText(text, renames, &replacements);
+            const QString changed = rewrite(text, &replacements);
             rewritten = QByteArray(reinterpret_cast<const char *>(changed.utf16()), changed.size() * 2);
         } else {
             if (report)
@@ -242,6 +273,10 @@ bool rewriteArchiveReferenceFiles(const QString &rootFolder,
             return false;
         }
 
+        if(!objectsIssue.isEmpty()) {
+            if(errorMessage) *errorMessage=QStringLiteral("Objects reference rewrite is ambiguous: %1: %2").arg(relative,objectsIssue);
+            return false;
+        }
         if (replacements <= 0 || rewritten == original)
             continue;
         if (!writeFile(path, rewritten, errorMessage))
@@ -260,7 +295,9 @@ bool previewArchiveReferenceFileRewrites(const QString &rootFolder,
                                          const QStringList &relativeFiles,
                                          const QHash<QString, QString> &renames,
                                          ArchiveReferenceRewriteReport *report,
-                                         QString *errorMessage)
+                                         QString *errorMessage,
+                                  const QHash<QString, QString> &catalogs,
+                                  const gui::Registry *guiRegistry)
 {
     if (report)
         *report = {};
@@ -285,17 +322,43 @@ bool previewArchiveReferenceFileRewrites(const QString &rootFolder,
         const QByteArray original = file.readAll();
         file.close();
 
-        if (!containsTokenBytes(original, renames))
+        if (!(guiRegistry && guiRegistry->isGuiFile(relative)) && !containsTokenBytes(original, renames))
             continue;
 
+        QString objectsIssue;
+        QSet<QString> targetIds;for(auto it=renames.cbegin();it!=renames.cend();++it)targetIds.insert(it.key());
+        const auto rewrite = [&](const QString &source, int *count) {
+            if(sc2dh::objects::isPlacementPath(relative)) {
+                QString changed;
+                if(!sc2dh::objects::rewrite(source,targetIds,[&](const QString &catalog,const QString &id) {
+                    return catalogs.value(id)==catalog ? renames.value(id) : QString();
+                },&changed,count,&objectsIssue)) return source;
+                return changed;
+            }
+            if (!relative.endsWith(QStringLiteral(".galaxy"), Qt::CaseInsensitive))
+                return rewriteText(source, renames, count);
+            return sc2dh::galaxy::rewrite(source, [&](const QString &catalog, const QString &id) {
+                return !catalog.isEmpty() && catalogs.value(id) == catalog ? renames.value(id) : QString();
+            }, count);
+        };
         int replacements = 0;
         QByteArray rewritten;
-        if (looksLikeUtf8Text(original)) {
-            rewritten = rewriteText(QString::fromUtf8(original), renames, &replacements).toUtf8();
+        if (guiRegistry && guiRegistry->isGuiFile(relative)) {
+            if (!guiRegistry->rewrite(relative, original, [&](const QString &catalog, const QString &id) {
+                    return !catalog.isEmpty() && catalogs.value(id) == catalog ? renames.value(id) : QString();
+                }, &rewritten, &replacements)) {
+                if (errorMessage) *errorMessage = QStringLiteral("GUI source changed after type resolution: %1").arg(relative);
+                return false;
+            }
+        } else if (gui::isGuiPath(relative)) {
+            if (errorMessage) *errorMessage = QStringLiteral("GUI reference rewrite requires an established type registry: %1").arg(relative);
+            return false;
+        } else if (looksLikeUtf8Text(original)) {
+            rewritten = rewrite(QString::fromUtf8(original), &replacements).toUtf8();
         } else if (looksLikeUtf16LeText(original)) {
             const auto *data = reinterpret_cast<const char16_t *>(original.constData());
             const QString text = QString::fromUtf16(data, original.size() / 2);
-            const QString changed = rewriteText(text, renames, &replacements);
+            const QString changed = rewrite(text, &replacements);
             rewritten = QByteArray(reinterpret_cast<const char *>(changed.utf16()), changed.size() * 2);
         } else {
             if (report)
@@ -305,6 +368,10 @@ bool previewArchiveReferenceFileRewrites(const QString &rootFolder,
             return false;
         }
 
+        if(!objectsIssue.isEmpty()) {
+            if(errorMessage) *errorMessage=QStringLiteral("Objects reference preview is ambiguous: %1: %2").arg(relative,objectsIssue);
+            return false;
+        }
         if (replacements <= 0 || rewritten == original)
             continue;
         if (report) {

@@ -1,3 +1,4 @@
+#include "core/XmlParsePolicy.h"
 #include "core/DataCollectionPreservation.h"
 
 #include <QHash>
@@ -148,7 +149,7 @@ bool restoreMissingDataCollectionRecords(const QByteArray &baselineBytes, QByteA
         return true;
 
     pugi::xml_document baselineDocument;
-    const auto baselineParsed = baselineDocument.load_buffer(baselineBytes.constData(), size_t(baselineBytes.size()));
+    const auto baselineParsed = baselineDocument.load_buffer(baselineBytes.constData(), size_t(baselineBytes.size()), sc2dh::xmlParseFlags);
     if (!baselineParsed) {
         if (error)
             *error = QStringLiteral("Cannot parse baseline DataCollection XML: %1").arg(baselineParsed.description());
@@ -156,7 +157,7 @@ bool restoreMissingDataCollectionRecords(const QByteArray &baselineBytes, QByteA
     }
 
     pugi::xml_document stagedDocument;
-    const auto stagedParsed = stagedDocument.load_buffer(stagedBytes->constData(), size_t(stagedBytes->size()));
+    const auto stagedParsed = stagedDocument.load_buffer(stagedBytes->constData(), size_t(stagedBytes->size()), sc2dh::xmlParseFlags);
     if (!stagedParsed) {
         if (error)
             *error = QStringLiteral("Cannot parse staged DataCollection XML: %1").arg(stagedParsed.description());
@@ -230,7 +231,7 @@ bool restoreMissingDataCollectionRecords(const QByteArray &baselineBytes, QByteA
         *stagedBytes = QByteArray::fromStdString(stream.str());
 
         pugi::xml_document verifiedDocument;
-        const auto verifiedParsed = verifiedDocument.load_buffer(stagedBytes->constData(), size_t(stagedBytes->size()));
+        const auto verifiedParsed = verifiedDocument.load_buffer(stagedBytes->constData(), size_t(stagedBytes->size()), sc2dh::xmlParseFlags);
         if (!verifiedParsed) {
             if (error)
                 *error = QStringLiteral("Cannot parse preserved DataCollection XML: %1").arg(verifiedParsed.description());

@@ -1,9 +1,15 @@
+#include "core/XmlParsePolicy.h"
 #include "core/MergeService.h"
 
 #include "core/ArchiveReferenceRewriter.h"
 #include "core/BackupManager.h"
 #include "core/CatalogProtection.h"
+#include "core/CatalogLinkSchema.h"
 #include "core/FolderAnalyzer.h"
+#include "core/GuiReferenceSpans.h"
+#include "core/GalaxyReferenceSpans.h"
+#include "core/ObjectsReferenceSpans.h"
+#include "core/UnifiedReferenceIndex.h"
 
 #include <QDir>
 #include <QFile>
@@ -17,6 +23,40 @@
 #include <sstream>
 
 namespace {
+
+QSet<QString> ambiguousCatalogIds(const AnalysisResult &analysis)
+{
+    QHash<QString, QSet<QString>> scopes;
+    for (const auto &node : analysis.nodes)
+        if (!node.id.isEmpty()) scopes[node.id.toCaseFolded()].insert(sc2dh::catalogIdentityScope(node.elementName));
+    QSet<QString> result;
+    for (auto it = scopes.cbegin(); it != scopes.cend(); ++it)
+        if (it.value().size() > 1) result.insert(it.key());
+    return result;
+}
+
+QString unresolvedMergeReference(const sc2dh::refs::UnifiedReferenceIndex &index,
+                                 const DataNode &node, const QSet<QString> &ambiguousIds)
+{
+    const QString catalog = sc2dh::catalogIdentityScope(node.elementName);
+    for (const auto &reference : index.strongReferencesToId(node.id)) {
+        if (!reference.targetCatalog.isEmpty() && reference.targetCatalog != catalog) continue;
+        const QString spelling = reference.sourceToken.isEmpty() ? reference.targetId : reference.sourceToken;
+        if (spelling != node.id && spelling.compare(node.id, Qt::CaseInsensitive) == 0)
+            return QStringLiteral("Case-variant reference %1 to %2 in %3 cannot be safely redirected.")
+                .arg(spelling, node.id, reference.sourceFile);
+        const bool ambiguous = ambiguousIds.contains(node.id.toCaseFolded())
+            && reference.targetCatalog.isEmpty() && reference.kind != sc2dh::refs::ReferenceKind::TypedXml;
+        if (reference.rewritable && !ambiguous) continue;
+        if (ambiguous && reference.rewritable)
+            return QStringLiteral("Unscoped reference to %1 in %2 is ambiguous across catalogs.").arg(node.id, reference.sourceFile);
+        if (reference.kind == sc2dh::refs::ReferenceKind::BinaryUnconfirmed)
+            return QStringLiteral("Archive reference entry contains merged IDs but is not safe text: %1").arg(reference.sourceFile);
+        return QStringLiteral("Reference to %1 cannot be safely rewritten in %2: %3")
+            .arg(node.id, reference.sourceFile, reference.detail);
+    }
+    return {};
+}
 
 QRegularExpression idExpression(const QString &id)
 {
@@ -52,7 +92,7 @@ int replaceRedirectTokens(QString *value,
         const QRegularExpressionMatch match = matches.next();
         output += value->mid(last, match.capturedStart() - last);
         const QString oldId = match.captured(1);
-        if (!sc2dh::isSafeAutomaticObjectId(oldId) || sc2dh::isReservedCatalogToken(oldId)) {
+        if (!redirects.contains(oldId) || !sc2dh::isSafeAutomaticObjectId(oldId) || sc2dh::isReservedCatalogToken(oldId)) {
             output += oldId;
             last = match.capturedEnd();
             continue;
@@ -114,13 +154,13 @@ bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, 
     return true;
 }
 
-QStringList nonXmlReferenceFiles(const AnalysisResult &analysis)
+QStringList nonXmlReferenceFiles(const AnalysisResult &analysis, const sc2dh::gui::Registry &guiRegistry)
 {
     QStringList files;
     for (const ScannedFileInfo &info : analysis.scannedFiles) {
-        if (info.isXml)
+        QString relative = ScannedFileReader::relativePath(analysis.rootFolder, info.filePath);
+        if (info.isXml && !guiRegistry.isGuiFile(relative.replace('\\', '/')))
             continue;
-        QString relative = QDir(analysis.rootFolder).relativeFilePath(info.filePath);
         relative = QDir::cleanPath(relative).replace('\\', '/');
         if (relative.isEmpty() || relative.startsWith(QStringLiteral("../")) || QDir::isAbsolutePath(relative))
             continue;
@@ -136,6 +176,38 @@ QHash<QString, QString> archiveSafeRedirects(const AnalysisResult &analysis,
                                              QStringList *skippedIds)
 {
     return sc2dh::unambiguousArchiveReferenceRenames(analysis, redirects, skippedIds);
+}
+
+bool processMergeReferenceFiles(bool write, const QString &rootFolder,
+                                const QStringList &files,
+                                const QHash<QString, QString> &typedRedirects,
+                                const QHash<QString, QString> &untypedRedirects,
+                                const QHash<QString, QString> &catalogs,
+                                const sc2dh::gui::Registry &guiRegistry,
+                                sc2dh::ArchiveReferenceRewriteReport *report,
+                                QString *error)
+{
+    if (report) *report = {};
+    QSet<QString> seen;
+    for (const QString &file : files) {
+        const QString relative = QDir::cleanPath(file).replace('\\', '/');
+        if (seen.contains(relative)) continue;
+        seen.insert(relative);
+        const bool typed = guiRegistry.isGuiFile(relative)
+            || relative.endsWith(QStringLiteral(".galaxy"), Qt::CaseInsensitive);
+        const auto &redirects = typed ? typedRedirects : untypedRedirects;
+        sc2dh::ArchiveReferenceRewriteReport current;
+        const bool success = write
+            ? sc2dh::rewriteArchiveReferenceFiles(rootFolder, {relative}, redirects, &current, error, catalogs, &guiRegistry)
+            : sc2dh::previewArchiveReferenceFileRewrites(rootFolder, {relative}, redirects, &current, error, catalogs, &guiRegistry);
+        if (report) {
+            report->changedFiles += current.changedFiles;
+            report->blockedFiles += current.blockedFiles;
+            report->replacements += current.replacements;
+        }
+        if (!success) return false;
+    }
+    return true;
 }
 
 bool loadFile(const QString &path, QByteArray *bytes, QString *error)
@@ -191,9 +263,39 @@ struct RewriteStats {
     QStringList changes;
 };
 
+QHash<QString, QString> fieldRedirects(pugi::xml_node node, const QString &field,
+                                      const QString &value,
+                                      const QHash<QString, QString> &redirects,
+                                      const QHash<QString, QString> &catalogs,
+                                      const QHash<QString, QString> &unscoped)
+{
+    QString scope = sc2dh::catalogIdentityScope(sc2dh::catalogReferencePrefix(node, field));
+    if (field == QStringLiteral("parent") && isTopLevelCatalogIdentity(node))
+        scope = sc2dh::catalogIdentityScope(QString::fromUtf8(node.name()));
+    // The proven UnitBirth carrier is independent of the actor's own catalog.
+    const bool terms = field == QStringLiteral("Terms")
+        || (QString::fromUtf8(node.name()) == QStringLiteral("Terms") && (field.isEmpty() || field == QStringLiteral("value")));
+    if (terms && hasActorCatalogAncestor(node)) {
+        static const QRegularExpression birth(QStringLiteral("^UnitBirth\\.[A-Za-z0-9_@]+$"));
+        if (birth.match(value.trimmed()).hasMatch()) scope = QStringLiteral("cunit");
+    }
+    const bool actorEventCarrier = isInsideActorEvent(node)
+        && (field == QStringLiteral("Terms") || field == QStringLiteral("Send")
+            || field == QStringLiteral("value") || field.isEmpty());
+    if (scope.isEmpty() && sc2dh::catalogFieldDeclared(node, field) && !actorEventCarrier)
+        return {};
+    if (scope.isEmpty()) return unscoped;
+    QHash<QString, QString> result;
+    for (auto it = redirects.cbegin(); it != redirects.cend(); ++it)
+        if (catalogs.value(it.key()) == scope) result.insert(it.key(), it.value());
+    return result;
+}
+
 void rewriteNode(pugi::xml_node node,
                  const QHash<QString, QString> &redirects,
                  const QRegularExpression &redirectRegex,
+                 const QHash<QString, QString> &catalogs,
+                 const QHash<QString, QString> &unscoped,
                  const QString &file,
                  const QSet<QString> &removedIdentityLocations,
                  RewriteStats *stats)
@@ -211,7 +313,8 @@ void rewriteNode(pugi::xml_node node,
             const QString before = value;
             if (!shouldRewriteReferenceValue(node, QString::fromUtf8(attribute.name()), value))
                 continue;
-            const int replacements = replaceRedirectTokens(&value, redirects, redirectRegex);
+            const int replacements = replaceRedirectTokens(&value,
+                fieldRedirects(node, QString::fromUtf8(attribute.name()), value, redirects, catalogs, unscoped), redirectRegex);
             if (replacements > 0) {
                 attribute.set_value(value.toUtf8().constData());
                 ++stats->fields;
@@ -226,7 +329,8 @@ void rewriteNode(pugi::xml_node node,
         const QString before = value;
         if (!shouldRewriteReferenceValue(node.parent(), QString(), value))
             return;
-        const int replacements = replaceRedirectTokens(&value, redirects, redirectRegex);
+        const int replacements = replaceRedirectTokens(&value,
+            fieldRedirects(node.parent(), {}, value, redirects, catalogs, unscoped), redirectRegex);
         if (replacements > 0) {
             node.set_value(value.toUtf8().constData());
             ++stats->fields;
@@ -236,7 +340,7 @@ void rewriteNode(pugi::xml_node node,
         }
     }
     for (pugi::xml_node child = node.first_child(); child; child = child.next_sibling()) {
-        rewriteNode(child, redirects, redirectRegex, file, removedIdentityLocations, stats);
+        rewriteNode(child, redirects, redirectRegex, catalogs, unscoped, file, removedIdentityLocations, stats);
     }
 }
 
@@ -250,22 +354,139 @@ bool postMergeStrongReferenceAudit(const AnalysisResult &rebuilt,
                                    const QHash<QString, QSet<QString>> &removedScopesById,
                                    QString *error)
 {
+    if (removedScopesById.isEmpty()) return true;
     for (auto it = removedScopesById.cbegin(); it != removedScopesById.cend(); ++it) {
         const QString &removedId = it.key();
         for (const DataNode &node : rebuilt.nodes) {
-            if (node.id == removedId && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
+            if (node.id.compare(removedId, Qt::CaseInsensitive) == 0 && it.value().contains(sc2dh::catalogIdentityScope(node.elementName))) {
                 if (error)
                     *error = QStringLiteral("Post-merge audit failed: removed %1 still exists as %2.")
                                  .arg(removedId, mergeNodeLabel(node));
                 return false;
             }
-            if (node.referencedIds.contains(removedId)) {
+            bool referencesRemoved = node.referenceKeys.contains(QStringLiteral("*") + QChar(0x1f) + removedId.toCaseFolded());
+            for (const QString &catalog : it.value())
+                referencesRemoved |= node.referenceKeys.contains(sc2dh::catalogIdentityKey(catalog, removedId));
+            if (referencesRemoved) {
                 if (error)
                     *error = QStringLiteral("Post-merge audit failed: %1 still has a strong catalog reference to removed ID %2.")
                                  .arg(mergeNodeLabel(node), removedId);
                 return false;
             }
         }
+    }
+    // Read typed consumers independently of known target declarations. Otherwise
+    // a removed target disappears from the reference index along with its edges.
+    const auto unresolved = [&](const QString &catalog, const QString &value, const QString &file) {
+        for (auto it = removedScopesById.cbegin(); it != removedScopesById.cend(); ++it) {
+            if (!catalog.isEmpty() && !it.value().contains(catalog)) continue;
+            if (!value.isEmpty() && value.compare(it.key(), Qt::CaseInsensitive) != 0) continue;
+            if (error) *error = QStringLiteral("Post-merge audit failed: %1 has a typed reference to removed %2 (%3).")
+                .arg(file, it.key(), catalog.isEmpty() ? QStringLiteral("unresolved catalog") : catalog);
+            return true;
+        }
+        return false;
+    };
+    const auto guiRegistry = sc2dh::gui::projectRegistry(rebuilt);
+    for (const QString &file : guiRegistry.files())
+        for (const auto &reference : guiRegistry.references(file))
+            if (unresolved(reference.catalog, reference.value, file)) return false;
+    ScannedFileReader reader(rebuilt);
+    QHash<QString, QString> removedIdByFolded;
+    for (auto it = removedScopesById.cbegin(); it != removedScopesById.cend(); ++it)
+        removedIdByFolded.insert(it.key().toCaseFolded(), it.key());
+    static const QRegularExpression xmlIdToken(
+        QStringLiteral("(?<![A-Za-z0-9_@])([A-Za-z0-9_@]+)(?![A-Za-z0-9_@])"));
+    for (const auto &file : rebuilt.scannedFiles) {
+        if (!file.isXml) continue;
+        const QString relative = ScannedFileReader::relativePath(rebuilt.rootFolder, file.filePath).replace('\\', '/');
+        if (guiRegistry.isGuiFile(relative)) continue;
+        QByteArray bytes;
+        if (!reader.readBytes(file, 16 * 1024 * 1024, &bytes)) {
+            if (error) *error = QStringLiteral("Post-merge audit cannot read XML source: %1.").arg(relative);
+            return false;
+        }
+        pugi::xml_document document;
+        if (!document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags)) {
+            if (error) *error = QStringLiteral("Post-merge audit cannot parse XML source: %1.").arg(relative);
+            return false;
+        }
+        if (QString::fromUtf8(document.document_element().name()) != QStringLiteral("Catalog")) continue;
+        const auto inspect = [&](pugi::xml_node element, const QString &field, const QString &value) {
+            if ((field == QStringLiteral("id") || field == QStringLiteral("parent"))
+                && isTopLevelCatalogIdentity(element)) return false;
+            const QString name = QString::fromUtf8(element.name());
+            if (field == QStringLiteral("index") || field == QStringLiteral("removed")
+                || field == QStringLiteral("default") || field.startsWith(QStringLiteral("xmlns"))
+                || sc2dh::isNonReferenceCatalogFieldName(field)
+                || sc2dh::isNonReferenceCatalogFieldName(name)
+                || sc2dh::catalogFieldDeclared(element, field)) return false;
+            auto matches = xmlIdToken.globalMatch(value);
+            while (matches.hasNext()) {
+                const QString token = matches.next().captured(1);
+                const QString removed = removedIdByFolded.value(token.toCaseFolded());
+                if (removed.isEmpty()) continue;
+                if (error) *error = QStringLiteral("Post-merge audit failed: unknown XML carrier %1 in %2 retains removed ID %3.")
+                    .arg(field.isEmpty() ? name : name + QStringLiteral("/@") + field, relative, removed);
+                return true;
+            }
+            return false;
+        };
+        std::function<bool(pugi::xml_node)> visit = [&](pugi::xml_node element) {
+            if (element.type() != pugi::node_element) return false;
+            for (const auto &attribute : element.attributes())
+                if (inspect(element, QString::fromUtf8(attribute.name()), QString::fromUtf8(attribute.value()))) return true;
+            for (auto child : element.children()) {
+                if ((child.type() == pugi::node_pcdata || child.type() == pugi::node_cdata)
+                    && inspect(element, {}, QString::fromUtf8(child.value()))) return true;
+                if (child.type() == pugi::node_element && visit(child)) return true;
+            }
+            return false;
+        };
+        if (visit(document.document_element())) return false;
+    }
+    for (const auto &file : rebuilt.scannedFiles) {
+        const QString relative = ScannedFileReader::relativePath(rebuilt.rootFolder, file.filePath).replace('\\', '/');
+        if (!sc2dh::objects::isPlacementPath(relative)) continue;
+        QByteArray bytes;
+        if (!reader.readBytes(file, 16 * 1024 * 1024, &bytes)) {
+            if (error) *error = QStringLiteral("Post-merge audit cannot read Objects source: %1.").arg(relative);
+            return false;
+        }
+        QString content;
+        if (!sc2dh::objects::decodeText(bytes, &content)) {
+            if (error) *error = QStringLiteral("Post-merge audit cannot decode Objects source: %1.").arg(relative);
+            return false;
+        }
+        QSet<QString> removedIds;
+        for (auto it = removedScopesById.cbegin(); it != removedScopesById.cend(); ++it)
+            removedIds.insert(it.key());
+        const auto parsed = sc2dh::objects::scan(content, removedIds);
+        if (!parsed.complete) {
+            if (error) *error = QStringLiteral("Post-merge audit cannot establish Objects grammar: %1: %2.")
+                .arg(relative, parsed.issue);
+            return false;
+        }
+        for (const auto &occurrence : parsed.occurrences)
+            if (unresolved(occurrence.catalog, occurrence.value, relative)) return false;
+    }
+    for (const auto &file : rebuilt.scannedFiles) {
+        const QString relative = ScannedFileReader::relativePath(rebuilt.rootFolder, file.filePath).replace('\\', '/');
+        if (!relative.endsWith(QStringLiteral(".galaxy"), Qt::CaseInsensitive)) continue;
+        QByteArray bytes;
+        if (!reader.readBytes(file, 16 * 1024 * 1024, &bytes)) {
+            if (error) *error = QStringLiteral("Post-merge audit cannot read Galaxy source: %1.").arg(relative);
+            return false;
+        }
+        const auto scan = sc2dh::galaxy::scan(QString::fromUtf8(bytes));
+        if (!scan.complete) {
+            if (error) *error = QStringLiteral("Post-merge audit cannot establish Galaxy grammar: %1.").arg(relative);
+            return false;
+        }
+        for (const auto &reference : scan.references)
+            if (unresolved(reference.catalog, reference.value, relative)) return false;
+        for (const auto &literal : scan.opaqueStrings)
+            if (!literal.value.isEmpty() && unresolved({}, literal.value, relative)) return false;
     }
     return true;
 }
@@ -302,10 +523,21 @@ struct PreparedMergeTransaction
     int archiveReferencesRedirected = 0;
 };
 
+QHash<QString, QString> singleRedirectCatalogs(const QHash<QString, QSet<QString>> &scopes)
+{
+    QHash<QString, QString> result;
+    for (auto it = scopes.cbegin(); it != scopes.cend(); ++it)
+        if (it.value().size() == 1) result.insert(it.key(), *it.value().cbegin());
+    return result;
+}
+
 bool prepareMergeTransaction(const QString &rootFolder,
                              const QHash<QString, QByteArray> &stagedXml,
                              const QStringList &archiveFiles,
                              const QHash<QString, QString> &archiveRedirects,
+                             const QHash<QString, QString> &typedRedirects,
+                             const QHash<QString, QString> &catalogs,
+                             const sc2dh::gui::Registry &guiRegistry,
                              PreparedMergeTransaction *prepared,
                              QString *error)
 {
@@ -317,11 +549,8 @@ bool prepareMergeTransaction(const QString &rootFolder,
     *prepared = {};
 
     sc2dh::ArchiveReferenceRewriteReport archivePreview;
-    if (!sc2dh::previewArchiveReferenceFileRewrites(rootFolder,
-                                                     archiveFiles,
-                                                     archiveRedirects,
-                                                     &archivePreview,
-                                                     error)) {
+    if (!processMergeReferenceFiles(false, rootFolder, archiveFiles, typedRedirects,
+                                    archiveRedirects, catalogs, guiRegistry, &archivePreview, error)) {
         return false;
     }
 
@@ -374,11 +603,9 @@ bool prepareMergeTransaction(const QString &rootFolder,
         }
 
         sc2dh::ArchiveReferenceRewriteReport archiveRewrite;
-        if (!sc2dh::rewriteArchiveReferenceFiles(rewriteStaging.path(),
-                                                  archivePreview.changedFiles,
-                                                  archiveRedirects,
-                                                  &archiveRewrite,
-                                                  error)) {
+        if (!processMergeReferenceFiles(true, rewriteStaging.path(), archivePreview.changedFiles,
+                                       typedRedirects, archiveRedirects, catalogs, guiRegistry,
+                                       &archiveRewrite, error)) {
             return false;
         }
 
@@ -389,7 +616,7 @@ bool prepareMergeTransaction(const QString &rootFolder,
             QByteArray contents;
             if (!loadFile(QDir(rewriteStaging.path()).absoluteFilePath(relative), &contents, error))
                 return false;
-            if (!appendChange(relative, contents, false))
+            if (!appendChange(relative, contents, guiRegistry.isGuiFile(relative)))
                 return false;
         }
         prepared->archiveReferencesRedirected = archiveRewrite.replacements;
@@ -422,7 +649,7 @@ bool validateStagedMergeXml(const QString &stagingFolder,
         if (!loadFile(stagedPath, &bytes, error))
             return false;
         pugi::xml_document document;
-        const auto parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+        const auto parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
         if (!parsed) {
             if (error)
                 *error = QStringLiteral("Staged merge XML does not parse: %1: %2")
@@ -460,7 +687,7 @@ bool validateCommittedMerge(const QString &rootFolder,
         }
         return false;
     }
-    return postMergeStrongReferenceAudit(rebuilt, removedScopesById, error);
+    return MergeService::verifyRemovedReferences(rebuilt, removedScopesById, error);
 }
 
 QString mergeTransactionError(const FolderSaveTransactionResult &transaction)
@@ -472,6 +699,13 @@ QString mergeTransactionError(const FolderSaveTransactionResult &transaction)
 }
 
 } // namespace
+
+bool MergeService::verifyRemovedReferences(const AnalysisResult &analysis,
+                                          const QHash<QString, QSet<QString>> &removedScopesById,
+                                          QString *error)
+{
+    return postMergeStrongReferenceAudit(analysis, removedScopesById, error);
+}
 
 int MergeService::replaceIdTokens(QString *value, const QString &oldId, const QString &newId)
 {
@@ -498,6 +732,10 @@ int MergeService::countIdTokens(const QString &value, const QString &id)
 MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRequest &request) const
 {
     MergePreview preview;
+    const auto guiRegistry = sc2dh::gui::projectRegistry(analysis);
+    sc2dh::refs::UnifiedReferenceIndex referenceIndex;
+    referenceIndex.build(analysis);
+    const auto ambiguousIds = ambiguousCatalogIds(analysis);
     if (request.keepNodeIndex < 0 || request.keepNodeIndex >= analysis.nodes.size()) {
         preview.warnings << QStringLiteral("A keep object must be selected.");
         return preview;
@@ -514,6 +752,7 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
     preview.keptId = keep.id;
     QHash<QString, QString> redirects;
     QHash<QString, QSet<QString>> removedLocations;
+    QHash<QString, QString> redirectCatalogs;
     QSet<QString> files;
     for (int index : request.removeNodeIndices) {
         if (index < 0 || index >= analysis.nodes.size() || index == request.keepNodeIndex) {
@@ -533,7 +772,16 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
             preview.warnings << QStringLiteral("%1 is not a different-ID exact body duplicate of %2.").arg(remove.id, keep.id);
             continue;
         }
+        if (const QString issue = unresolvedMergeReference(referenceIndex, remove, ambiguousIds); !issue.isEmpty()) {
+            preview.warnings << issue;
+            continue;
+        }
+        if (guiRegistry.hasUnresolvedReference(sc2dh::catalogIdentityScope(remove.elementName), remove.id)) {
+            preview.warnings << QStringLiteral("GUI reference type/value is unresolved for %1; merge requires manual review.").arg(remove.id);
+            continue;
+        }
         redirects.insert(remove.id, keep.id);
+        redirectCatalogs.insert(remove.id, sc2dh::catalogIdentityScope(remove.elementName));
         removedLocations[remove.sourceFile].insert(remove.originalLocation);
         preview.removedIds << remove.id;
         files.insert(remove.sourceFile);
@@ -544,9 +792,10 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
         return preview;
     }
     const QRegularExpression redirectsRegex = redirectExpression(redirects);
+    const auto xmlUnscopedRedirects = archiveSafeRedirects(analysis, redirects, nullptr);
 
     for (const ScannedFileInfo &info : analysis.scannedFiles) {
-        if (!info.isXml) continue;
+        if (!info.isXml || guiRegistry.isGuiFile(ScannedFileReader::relativePath(analysis.rootFolder, info.filePath).replace('\\', '/'))) continue;
         QByteArray bytes;
         QString error;
         if (!loadFile(info.filePath, &bytes, &error)) {
@@ -554,12 +803,12 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
             continue;
         }
         pugi::xml_document doc;
-        if (!doc.load_buffer(bytes.constData(), size_t(bytes.size()))) {
+        if (!doc.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags)) {
             preview.warnings << QStringLiteral("Cannot parse %1.").arg(info.filePath);
             continue;
         }
         RewriteStats stats;
-        rewriteNode(doc, redirects, redirectsRegex, info.filePath, removedLocations.value(info.filePath), &stats);
+        rewriteNode(doc, redirects, redirectsRegex, redirectCatalogs, xmlUnscopedRedirects, info.filePath, removedLocations.value(info.filePath), &stats);
         if (stats.fields) files.insert(info.filePath);
         preview.fieldsChanged += stats.fields;
         preview.referencesRedirected += stats.references;
@@ -569,16 +818,15 @@ MergePreview MergeService::preview(const AnalysisResult &analysis, const MergeRe
     QStringList skippedArchiveIds;
     const QHash<QString, QString> externalRedirects = archiveSafeRedirects(analysis, redirects, &skippedArchiveIds);
     if (!skippedArchiveIds.isEmpty()) {
-        preview.changes << QStringLiteral("Skipped non-XML reference rewrites for ambiguous catalog IDs: %1.")
+        preview.changes << QStringLiteral("Unscoped reference rewrites excluded for ambiguous catalog IDs: %1; typed consumers use their target catalog.")
                                 .arg(skippedArchiveIds.join(QStringLiteral(", ")));
     }
     sc2dh::ArchiveReferenceRewriteReport archiveReport;
     QString archiveError;
-    if (!sc2dh::previewArchiveReferenceFileRewrites(analysis.rootFolder,
-                                                   nonXmlReferenceFiles(analysis),
-                                                   externalRedirects,
-                                                   &archiveReport,
-                                                   &archiveError)) {
+    if (!processMergeReferenceFiles(false, analysis.rootFolder,
+                                    nonXmlReferenceFiles(analysis, guiRegistry), redirects,
+                                    externalRedirects, redirectCatalogs, guiRegistry,
+                                    &archiveReport, &archiveError)) {
         preview.warnings << archiveError;
     } else {
         for (const QString &file : archiveReport.changedFiles)
@@ -612,6 +860,7 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
                                      const QSet<QString> &whitelistIds) const
 {
     MergeApplyResult result;
+    const auto guiRegistry = sc2dh::gui::projectRegistry(analysis);
     const DestructiveOperationPermission permission = canApplyDestructiveChanges(analysis);
     if (!permission.allowed) {
         result.error = destructiveOperationPermissionText(permission);
@@ -633,7 +882,7 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     QStringList skippedArchiveIds;
     const QHash<QString, QString> externalRedirects = archiveSafeRedirects(analysis, redirects, &skippedArchiveIds);
     if (!skippedArchiveIds.isEmpty()) {
-        result.warnings << QStringLiteral("Skipped non-XML reference rewrites for ambiguous catalog IDs: %1.")
+        result.warnings << QStringLiteral("Unscoped reference rewrites excluded for ambiguous catalog IDs: %1; typed consumers use their target catalog.")
                                .arg(skippedArchiveIds.join(QStringLiteral(", ")));
     }
 
@@ -641,16 +890,16 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     RewriteStats totals;
     QString error;
     for (const ScannedFileInfo &info : analysis.scannedFiles) {
-        if (!info.isXml) continue;
+        if (!info.isXml || guiRegistry.isGuiFile(ScannedFileReader::relativePath(analysis.rootFolder, info.filePath).replace('\\', '/'))) continue;
         QByteArray bytes;
         if (!loadFile(info.filePath, &bytes, &error)) { result.error = error; return result; }
         pugi::xml_document doc;
-        const auto parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
+        const auto parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
         if (!parsed) { result.error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description()); return result; }
         RewriteStats fileStats;
         QSet<QString> identityLocations;
         for (const DataNode *remove : removals.value(info.filePath)) identityLocations.insert(remove->originalLocation);
-        rewriteNode(doc, redirects, redirectsRegex, info.filePath, identityLocations, &fileStats);
+        rewriteNode(doc, redirects, redirectsRegex, singleRedirectCatalogs(removedScopesById), externalRedirects, info.filePath, identityLocations, &fileStats);
         int deleted = 0;
         for (const DataNode *remove : removals.value(info.filePath)) {
             pugi::xml_node node = findObject(doc, remove->elementName, remove->id);
@@ -679,8 +928,11 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
     PreparedMergeTransaction prepared;
     if (!prepareMergeTransaction(rootFolder,
                                  staged,
-                                 nonXmlReferenceFiles(analysis),
+                                 nonXmlReferenceFiles(analysis, guiRegistry),
                                  externalRedirects,
+                                 redirects,
+                                 singleRedirectCatalogs(removedScopesById),
+                                 guiRegistry,
                                  &prepared,
                                  &error)) {
         result.error = error;
@@ -704,7 +956,7 @@ MergeApplyResult MergeService::apply(const AnalysisResult &analysis,
                                           failureInjectionStep,
                                           validationError);
         },
-        failureInjectionStep);
+        failureInjectionStep, {}, analysis.optimizationSettingsRevision);
     result.backupFolder = transaction.backupFolder;
     if (!transaction.success) {
         result.error = mergeTransactionError(transaction);
@@ -725,6 +977,10 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
                                           const std::function<void(int, int, const QString &)> &progress) const
 {
     MergeApplyResult result;
+    const auto guiRegistry = sc2dh::gui::projectRegistry(analysis);
+    sc2dh::refs::UnifiedReferenceIndex referenceIndex;
+    referenceIndex.build(analysis);
+    const auto ambiguousIds = ambiguousCatalogIds(analysis);
     const DestructiveOperationPermission permission = canApplyDestructiveChanges(analysis);
     if (!permission.allowed) {
         result.error = destructiveOperationPermissionText(permission);
@@ -798,6 +1054,16 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
                 result.warnings << QStringLiteral("Skipped invalid duplicate merge %1 -> %2.").arg(remove.id, keep.id);
                 continue;
             }
+            if (const QString issue = unresolvedMergeReference(referenceIndex, remove, ambiguousIds); !issue.isEmpty()) {
+                ++result.skippedMerges;
+                result.warnings << QStringLiteral("Skipped duplicate merge: %1").arg(issue);
+                continue;
+            }
+            if (guiRegistry.hasUnresolvedReference(sc2dh::catalogIdentityScope(remove.elementName), remove.id)) {
+                ++result.skippedMerges;
+                result.warnings << QStringLiteral("Skipped duplicate merge for %1: unresolved GUI reference type/value.").arg(remove.id);
+                continue;
+            }
             redirects.insert(remove.id, keep.id);
             removals[remove.sourceFile].append(&remove);
             removedScopesById[remove.id].insert(sc2dh::catalogIdentityScope(remove.elementName));
@@ -815,7 +1081,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
     QStringList skippedArchiveIds;
     const QHash<QString, QString> externalRedirects = archiveSafeRedirects(analysis, redirects, &skippedArchiveIds);
     if (!skippedArchiveIds.isEmpty()) {
-        result.warnings << QStringLiteral("Skipped non-XML reference rewrites for ambiguous catalog IDs: %1.")
+        result.warnings << QStringLiteral("Unscoped reference rewrites excluded for ambiguous catalog IDs: %1; typed consumers use their target catalog.")
                                .arg(skippedArchiveIds.join(QStringLiteral(", ")));
     }
 
@@ -828,7 +1094,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
         if (progress)
             progress(fileIndex, totalFiles, info.filePath);
         ++fileIndex;
-        if (!info.isXml)
+        if (!info.isXml || guiRegistry.isGuiFile(ScannedFileReader::relativePath(analysis.rootFolder, info.filePath).replace('\\', '/')))
             continue;
         QByteArray bytes;
         if (!loadFile(info.filePath, &bytes, &error)) {
@@ -836,7 +1102,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
             return result;
         }
         pugi::xml_document doc;
-        const auto parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
+        const auto parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
         if (!parsed) {
             result.error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description());
             return result;
@@ -846,7 +1112,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
         QSet<QString> identityLocations;
         for (const DataNode *remove : removals.value(info.filePath))
             identityLocations.insert(remove->originalLocation);
-        rewriteNode(doc, redirects, redirectsRegex, info.filePath, identityLocations, &fileStats);
+        rewriteNode(doc, redirects, redirectsRegex, singleRedirectCatalogs(removedScopesById), externalRedirects, info.filePath, identityLocations, &fileStats);
 
         int deleted = 0;
         for (const DataNode *remove : removals.value(info.filePath)) {
@@ -883,8 +1149,11 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
     PreparedMergeTransaction prepared;
     if (!prepareMergeTransaction(rootFolder,
                                  staged,
-                                 nonXmlReferenceFiles(analysis),
+                                 nonXmlReferenceFiles(analysis, guiRegistry),
                                  externalRedirects,
+                                 redirects,
+                                 singleRedirectCatalogs(removedScopesById),
+                                 guiRegistry,
                                  &prepared,
                                  &error)) {
         result.error = error;
@@ -913,7 +1182,7 @@ MergeApplyResult MergeService::applyBatch(const AnalysisResult &analysis,
                                           failureInjectionStep,
                                           validationError);
         },
-        failureInjectionStep);
+        failureInjectionStep, {}, analysis.optimizationSettingsRevision);
     result.backupFolder = transaction.backupFolder;
     if (!transaction.success) {
         result.error = mergeTransactionError(transaction);

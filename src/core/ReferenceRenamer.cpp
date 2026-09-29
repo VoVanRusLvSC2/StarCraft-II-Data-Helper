@@ -1,6 +1,10 @@
+#include "core/GalaxyReferenceSpans.h"
+#include "core/GuiReferenceSpans.h"
+#include "core/XmlParsePolicy.h"
 #include "core/ReferenceRenamer.h"
 
 #include "core/BackupManager.h"
+#include "core/ObjectsReferenceSpans.h"
 #include "core/CatalogLinkSchema.h"
 #include "core/CatalogProtection.h"
 #include "core/FolderAnalyzer.h"
@@ -99,7 +103,7 @@ bool isParentAttributeReferenceOnly(const DataNode &node, const QString &oldId)
 
     pugi::xml_document document;
     const QByteArray bytes = node.serializedXml.toUtf8();
-    if (!document.load_buffer(bytes.constData(), size_t(bytes.size())))
+    if (!document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags))
         return false;
 
     pugi::xml_node root = document.first_child();
@@ -138,11 +142,14 @@ using RenameTargetMap = QHash<QString, QVector<RenameTarget>>;
 
 bool matchesCatalogPrefix(const QString &elementName, const QString &prefix)
 {
-    return prefix.isEmpty() || elementName.startsWith(prefix, Qt::CaseInsensitive);
+    return prefix.isEmpty() || sc2dh::catalogIdentityScope(elementName)==sc2dh::catalogIdentityScope(prefix);
 }
 
 QString typedReferenceCatalogPrefix(pugi::xml_node node, const QString &fieldName)
 {
+    const QString declared = sc2dh::catalogReferencePrefix(node, fieldName);
+    if (!declared.isEmpty()) return declared;
+    if (sc2dh::catalogFieldDeclared(node, fieldName)) return {};
     const QString field = fieldName.toLower();
     const QString nodeName = QString::fromUtf8(node.name()).toLower();
 
@@ -330,12 +337,34 @@ bool containsRenameTokenBytes(const QByteArray &bytes, const RenameTargetMap &re
     return false;
 }
 
-bool rewriteSafeTextBytes(const QByteArray &original, const RenameTargetMap &renames,
+bool rewriteSafeTextBytes(const QByteArray &original, const RenameTargetMap &renames, const QString &relative, const sc2dh::gui::Registry &guiRegistry,
                           QByteArray *rewritten, int *replacementCount)
 {
+    if (guiRegistry.isGuiFile(relative)) {
+        return guiRegistry.rewrite(relative, original, [&](const QString &catalog, const QString &id) {
+            const auto targets = renames.value(id); QSet<QString> next;
+            for (const auto &target : targets)
+                if (sc2dh::catalogIdentityScope(target.elementName) == catalog) next.insert(target.newId);
+            return next.size() == 1 ? *next.cbegin() : QString();
+        }, rewritten, replacementCount);
+    }
     if (looksLikeUtf8Text(original)) {
         QString text = QString::fromUtf8(original);
-        const int replacements = simultaneousReplace(&text, renames);
+        int replacements=0;
+        if(sc2dh::objects::isPlacementPath(relative)) {
+            QSet<QString> ids;for(auto it=renames.cbegin();it!=renames.cend();++it)ids.insert(it.key());
+            QString changed,issue;
+            if(!sc2dh::objects::rewrite(text,ids,[&](const QString &catalog,const QString &id) {
+                return resolvedReplacement(renames.value(id),catalog);
+            },&changed,&replacements,&issue)) return false;
+            text=changed;
+        } else if(relative.endsWith(QStringLiteral(".galaxy"),Qt::CaseInsensitive))
+            text=sc2dh::galaxy::rewrite(text,[&](const QString &catalog,const QString &id) {
+                const auto targets=renames.value(id);QSet<QString> next;
+                for(const auto &target:targets)if(sc2dh::catalogIdentityScope(target.elementName)==catalog)next.insert(target.newId);
+                return next.size()==1?*next.cbegin():QString();
+            },&replacements);
+        else replacements = simultaneousReplace(&text, renames);
         if (replacementCount)
             *replacementCount = replacements;
         if (rewritten)
@@ -345,7 +374,21 @@ bool rewriteSafeTextBytes(const QByteArray &original, const RenameTargetMap &ren
     if (looksLikeUtf16LeText(original)) {
         const auto *data = reinterpret_cast<const char16_t *>(original.constData());
         QString text = QString::fromUtf16(data, original.size() / 2);
-        const int replacements = simultaneousReplace(&text, renames);
+        int replacements=0;
+        if(sc2dh::objects::isPlacementPath(relative)) {
+            QSet<QString> ids;for(auto it=renames.cbegin();it!=renames.cend();++it)ids.insert(it.key());
+            QString changed,issue;
+            if(!sc2dh::objects::rewrite(text,ids,[&](const QString &catalog,const QString &id) {
+                return resolvedReplacement(renames.value(id),catalog);
+            },&changed,&replacements,&issue)) return false;
+            text=changed;
+        } else if(relative.endsWith(QStringLiteral(".galaxy"),Qt::CaseInsensitive))
+            text=sc2dh::galaxy::rewrite(text,[&](const QString &catalog,const QString &id) {
+                const auto targets=renames.value(id);QSet<QString> next;
+                for(const auto &target:targets)if(sc2dh::catalogIdentityScope(target.elementName)==catalog)next.insert(target.newId);
+                return next.size()==1?*next.cbegin():QString();
+            },&replacements);
+        else replacements = simultaneousReplace(&text, renames);
         if (replacementCount)
             *replacementCount = replacements;
         if (rewritten)
@@ -414,6 +457,9 @@ bool shouldRewriteReferenceValue(pugi::xml_node node, const QString &fieldName, 
             || fieldName.isEmpty());
     if (!actorEventValue && (sc2dh::isNonReferenceCatalogFieldName(fieldName) || sc2dh::looksLikeCatalogFilterList(value)))
         return false;
+    if (!actorEventValue && sc2dh::catalogFieldDeclared(node, fieldName)
+        && sc2dh::catalogReferencePrefix(node, fieldName).isEmpty())
+        return false;
     // Generic scalar <Field value="..."> nodes are commonly enums, numbers,
     // flags, animation names or editor metadata. Rewrite them only when the
     // element/attribute name identifies a catalog type (Effect, Unit, Model,
@@ -465,7 +511,7 @@ bool isDefaultDataCollectionNode(const DataNode &node)
         || node.elementName.startsWith(QStringLiteral("CDataCollectionPattern"), Qt::CaseInsensitive))
         return false;
     pugi::xml_document fragment;
-    if (!fragment.load_string(node.serializedXml.toUtf8().constData()))
+    if (!fragment.load_string(node.serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags))
         return false;
     const pugi::xml_node collection = fragment.first_child();
     return QString::fromUtf8(collection.attribute("default").value()).compare(QStringLiteral("1"), Qt::CaseInsensitive) == 0;
@@ -705,7 +751,7 @@ bool validateStagedRenameXml(const QString &stagingFolder,
             return false;
         }
         pugi::xml_document document;
-        const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+        const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
         if (!parsed) {
             if (error) {
                 *error = QStringLiteral("Staged rename XML does not parse: %1: %2")
@@ -859,6 +905,7 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
     QStringList blockedReferenceIds;
     sc2dh::refs::UnifiedReferenceIndex referenceIndex;
     referenceIndex.build(analysis);
+    const auto guiRegistry = sc2dh::gui::projectRegistry(analysis);
     QSet<QString> explicitIdentityKeys;
     struct LinkedCollectionCandidate {
         QString oldId;
@@ -877,7 +924,21 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
             unsafeIds << item.oldId;
             continue;
         }
-        if (referenceIndex.hasNonRewritableStrongReferenceToId(item.oldId)) {
+        const QString scope = sc2dh::catalogIdentityScope(node.elementName);
+        bool hasCaseVariant = false;
+        for (const auto &reference : referenceIndex.strongReferencesToId(item.oldId)) {
+            if (!reference.targetCatalog.isEmpty() && reference.targetCatalog != scope) continue;
+            const QString spelling = reference.sourceToken.isEmpty() ? reference.targetId : reference.sourceToken;
+            if (spelling != item.oldId
+                && spelling.compare(item.oldId, Qt::CaseInsensitive) == 0) {
+                hasCaseVariant = true;
+                blockedReferenceIds << QStringLiteral("%1 (case-variant reference %2 in %3)")
+                    .arg(item.oldId, spelling, reference.sourceFile);
+                break;
+            }
+        }
+        if (hasCaseVariant) continue;
+        if (referenceIndex.hasNonRewritableStrongReferenceToId(item.oldId,sc2dh::catalogIdentityScope(node.elementName))) {
             const QString summary = blockingReferenceSummary(referenceIndex, item.oldId);
             blockedReferenceIds << QStringLiteral("%1 (%2)").arg(item.oldId, summary);
             continue;
@@ -951,7 +1012,7 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         QByteArray bytes;
         if (!readFile(info.filePath, &bytes, error)) return false;
         pugi::xml_document doc;
-        const pugi::xml_parse_result parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
+        const pugi::xml_parse_result parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
         if (!parsed) { *error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description()); return false; }
         collectIdentityKeys(doc, &existingIdentityKeys);
         if (targetsIt == pendingByFile.end())
@@ -1031,11 +1092,11 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
         if (progress)
             progress(QStringLiteral("rewrite"), fileIndex, totalFiles, info.filePath);
         ++fileIndex;
-        if (!info.isXml) continue;
+        if (!info.isXml || guiRegistry.isGuiFile(relativeAnalysisPath(analysis, info.filePath))) continue;
         QByteArray bytes;
         if (!readFile(info.filePath, &bytes, error)) return false;
         pugi::xml_document doc;
-        const pugi::xml_parse_result parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()));
+        const pugi::xml_parse_result parsed = doc.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
         if (!parsed) { *error = QStringLiteral("Cannot parse %1: %2").arg(info.filePath, parsed.description()); return false; }
         RewriteResult fileResult;
         rewrite(doc, info.filePath, identities.value(info.filePath), renames, &fileResult, collectChanges);
@@ -1051,16 +1112,16 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
     }
     for (const ScannedFileInfo &info : analysis.scannedFiles) {
         const QString relative = relativeAnalysisPath(analysis, info.filePath);
-        if (!shouldRewriteSafeTextReferenceFile(info, relative))
+        if (!guiRegistry.isGuiFile(relative) && !shouldRewriteSafeTextReferenceFile(info, relative))
             continue;
         QByteArray original;
         if (!readFile(info.filePath, &original, error))
             return false;
-        if (!containsRenameTokenBytes(original, renames))
+        if (!guiRegistry.isGuiFile(relative) && !containsRenameTokenBytes(original, renames))
             continue;
         QByteArray rewritten;
         int replacements = 0;
-        if (!rewriteSafeTextBytes(original, renames, &rewritten, &replacements)) {
+        if (!rewriteSafeTextBytes(original, renames, relative, guiRegistry, &rewritten, &replacements)) {
             *error = QStringLiteral("Reference file contains renamed IDs but is not safe text: %1").arg(relative);
             return false;
         }
@@ -1124,7 +1185,7 @@ bool validatePreparedStrongReferences(const AnalysisResult &analysis,
 
         pugi::xml_document document;
         const pugi::xml_parse_result parsed = document.load_buffer(
-            bytes.constData(), size_t(bytes.size()), pugi::parse_default, pugi::encoding_utf8);
+            bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags, pugi::encoding_utf8);
         if (!parsed) {
             residuals << QStringLiteral("Prepared XML cannot be parsed: %1: %2")
                              .arg(fileIt.key(), QString::fromUtf8(parsed.description()));
@@ -1317,7 +1378,7 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
                 progress(QStringLiteral("verify"), 0, 1, QString());
             return validateCommittedRename(rootFolder, whitelistIds, analysis, plan, appliedRenames, validationError);
         },
-        transactionFailureInjection);
+        transactionFailureInjection, {}, analysis.optimizationSettingsRevision);
     result.backupFolder = transaction.backupFolder;
     if (!transaction.success) {
         result.error = renameTransactionError(transaction);

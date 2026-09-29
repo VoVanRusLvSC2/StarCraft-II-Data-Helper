@@ -1,3 +1,4 @@
+#include "core/XmlParsePolicy.h"
 #include "core/UnitFamilyDetector.h"
 
 #include "core/DataCollectionAliasMapper.h"
@@ -635,7 +636,7 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
                 if (!legacyCollection)
                     continue;
                 pugi::xml_document fragment;
-                if (!fragment.load_string(legacyCollection->serializedXml.toUtf8().constData()))
+                if (!fragment.load_string(legacyCollection->serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags))
                     continue;
                 for (pugi::xml_node record : fragment.first_child().children("DataRecord")) {
                     const QString entry = QString::fromUtf8(record.attribute("Entry").value());
@@ -864,7 +865,7 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
         // 7k-style family even when its real IDs use old/non-standard names.
         for (auto it = existingCollections.cbegin(); it != existingCollections.cend(); ++it) {
             pugi::xml_document fragment;
-            if (!fragment.load_string(it.value()->serializedXml.toUtf8().constData())) continue;
+            if (!fragment.load_string(it.value()->serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags)) continue;
             QSet<int> universe;
             for (pugi::xml_node record : fragment.first_child().children("DataRecord")) {
                 const QString entry = QString::fromUtf8(record.attribute("Entry").value());
@@ -1020,7 +1021,7 @@ QVector<UnitFamily> UnitFamilyDetector::detectCollectionFamilies(const AnalysisR
     // entries. The referenced ID must already exist in the analyzed catalog.
     for (auto it = existingCollections.cbegin(); it != existingCollections.cend(); ++it) {
         pugi::xml_document fragment;
-        if (!fragment.load_string(it.value()->serializedXml.toUtf8().constData())) continue;
+        if (!fragment.load_string(it.value()->serializedXml.toUtf8().constData(), sc2dh::xmlParseFlags)) continue;
         for (pugi::xml_node record : fragment.first_child().children("DataRecord")) {
             const QString entry = QString::fromUtf8(record.attribute("Entry").value());
             const QString catalog = entry.section(QLatin1Char(','), 0, 0).trimmed();

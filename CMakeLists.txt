@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(SC2DataHelper VERSION 3.0.0 LANGUAGES CXX)
+project(SC2DataHelper VERSION 4.0.0 LANGUAGES CXX)
 
 # Keep the machine-readable version separate from the display label.
 # Consumers that compare versions must use SC2DH_VERSION_NUMBER, which remains
 # a valid QVersionNumber / installer / release-tag value.
 set(SC2DH_VERSION_NUMBER "${PROJECT_VERSION}")
-set(SC2DH_VERSION_LABEL "3.0 Beta 3")
+set(SC2DH_VERSION_LABEL "4.0 Beta")
 set(SC2DH_GUI_TITLE "StarCraft-II-Data-Helper ${SC2DH_VERSION_LABEL}")
 
 function(sc2dh_apply_version_definitions target)
@@ -318,6 +318,8 @@ file(MAKE_DIRECTORY "${SC2DH_RUNTIME_SCRIPTS_DIR}")
 
 configure_file(resources/styles/dark.qss "${SC2DH_RUNTIME_RESOURCES_DIR}/styles/dark.qss" COPYONLY)
 configure_file(resources/catalog_link_schema.tsv "${SC2DH_RUNTIME_RESOURCES_DIR}/catalog_link_schema.tsv" COPYONLY)
+configure_file(resources/gui_type_bindings.json "${SC2DH_RUNTIME_RESOURCES_DIR}/gui_type_bindings.json" COPYONLY)
+configure_file(resources/catalog_type_index.json "${SC2DH_RUNTIME_RESOURCES_DIR}/catalog_type_index.json" COPYONLY)
 configure_file(resources/catalogsData.xsd "${SC2DH_RUNTIME_RESOURCES_DIR}/catalogsData.xsd" COPYONLY)
 configure_file(resources/config/rules.json "${SC2DH_RUNTIME_RESOURCES_DIR}/config/rules.json" COPYONLY)
 configure_file(resources/config/whitelist.json "${SC2DH_RUNTIME_RESOURCES_DIR}/config/whitelist.json" COPYONLY)
@@ -390,7 +392,7 @@ if (SC2DH_HAVE_LIBZIP)
     endif()
 endif()
 
-add_test(NAME SC2DataHelperTests COMMAND SC2DataHelperTests)
+add_test(NAME SC2DataHelperTests COMMAND SC2DataHelperTests -o "${CMAKE_CURRENT_BINARY_DIR}/core-tests-$<CONFIG>.txt,txt")
 
 add_executable(SC2OptimizeFolder
     src/tools/OptimizeFolder.cpp
@@ -645,3 +647,67 @@ endif()
 
 add_test(NAME SC2Beta2RealMapValidationHelp COMMAND SC2Beta2RealMapValidation --help)
 add_dependencies(SC2DataHelperTests SC2Beta2RealMapValidation)
+
+# The structural index is generated offline; runtime never invokes Python.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import lxml"
+        RESULT_VARIABLE SC2DH_LXML_AVAILABLE OUTPUT_QUIET ERROR_QUIET)
+    if(SC2DH_LXML_AVAILABLE EQUAL 0)
+        add_test(NAME SC2GuiTypeBindingTests
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_gui_type_bindings.py")
+        add_test(NAME SC2CatalogIndexTests
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_catalog_index.py")
+    endif()
+endif()
+
+# Explicit read-only analysis and benchmark helper.
+add_executable(SC2CatalogAnalysisProbe
+    src/tools/AnalysisProbe.cpp
+    src/core/AnalysisModels.cpp
+    src/core/AnalysisIndex.cpp
+    src/core/ScannedFileReader.cpp
+    src/core/AssetFileRules.cpp
+    src/core/AssetReferenceScanner.cpp
+    src/core/UnifiedReferenceIndex.cpp
+    src/core/AssetOptimizationAnalyzer.cpp
+    src/core/TriggerPerformanceAnalyzer.cpp
+    src/core/DecorationStreamingPlanner.cpp
+    src/core/MapRegionRepository.cpp
+    src/core/DecorationMapCopyService.cpp
+    src/core/XmlCleanupUtils.cpp
+    src/core/SemanticDuplicateAnalyzer.cpp
+    src/core/CatalogLinkSchema.cpp
+    src/core/FolderAnalyzer.cpp
+    src/core/BackupManager.cpp
+    src/core/Sc2Archive.cpp
+    src/core/ArchiveCompressionService.cpp
+    src/core/XmlLoader.cpp
+    src/core/DeepCleanupService.cpp
+)
+target_include_directories(SC2CatalogAnalysisProbe PRIVATE src)
+target_link_libraries(SC2CatalogAnalysisProbe PRIVATE
+    Qt6::Core
+    pugixml
+    StormLib::storm
+    nlohmann_json::nlohmann_json
+)
+target_compile_definitions(SC2CatalogAnalysisProbe PRIVATE SC2DH_USE_STORMLIB=1 UNICODE _UNICODE)
+sc2dh_apply_version_definitions(SC2CatalogAnalysisProbe)
+
+if (SC2DH_HAVE_LIBZIP)
+    target_compile_definitions(SC2CatalogAnalysisProbe PRIVATE SC2DH_USE_LIBZIP=1)
+    if (TARGET libzip::zip)
+        target_link_libraries(SC2CatalogAnalysisProbe PRIVATE libzip::zip)
+    else()
+        target_link_libraries(SC2CatalogAnalysisProbe PRIVATE ${LIBZIP_LIBRARY})
+        target_include_directories(SC2CatalogAnalysisProbe PRIVATE ${LIBZIP_INCLUDE_DIR})
+    endif()
+endif()
+
+
+if(WIN32)
+ target_link_libraries(SC2CatalogAnalysisProbe PRIVATE Psapi)
+endif()
+
+add_dependencies(SC2DataHelperTests SC2OptimizeFolder)

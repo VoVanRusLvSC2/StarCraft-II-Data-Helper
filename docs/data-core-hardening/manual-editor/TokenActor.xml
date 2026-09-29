@@ -1,0 +1,5 @@
+<Catalog>
+<CUnit id="AuditMarine"/>
+<CActorModel id="AuditActorBase" default="1"><?token id="unit" value="AuditMarine"?><On><Terms value="UnitBirth.##unit##"/><Send value="Create"/></On></CActorModel>
+<CActorModel id="AuditActor" parent="AuditActorBase"/>
+</Catalog>

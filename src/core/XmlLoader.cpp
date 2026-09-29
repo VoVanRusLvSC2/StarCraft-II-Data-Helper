@@ -1,3 +1,4 @@
+#include "core/XmlParsePolicy.h"
 #include "core/XmlLoader.h"
 
 #include <algorithm>
@@ -21,6 +22,11 @@ QString serializeNode(const pugi::xml_node &node)
 
 QString canonicalNode(const pugi::xml_node &node, bool objectRoot = false)
 {
+    if (node.type() == pugi::node_pi) {
+        const QString name = QString::fromUtf8(node.name());
+        const QString value = QString::fromUtf8(node.value());
+        return QStringLiteral("P%1:%2=%3:%4").arg(name.size()).arg(name).arg(value.size()).arg(value);
+    }
     if (node.type() == pugi::node_pcdata || node.type() == pugi::node_cdata) {
         const QString text = QString::fromUtf8(node.value());
         return text.trimmed().isEmpty() ? QString() : QStringLiteral("T%1:%2").arg(text.size()).arg(text);
@@ -159,7 +165,11 @@ void collectNodes(const pugi::xml_node &node, const QByteArray &bytes, const QSt
 {
     if (node.type() == pugi::node_element) {
         const auto idAttr = node.attribute("id");
-        if (idAttr) {
+        bool nestedDeclaration = false;
+        for (pugi::xml_node ancestor = node.parent(); ancestor && ancestor.type() == pugi::node_element; ancestor = ancestor.parent())
+            if (ancestor.attribute("id") || ancestor.attribute("default")) nestedDeclaration = true;
+        const bool catalogClass = QString::fromUtf8(node.name()).startsWith(QLatin1Char('C'));
+        if (!nestedDeclaration && catalogClass && (idAttr || node.attribute("default"))) {
             DataNode item;
             item.sourceFile = sourceFile;
             item.elementName = QString::fromUtf8(node.name());
@@ -192,7 +202,7 @@ void collectNodes(const pugi::xml_node &node, const QByteArray &bytes, const QSt
 
 bool XmlLoader::loadDocument(const QByteArray &xmlBytes, pugi::xml_document *document, QString *errorMessage) const
 {
-    const pugi::xml_parse_result result = document->load_buffer(xmlBytes.constData(), static_cast<size_t>(xmlBytes.size()));
+    const pugi::xml_parse_result result = document->load_buffer(xmlBytes.constData(), static_cast<size_t>(xmlBytes.size()), sc2dh::xmlParseFlags);
     if (!result) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("XML parse error: %1 at offset %2")
@@ -243,6 +253,12 @@ bool XmlLoader::removeNodesByLocation(const QByteArray &xmlBytes,
     pugi::xml_document document;
     if (!loadDocument(xmlBytes, &document, errorMessage)) {
         return false;
+    }
+
+    // An empty plan must not normalize or overwrite the source bytes.
+    if (locations.isEmpty()) {
+        *rewrittenXml = xmlBytes;
+        return true;
     }
 
     QStringList orderedLocations;

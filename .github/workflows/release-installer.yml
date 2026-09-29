@@ -11,7 +11,7 @@ on:
       release_tag:
         description: Existing GitHub release tag that receives the installer
         required: true
-        default: v3.0.0-beta.1
+        default: v4.0.0-beta.1
 
 jobs:
   installer:

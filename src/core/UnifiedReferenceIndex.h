@@ -31,6 +31,9 @@ struct ReferenceRecord
     ReferenceKind kind = ReferenceKind::WeakText;
     ReferenceStrength strength = ReferenceStrength::Weak;
     QString targetId;
+    QString sourceToken;
+    QString targetCatalog;
+    QString fieldPath;
     QString targetAsset;
     QString sourceId;
     QString sourceType;
@@ -46,14 +49,16 @@ public:
     void build(const AnalysisResult &analysis);
 
     const QVector<ReferenceRecord> &records() const { return m_records; }
+    const QStringList &coverageIssues() const { return m_coverageIssues; }
     QVector<ReferenceRecord> referencesToId(const QString &id) const;
     QVector<ReferenceRecord> referencesToAsset(const QString &assetPath) const;
     QVector<ReferenceRecord> strongReferencesToId(const QString &id) const;
-    bool hasNonRewritableStrongReferenceToId(const QString &id) const;
+    bool hasNonRewritableStrongReferenceToId(const QString &id, const QString &catalog = {}) const;
 
 private:
     void addRecord(const ReferenceRecord &record);
 
+    QStringList m_coverageIssues;
     QVector<ReferenceRecord> m_records;
     QHash<QString, QVector<int>> m_byId;
     QHash<QString, QVector<int>> m_byAsset;

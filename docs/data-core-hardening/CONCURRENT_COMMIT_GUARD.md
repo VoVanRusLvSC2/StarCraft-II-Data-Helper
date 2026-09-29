@@ -1,0 +1,11 @@
+﻿﻿# Folder transaction concurrent-write guard - 2026-09-28
+
+The folder transaction already hashed sources before staging and rechecked the whole set before the first write. It did not check each target immediately before its own write. Its rollback restored every selected path, including paths the transaction had not touched. An external edit between the first and second commits could therefore be overwritten during rollback.
+
+The transaction now rechecks the current file/existence against its captured source hash before each mutation. A mismatch returns SourceChanged and rolls back previously committed files only. Rollback verifies that a committed file still contains this transaction's output before replacing it with the backup; if another writer changed that output, it preserves the external bytes and reports that the original state could not be fully restored. Untouched changed paths are also preserved. The deterministic regression injects an external edit after the first file commit, covering both a still-uncommitted second file and the already-committed first file. Existing stale-before-commit and post-commit validation rollback tests pass.
+
+This is detection and conflict preservation, not a cross-process lock or an atomic multi-file commit. A writer racing in the interval between the last hash check and an individual QSaveFile commit is not eliminated. The backup remains available for manual recovery if rollback reports an external conflict. No user archive was modified.
+
+Focused log: transaction-concurrency-closest.txt. Final Release: 5/5 CTest, 154 core passed / 0 failed / 4 unavailable fixture skips, 92.98 s total. Final Debug: 5/5 CTest, 154 core passed / 0 failed / 4 unavailable fixture skips, 263.69 s total.
+
+Current portable checkpoint: dist/SC2DataHelper-3.0-beta3-core-20260928.zip, SHA-256 d334368b4d8812666356d7eda6f8398a6c6c4a52d731f56f262159446515482d, 194 verified ZIP entries. Staged Release app and structural catalog/GUI resources were copied outside the source tree; layout smoke exited 0. Read-only map-preview smoke on the Mercs copy exited 0, reported ready=true and source_unchanged=true; offscreen OpenGL context was unavailable, so this is not a rendered Editor/gameplay test. Log: transaction-stage-release.txt; preview JSON: portable-map-preview.json. Editor acceptance remains NOT_RUN.

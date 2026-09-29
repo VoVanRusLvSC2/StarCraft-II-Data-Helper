@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QSaveFile>
 #include <QSettings>
 #include <QSet>
@@ -197,12 +198,41 @@ FolderSaveTransactionResult BackupManager::applyFolderTransaction(
     const QString &plannedChangesText,
     const StagedValidator &stagedValidator,
     const CommittedValidator &committedValidator,
-    const QString &failureInjectionStep) const
+    const QString &failureInjectionStep,
+    const AfterFileCommit &afterFileCommit,
+    const QByteArray &expectedSettingsRevision) const
 {
     FolderSaveTransactionResult result;
+    const QByteArray settingsRevision = expectedSettingsRevision.isEmpty()
+        ? optimizationSettingsFingerprint() : expectedSettingsRevision;
+    const auto settingsStillMatch = [&]() { return settingsRevision == optimizationSettingsFingerprint(); };
+    if (!settingsStillMatch()) {
+        result.errorCode = OperationErrorCode::SourceChanged;
+        result.error = QStringLiteral("Optimization or backup settings changed before save transaction.");
+        return result;
+    }
     if (changes.isEmpty()) {
         result.errorCode = OperationErrorCode::ValidationFailed;
         result.error = QStringLiteral("Save transaction contains no changes.");
+        return result;
+    }
+
+    const QFileInfo rootInfo(rootFolder);
+    const QString canonicalRoot = rootInfo.canonicalFilePath();
+    if (canonicalRoot.isEmpty() || !rootInfo.isDir()) {
+        result.errorCode = OperationErrorCode::ValidationFailed;
+        result.error = QStringLiteral("Save transaction root is not an existing folder: %1").arg(rootFolder);
+        return result;
+    }
+    const QByteArray rootKey = QCryptographicHash::hash(
+        canonicalRoot.toCaseFolded().toUtf8(), QCryptographicHash::Sha256).toHex();
+    QLockFile transactionLock(QDir(QDir::tempPath()).filePath(
+        QStringLiteral("sc2dh-folder-transaction-%1.lock").arg(QString::fromLatin1(rootKey))));
+    transactionLock.setStaleLockTime(60 * 60 * 1000);
+    if (!transactionLock.tryLock(0)) {
+        result.errorCode = OperationErrorCode::SourceChanged;
+        result.error = QStringLiteral("Another save transaction owns this folder, or its lock cannot be acquired: %1")
+                           .arg(canonicalRoot);
         return result;
     }
 
@@ -285,6 +315,12 @@ FolderSaveTransactionResult BackupManager::applyFolderTransaction(
     };
 
     QString preBackupVerificationError;
+    if (!settingsStillMatch()) {
+        result.errorCode = OperationErrorCode::SourceChanged;
+        result.error = QStringLiteral("Optimization or backup settings changed before save backup.");
+        verifyNoCommitState();
+        return result;
+    }
     if (!verifyOriginalState(&preBackupVerificationError)) {
         result.errorCode = OperationErrorCode::ValidationFailed;
         result.error = QStringLiteral("Source changed before save backup: %1").arg(preBackupVerificationError);
@@ -336,6 +372,12 @@ FolderSaveTransactionResult BackupManager::applyFolderTransaction(
     }
 
     QString preCommitVerificationError;
+    if (!settingsStillMatch()) {
+        result.errorCode = OperationErrorCode::SourceChanged;
+        result.error = QStringLiteral("Optimization or backup settings changed before save commit.");
+        verifyNoCommitState();
+        return result;
+    }
     if (!verifyOriginalState(&preCommitVerificationError)) {
         result.errorCode = OperationErrorCode::ValidationFailed;
         result.error = QStringLiteral("Source changed before save commit: %1").arg(preCommitVerificationError);
@@ -343,11 +385,24 @@ FolderSaveTransactionResult BackupManager::applyFolderTransaction(
         return result;
     }
 
+    QSet<QString> committedPaths;
     const auto rollback = [&]() -> bool {
         result.rollbackAttempted = true;
         bool restored = true;
         QStringList rollbackErrors;
         for (const ResolvedChange &item : resolved) {
+            if (!committedPaths.contains(item.absolutePath.toCaseFolded())) continue;
+            const bool currentExists = QFileInfo::exists(item.absolutePath);
+            QString hashError;
+            const QByteArray currentHash = currentExists ? fileSha256(item.absolutePath, &hashError) : QByteArray{};
+            const QByteArray intendedHash = item.change.remove ? QByteArray{}
+                : QCryptographicHash::hash(item.change.contents, QCryptographicHash::Sha256);
+            if (!hashError.isEmpty() || currentExists == item.change.remove
+                || (!item.change.remove && currentHash != intendedHash)) {
+                restored = false;
+                rollbackErrors << QStringLiteral("Committed file changed externally; preserving it: %1").arg(item.absolutePath);
+                continue;
+            }
             if (item.existed) {
                 const QString backupPath = QDir(result.backupFolder).absoluteFilePath(item.change.relativePath);
                 QFile backup(backupPath);
@@ -387,6 +442,22 @@ FolderSaveTransactionResult BackupManager::applyFolderTransaction(
 
     int commitIndex = 0;
     for (const ResolvedChange &item : resolved) {
+        if (!settingsStillMatch()) {
+            result.errorCode = OperationErrorCode::SourceChanged;
+            result.error = QStringLiteral("Optimization or backup settings changed during save commit.");
+            rollback();
+            return result;
+        }
+        QString currentError;
+        const bool currentlyExists = QFileInfo::exists(item.absolutePath);
+        const QByteArray currentHash = currentlyExists ? fileSha256(item.absolutePath, &currentError) : QByteArray{};
+        if (!currentError.isEmpty() || currentlyExists != item.existed
+            || (item.existed && currentHash != item.originalHash)) {
+            result.errorCode = OperationErrorCode::SourceChanged;
+            result.error = QStringLiteral("Source changed during save commit: %1").arg(item.change.relativePath);
+            rollback();
+            return result;
+        }
         bool committed = false;
         if (item.change.remove) {
             committed = !QFileInfo::exists(item.absolutePath) || QFile::remove(item.absolutePath);
@@ -405,10 +476,12 @@ FolderSaveTransactionResult BackupManager::applyFolderTransaction(
             rollback();
             return result;
         }
+        committedPaths.insert(item.absolutePath.toCaseFolded());
         if (item.change.remove)
             result.removedFiles << item.change.relativePath;
         else
             result.changedFiles << item.change.relativePath;
+        if (afterFileCommit) afterFileCommit(commitIndex, item.change.relativePath);
         if (failureInjectionStep == QStringLiteral("after-first-commit") && commitIndex == 0) {
             result.errorCode = OperationErrorCode::AtomicReplaceFailed;
             result.error = QStringLiteral("Injected failure after first commit.");
@@ -420,6 +493,13 @@ FolderSaveTransactionResult BackupManager::applyFolderTransaction(
 
     if (committedValidator && !committedValidator(&result.error)) {
         result.errorCode = OperationErrorCode::ValidationFailed;
+        rollback();
+        return result;
+    }
+
+    if (!settingsStillMatch()) {
+        result.errorCode = OperationErrorCode::SourceChanged;
+        result.error = QStringLiteral("Optimization or backup settings changed during post-commit validation.");
         rollback();
         return result;
     }

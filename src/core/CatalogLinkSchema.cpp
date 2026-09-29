@@ -1,17 +1,25 @@
+#include "core/XmlParsePolicy.h"
 #include "core/CatalogLinkSchema.h"
 
 #include "core/CatalogProtection.h"
+#include "core/GuiTypeBindings.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QHash>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QCryptographicHash>
 #include <QRegularExpression>
 #include <QStringList>
 
 #include <pugixml.hpp>
 
 #include <algorithm>
+#include <memory>
+#include <mutex>
 
 namespace
 {
@@ -26,11 +34,17 @@ struct FieldRule
 {
     RuleKind kind = RuleKind::Struct;
     QString targetType;
+    QString targetCatalog;
+    bool repeated = false;
 };
 
 struct Schema
 {
     QHash<QString, QHash<QString, FieldRule>> fieldsByOwner;
+    QHash<QString, QString> baseByType;
+    bool valid = false;
+    QHash<QString, QString> catalogByClass;
+    QSet<QString> simpleTypes;
 };
 
 QString key(const QString &value)
@@ -51,11 +65,12 @@ QByteArray loadSchemaBytes()
 {
     QByteArray bytes;
     const QStringList candidates = {
-        QStringLiteral(":/catalog_link_schema.tsv"),
-        QCoreApplication::applicationDirPath() + QStringLiteral("/resources/catalog_link_schema.tsv"),
-        QDir::current().absoluteFilePath(QStringLiteral("resources/catalog_link_schema.tsv")),
-        QDir::current().absoluteFilePath(QStringLiteral("../resources/catalog_link_schema.tsv")),
-        QDir::current().absoluteFilePath(QStringLiteral("../../resources/catalog_link_schema.tsv"))
+        QStringLiteral(":/catalog_type_index.json"),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/resources/catalog_type_index.json"),
+        QDir::current().absoluteFilePath(QStringLiteral("resources/catalog_type_index.json")),
+        QDir::current().absoluteFilePath(QStringLiteral("../resources/catalog_type_index.json")),
+        QDir::current().absoluteFilePath(QStringLiteral("../../resources/catalog_type_index.json")),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../resources/catalog_type_index.json")
     };
     for (const QString &candidate : candidates) {
         if (readAll(candidate, &bytes))
@@ -64,42 +79,106 @@ QByteArray loadSchemaBytes()
     return {};
 }
 
-const Schema &schema()
+
+QByteArray loadSchemaSourceBytes()
 {
-    static const Schema loaded = [] {
-        Schema output;
-        const QByteArray bytes = loadSchemaBytes();
-        const QList<QByteArray> lines = bytes.split('\n');
-        for (QByteArray lineBytes : lines) {
-            lineBytes = lineBytes.trimmed();
-            if (lineBytes.isEmpty() || lineBytes.startsWith('#'))
-                continue;
+    QByteArray bytes;
+    const QStringList paths = {
+        QCoreApplication::applicationDirPath() + QStringLiteral("/resources/catalogsData.xsd"),
+        QDir::current().absoluteFilePath(QStringLiteral("resources/catalogsData.xsd")),
+        QDir::current().absoluteFilePath(QStringLiteral("../resources/catalogsData.xsd")),
+        QDir::current().absoluteFilePath(QStringLiteral("../../resources/catalogsData.xsd")),
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../resources/catalogsData.xsd")
+    };
+    for (const QString &path : paths) if (readAll(path, &bytes)) return bytes;
+    return {};
+}
 
-            const QList<QByteArray> columns = lineBytes.split('\t');
-            if (columns.size() < 4)
-                continue;
+QString linkCatalog(QString type, const QHash<QString, QString> &bases, const QSet<QString> &catalogs)
+{
+    QSet<QString> seen;
+    while (!type.isEmpty() && !seen.contains(type)) {
+        seen.insert(type);
+        QString plain = type;
+        if (plain.startsWith(QStringLiteral("simple_"))) plain.remove(0, 7);
 
-            const QString owner = QString::fromUtf8(columns.at(0));
-            const QString field = QString::fromUtf8(columns.at(1));
-            const QString kindText = QString::fromUtf8(columns.at(2));
-            const QString target = QString::fromUtf8(columns.at(3));
-
-            FieldRule rule;
-            rule.kind = kindText.compare(QStringLiteral("link"), Qt::CaseInsensitive) == 0
-                ? RuleKind::Link
-                : RuleKind::Struct;
-            rule.targetType = target;
-            output.fieldsByOwner[key(owner)].insert(key(field), rule);
+        if (plain.startsWith(QLatin1Char('C')) && plain.endsWith(QStringLiteral("Link"))) {
+            const QString domain = plain.mid(1, plain.size() - 5);
+            if (catalogs.contains(domain)) return domain;
         }
+        type = bases.value(type);
+    }
+    return {};
+}
+
+const Schema &schema(bool refresh = false)
+{
+    const auto build = [](const QByteArray &bytes, const QByteArray &source) {
+        Schema output;
+        const QJsonObject document = QJsonDocument::fromJson(bytes).object();
+        if (document.value(QStringLiteral("format")).toString() != QStringLiteral("sc2dh.catalog-index.v1")) return output;
+        if (source.isEmpty() || document.value(QStringLiteral("sourceSha256")).toString().toLatin1()
+            != QCryptographicHash::hash(source, QCryptographicHash::Sha256).toHex()) return output;
+        const QJsonObject types = document.value(QStringLiteral("runtimeTypes")).toObject();
+        const QJsonObject catalogClasses=document.value(QStringLiteral("catalogTypes")).toObject();
+        QSet<QString> catalogs;
+        for(auto it=catalogClasses.begin();it!=catalogClasses.end();++it) {
+            output.catalogByClass.insert(key(it.key()),it.value().toString());
+            catalogs.insert(it.value().toString());
+        }
+        const auto structuralTypes=document.value(QStringLiteral("types")).toObject();
+        for(auto it=structuralTypes.begin();it!=structuralTypes.end();++it)
+            if(it.value().toObject().value(QStringLiteral("kind")).toString()==QStringLiteral("simpleType")) output.simpleTypes.insert(it.key());
+
+        for (auto it = types.begin(); it != types.end(); ++it)
+            output.baseByType.insert(it.key(), it.value().toObject().value(QStringLiteral("base")).toString());
+        for (auto it = types.begin(); it != types.end(); ++it) {
+            QString current = it.key();
+            QSet<QString> seen;
+            auto &fields = output.fieldsByOwner[key(current)];
+            while (!current.isEmpty() && !seen.contains(current)) {
+                seen.insert(current);
+                const QJsonArray entries = types.value(current).toObject().value(QStringLiteral("fields")).toArray();
+                for (const QJsonValue &entry : entries) {
+                    const QJsonObject field = entry.toObject();
+                    const QString name = field.value(QStringLiteral("name")).toString();
+                    const QString target = field.value(QStringLiteral("type")).toString();
+                    if (fields.contains(key(name))) continue;
+                    FieldRule rule;
+                    rule.targetType = target;
+                    rule.targetCatalog = linkCatalog(target, output.baseByType, catalogs);
+                    rule.kind = rule.targetCatalog.isEmpty() ? RuleKind::Struct : RuleKind::Link;
+                    rule.repeated = field.value(QStringLiteral("maxOccurs")).toString() == QStringLiteral("unbounded");
+                    fields.insert(key(name), rule);
+                }
+                current = output.baseByType.value(current);
+            }
+        }
+        output.valid = !types.isEmpty() && !catalogClasses.isEmpty();
         return output;
-    }();
-    return loaded;
+    };
+    static std::mutex mutex;
+    const std::lock_guard<std::mutex> lock(mutex);
+    // Retain immutable generations so readers' field pointers stay valid.
+    static QVector<std::shared_ptr<const Schema>> generations;
+    static QByteArray previousBytes, previousSource;
+    if (generations.isEmpty() || refresh) {
+        const QByteArray bytes = loadSchemaBytes();
+        const QByteArray source = loadSchemaSourceBytes();
+        if (generations.isEmpty() || bytes != previousBytes || source != previousSource) {
+            generations.append(std::make_shared<const Schema>(build(bytes, source)));
+            previousBytes = bytes;
+            previousSource = source;
+        }
+    }
+    return *generations.last();
 }
 
 const FieldRule *findRule(const QString &ownerType, const QString &fieldName)
 {
-    const auto ownerIt = schema().fieldsByOwner.constFind(key(ownerType));
-    if (ownerIt == schema().fieldsByOwner.cend())
+    const auto &data = schema();
+    const auto ownerIt = data.fieldsByOwner.constFind(key(ownerType));
+    if (ownerIt == data.fieldsByOwner.cend())
         return nullptr;
     const auto fieldIt = ownerIt.value().constFind(key(fieldName));
     if (fieldIt == ownerIt.value().cend())
@@ -310,10 +389,123 @@ void addActorEventReferences(const pugi::xml_node &xmlNode,
     }
 }
 
+const FieldRule *declaredCatalogFieldRule(pugi::xml_node node, const QString &attribute)
+{
+    QStringList path;
+    pugi::xml_node owner = node;
+    while (owner && owner.parent().type() == pugi::node_element
+           && QString::fromUtf8(owner.parent().name()) != QStringLiteral("Catalog")
+           && QString::fromUtf8(owner.parent().name()) != QStringLiteral("Entries")) {
+        path.prepend(QString::fromUtf8(owner.name()));
+        owner = owner.parent();
+    }
+    if (!owner) return nullptr;
+    QString type = QString::fromUtf8(owner.name());
+    const FieldRule *last = nullptr;
+    for (const QString &field : path) {
+        last = findRule(type, field);
+        if (!last) return nullptr;
+        type = last->targetType;
+    }
+    if (!attribute.isEmpty() && (attribute != QStringLiteral("value") || !last || last->kind != RuleKind::Link))
+        last = findRule(type, attribute);
+    else if (path.isEmpty())
+        last = findRule(type, attribute);
+    return last;
+}
+
 } // namespace
 
 namespace sc2dh
 {
+
+
+QString structuralCatalogIdentityScope(const QString &elementName)
+{
+    const QString catalog=schema().catalogByClass.value(key(elementName));
+    return catalog.isEmpty()?QString():QLatin1Char('c')+catalog.toCaseFolded();
+}
+
+bool scalarCatalogField(const QString &owner, const QString &field, bool attribute)
+{
+    const FieldRule *rule=findRule(owner,field);
+    if(!rule || rule->repeated) return false;
+    if(attribute && (schema().simpleTypes.contains(rule->targetType) || rule->targetType.startsWith(QStringLiteral("{http://www.w3.org/2001/XMLSchema}")))) return true;
+    const auto fields=schema().fieldsByOwner.value(key(rule->targetType));
+    return fields.size()==1 && fields.contains(QStringLiteral("value"));
+}
+
+bool repeatedCatalogField(const QString &owner, const QString &field)
+{
+    const FieldRule *rule=findRule(owner,field);
+    return rule && rule->repeated;
+}
+
+bool repeatedCatalogElement(pugi::xml_node element)
+{
+    const FieldRule *rule=declaredCatalogFieldRule(element,{});
+    return rule && rule->repeated;
+}
+
+QStringList possibleCatalogReferenceScopes(const QString &owner)
+{
+    const auto &data=schema();
+    QSet<QString> seen, domains;
+    QVector<QString> pending{owner};
+    while(!pending.isEmpty()) {
+        const QString current=key(pending.takeLast());
+        if(seen.contains(current)) continue;
+        seen.insert(current);
+        const auto fields=data.fieldsByOwner.value(current);
+        for(const auto &rule:fields) {
+            if(!rule.targetCatalog.isEmpty()) domains.insert(QLatin1Char('c')+rule.targetCatalog.toCaseFolded());
+            else if(data.fieldsByOwner.contains(key(rule.targetType))) pending.append(rule.targetType);
+        }
+    }
+    return domains.values();
+}
+
+void refreshCatalogSchema() { schema(true); }
+
+bool catalogSchemaAvailable() { return schema().valid; }
+
+QByteArray catalogSchemaFingerprint()
+{
+    return QCryptographicHash::hash(loadSchemaBytes() + loadSchemaSourceBytes() + sc2dh::gui::nativeBindingBytes(), QCryptographicHash::Sha256);
+}
+
+bool catalogFieldDeclared(pugi::xml_node node, const QString &attribute)
+{
+    // Placement Unit is an explicit analyzer carrier outside catalogsData.xsd.
+    if (QString::fromUtf8(node.name()) == QStringLiteral("CPlacedUnit") && attribute == QStringLiteral("Unit"))
+        return true;
+    return declaredCatalogFieldRule(node, attribute) != nullptr;
+}
+
+QString catalogReferencePrefix(pugi::xml_node node, const QString &attribute)
+{
+    // Data Collection Entry uses a catalog prefix in its value rather than an
+    // XSD Link type. Keep the explicit comma grammar scoped to collection rows.
+    if (QString::fromUtf8(node.name()) == QStringLiteral("DataRecord") && attribute == QStringLiteral("Entry")) {
+        for (pugi::xml_node owner = node.parent(); owner && owner.type() == pugi::node_element; owner = owner.parent()) {
+            if (!QString::fromUtf8(owner.name()).startsWith(QStringLiteral("CDataCollection"))) continue;
+            const QString entry = QString::fromUtf8(node.attribute("Entry").value());
+            const int comma = entry.indexOf(QLatin1Char(','));
+            if (comma > 0) {
+                const QString domain = entry.left(comma).trimmed().toCaseFolded();
+                static const QSet<QString> catalogs = {
+                    QStringLiteral("unit"), QStringLiteral("abil"), QStringLiteral("weapon"),
+                    QStringLiteral("effect"), QStringLiteral("actor"), QStringLiteral("behavior"),
+                    QStringLiteral("model"), QStringLiteral("button")};
+                if (catalogs.contains(domain)) return QLatin1Char('C') + domain;
+            }
+            break;
+        }
+    }
+    const FieldRule *last = declaredCatalogFieldRule(node, attribute);
+    if (last && !last->targetCatalog.isEmpty()) return QLatin1Char('C') + last->targetCatalog;
+    return {};
+}
 
 QSet<QString> extractCatalogLinkReferences(const DataNode &node)
 {
@@ -323,7 +515,7 @@ QSet<QString> extractCatalogLinkReferences(const DataNode &node)
 
     pugi::xml_document document;
     const QByteArray bytes = node.serializedXml.toUtf8();
-    const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()));
+    const pugi::xml_parse_result parsed = document.load_buffer(bytes.constData(), size_t(bytes.size()), sc2dh::xmlParseFlags);
     if (!parsed)
         return references;
 
