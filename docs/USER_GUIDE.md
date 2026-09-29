@@ -19,6 +19,41 @@ catalog XML files.
 6. Apply changes with backup enabled.
 7. Open the result in StarCraft II Editor and test the affected maps.
 
+## Decoration and unused objects
+
+The installed `SC2DecorOptimizeMap.exe` handles placed map decoration. It is a
+command-line tool, separate from the GUI. It always writes a new `.SC2Map`
+unless you explicitly use `--overwrite` for the output path.
+
+For a selected zone, actor recreation removes supported, unreferenced doodad
+placements from the new map's `Objects` entry and generates Galaxy functions
+such as `NAME_OUT_FUNK_Create_1()` and `NAME_OUT_FUNK_Clear_1()`. Call these
+functions from your map triggers when the zone should appear or disappear.
+Unsupported or referenced placements stay static.
+
+```powershell
+SC2DecorOptimizeMap.exe source.SC2Map optimized.SC2Map --zones zones.json --report decor-report.json
+```
+
+If you need to hide and restore the *original* placed doodads, use
+`--visibility-only`. This keeps `Objects` byte-identical and generates
+`NAME_OUT_FUNK_Hide_1()` and `NAME_OUT_FUNK_Restore_1()` for your triggers.
+It does not remove those placements from the map.
+
+```powershell
+SC2DecorOptimizeMap.exe source.SC2Map visibility.SC2Map --zones zones.json --visibility-only --report visibility-report.json
+```
+
+`zones.json` is an array such as
+`[{"id":1,"name":"Area 1","xMin":0,"yMin":0,"xMax":50,"yMax":50}]`.
+`--map-regions` can use supported exact map regions instead of `--zones`.
+Open the generated map in StarCraft II Editor and test the trigger calls before
+using it as your final map.
+
+The GUI's **Unused Data Objects** tab is a different operation: it previews
+and deletes verified unused *catalog data objects*. It does not delete placed
+doodads. Entries marked `Unknown` or `Blocked` cannot be deleted there.
+
 ## Data Collection
 
 The builder creates the editor schema first (`CDataCollectionPattern` and

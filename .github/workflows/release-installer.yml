@@ -32,7 +32,18 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums SC2DecorOptimizeMap SC2DataHelperTests
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ctest --test-dir build -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) {
+            $report = 'build/core-tests-Release.txt'
+            if (Test-Path -LiteralPath $report) {
+              Get-Content -LiteralPath $report -Tail 120
+            }
+            throw "Release tests failed with exit code $LASTEXITCODE."
+          }
       - name: Stage release files
         shell: pwsh
         run: |
