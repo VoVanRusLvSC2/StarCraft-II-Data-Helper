@@ -1,4 +1,5 @@
 #include "core/DecorationStreamingPlanner.h"
+#include "core/GalaxyDeclarationOrder.h"
 
 #include <QRegularExpression>
 #include <QMap>
@@ -471,7 +472,12 @@ bool injectMapInitCall(QString *script, QString *errorMessage)
         return false;
     }
 
-    script->insert(match.capturedEnd(), QStringLiteral("\n    DecorOpt_Init();"));
+    const auto declarationsEnd = sc2dh::galaxy::afterFunctionDeclarations(*script, QStringLiteral("InitMap"));
+    if (declarationsEnd < 0) {
+        if (errorMessage) *errorMessage = QStringLiteral("InitMap declarations could not be inspected safely.");
+        return false;
+    }
+    script->insert(declarationsEnd, QStringLiteral("\n    DecorOpt_Init();"));
     return true;
 }
 
@@ -2420,6 +2426,7 @@ bool DecorationStreamingPlanner::validateGeneratedGalaxy(const QString &galaxySo
         QStringLiteral("\\b(?:actor|int|bool)\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\["));
     if (cStyleArrayDeclaration.match(galaxySource).hasMatch())
         addError(QStringLiteral("Generated Galaxy uses C-style array declaration syntax."));
+    for (const auto &error : sc2dh::galaxy::declarationOrderErrors(galaxySource)) addError(error);
 
     return !errors || errors->isEmpty();
 }

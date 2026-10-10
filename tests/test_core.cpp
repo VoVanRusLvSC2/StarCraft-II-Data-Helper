@@ -26,6 +26,7 @@
 #include "core/Sc2Archive.h"
 #include "core/UnifiedReferenceIndex.h"
 #include "core/GalaxyReferenceSpans.h"
+#include "core/GalaxyDeclarationOrder.h"
 #include "core/GuiTypeBindings.h"
 #include "core/CatalogLinkSchema.h"
 #include "core/XmlLoader.h"
@@ -384,6 +385,7 @@ private slots:
     void decorationStreamingInitializesPlacementBeforeDoodad();
     void decorationMapCopyPreloadsNativeVariants();
     void decorationModelsPreventVariantFallbackAndRestoreExactly();
+    void decorationRuntimeInitializationKeepsDeclarationsFirst();
     void decorationAiBuildingsFollowControllersAndStructureInheritance();
     void decorationHiddenAiProtectionRequiresBothFlags();
     void decorationStreamingRegionEntryRestoresVisibility();
@@ -7964,6 +7966,23 @@ void CoreTests::decorationAiBuildingsFollowControllersAndStructureInheritance()
 #endif
 }
 
+void CoreTests::decorationRuntimeInitializationKeepsDeclarationsFirst()
+{
+    using namespace sc2dh::galaxy;
+    const QString script = QStringLiteral("// void InitMap() { fake(); }\nvoid InitMap();\nvoid InitMap() {\n    int player;\n    unit u = UnitLastCreated();\n    int[2] counts;\n    string example = \"int ignored; }\";\n    counts[0] = 1;\n}\n");
+    const auto offset = afterFunctionDeclarations(script, QStringLiteral("InitMap"));
+    QVERIFY(offset > script.indexOf(QStringLiteral("unit u")));
+    QVERIFY(offset < script.indexOf(QStringLiteral("counts[0]")));
+    QString injected = script;
+    injected.insert(offset, QStringLiteral("\n    DecorOpt_Init();"));
+    QVERIFY(declarationOrderErrors(injected).isEmpty());
+    QVERIFY(!declarationOrderErrors(QStringLiteral("void InitMap() { PreloadObject(0, \"X\", false); int zoneId; }")).isEmpty());
+    QVERIFY(!declarationOrderErrors(QStringLiteral("void F() { int[2] data; data[0] = 1; int late; }")).isEmpty());
+    QByteArray connected; QString error;
+    QVERIFY2(sc2dh::decor::DecorationStreamingPlanner().injectGalaxyInclude(script.toUtf8(), QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &connected, &error), qPrintable(error));
+    QVERIFY(declarationOrderErrors(QString::fromUtf8(connected)).isEmpty());
+}
+
 void CoreTests::decorationModelsPreventVariantFallbackAndRestoreExactly()
 {
 #ifndef SC2DH_USE_STORMLIB
@@ -8003,6 +8022,10 @@ void CoreTests::decorationModelsPreventVariantFallbackAndRestoreExactly()
         QVERIFY(archive.readEntry(modelEntry, &data, &error));
         QVERIFY(archive.readEntry(request.runtimeEntry, &runtime, &error));
         QVERIFY(archive.readEntry(QStringLiteral("Objects"), &remaining, &error));
+        QVERIFY2(sc2dh::galaxy::declarationOrderErrors(QString::fromUtf8(runtime)).isEmpty(), runtime.constData());
+        QString invalidOrder = QString::fromUtf8(runtime);
+        invalidOrder.replace(QStringLiteral("int zoneId;\n    DecorOpt_PreloadVariants();"), QStringLiteral("DecorOpt_PreloadVariants();\n    int zoneId;"));
+        QVERIFY(!sc2dh::galaxy::declarationOrderErrors(invalidOrder).isEmpty()); // The reported line-427 regression.
         QVERIFY(remaining.contains("UnitNoCreate"));
         pugi::xml_document doc;
         QVERIFY(doc.load_buffer(data.constData(), size_t(data.size())));

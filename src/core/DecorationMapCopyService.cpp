@@ -3,6 +3,7 @@
 #include "core/BackupManager.h"
 #include "core/FolderAnalyzer.h"
 #include "core/GalaxyReferenceSpans.h"
+#include "core/GalaxyDeclarationOrder.h"
 #include "core/Sc2Archive.h"
 #include "core/UnitStructureDefaults.h"
 
@@ -1131,7 +1132,9 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
             const QString init = QStringLiteral("void DecorOpt_Init() {\n");
             const auto initIndex = runtime.indexOf(init);
             if (initIndex < 0) { result.error = QStringLiteral("Runtime initialization is missing."); return result; }
-            runtime.insert(initIndex + init.size(), QStringLiteral("    DecorOpt_PreloadVariants();\n"));
+            const auto declarationsEnd = sc2dh::galaxy::afterFunctionDeclarations(runtime, QStringLiteral("DecorOpt_Init"));
+            if (declarationsEnd < 0) { result.error = QStringLiteral("Runtime initialization declarations are invalid."); return result; }
+            runtime.insert(declarationsEnd, QStringLiteral("\n    DecorOpt_PreloadVariants();"));
             runtime.insert(initIndex, preloadFunction);
             galaxy = runtime.toUtf8();
             galaxy += QByteArray("// SC2DH models rollback ") + (modelCatalogExisted ? "1 " : "0 ") + sha256Hex(runtimeModelCatalog) + '\n';
@@ -1140,6 +1143,8 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
                 galaxy += QByteArray("// SC2DH models data ") + encodedModels.mid(i, 200) + '\n';
             result.patch.replacementEntries.insert(request.runtimeEntry, galaxy);
         }
+        const auto declarationErrors = sc2dh::galaxy::declarationOrderErrors(QString::fromUtf8(galaxy));
+        if (!declarationErrors.isEmpty()) { result.error = declarationErrors.join(QLatin1Char('\n')); return result; }
         if (!result.patch.artifacts.removedDoodadIndices.isEmpty()
             || std::any_of(result.patch.artifacts.removedUnitIndices.cbegin(), result.patch.artifacts.removedUnitIndices.cend(),
                 [&](int i) { return result.patch.artifacts.plan.units[i].variation >= 0; })) {
