@@ -47,331 +47,329 @@
 
 namespace sc2dh::app
 {
-namespace
-{
-[[maybe_unused]] const char *const mainWindowTranslationSources[] = {
-    QT_TRANSLATE_NOOP("MainWindow", "SC2 Data Helper"),
-    QT_TRANSLATE_NOOP("MainWindow", "Open SC2 File"),
-    QT_TRANSLATE_NOOP("MainWindow", "Open Folder"),
-    QT_TRANSLATE_NOOP("MainWindow", "Analyze"),
-    QT_TRANSLATE_NOOP("MainWindow", "Optimization"),
-    QT_TRANSLATE_NOOP("MainWindow", "Review Optimization Plan"),
-    QT_TRANSLATE_NOOP("MainWindow", "Settings"),
-    QT_TRANSLATE_NOOP("MainWindow", "Fullscreen"),
-    QT_TRANSLATE_NOOP("MainWindow", "Windowed"),
-    QT_TRANSLATE_NOOP("MainWindow", "Exit"),
-    QT_TRANSLATE_NOOP("MainWindow", "Analyze / refresh the current project (F5)"),
-    QT_TRANSLATE_NOOP("MainWindow", "Selected source path"),
-    QT_TRANSLATE_NOOP("MainWindow", "Join Discord"),
-    QT_TRANSLATE_NOOP("MainWindow", "Support on Boosty"),
-    QT_TRANSLATE_NOOP("MainWindow", "Objects"),
-    QT_TRANSLATE_NOOP("MainWindow", "Dependencies"),
-    QT_TRANSLATE_NOOP("MainWindow", "Graph"),
-    QT_TRANSLATE_NOOP("MainWindow", "Map Performance"),
-    QT_TRANSLATE_NOOP("MainWindow", "Properties"),
-    QT_TRANSLATE_NOOP("MainWindow", "Data Collection"),
-    QT_TRANSLATE_NOOP("MainWindow", "Rename To Standard"),
-    QT_TRANSLATE_NOOP("MainWindow", "Duplicate Merge"),
-    QT_TRANSLATE_NOOP("MainWindow", "Unused Data Objects"),
-    QT_TRANSLATE_NOOP("MainWindow", "Logs"),
-    QT_TRANSLATE_NOOP("MainWindow", "XML Source"),
-    QT_TRANSLATE_NOOP("MainWindow", "Toggle fullscreen mode (F11)")
-};
-
-QString mainText(const char *source)
-{
-    return QCoreApplication::translate("MainWindow", source);
-}
-
-void setWorkspaceTabTitle(QTabWidget *tabs, QWidget *page, const char *source)
-{
-    if (!tabs || !page)
-        return;
-    const int index = tabs->indexOf(page);
-    if (index < 0)
-        return;
-
-    const QString title = mainText(source);
-    tabs->setTabToolTip(index, title);
-    auto *label = qobject_cast<QLabel *>(tabs->tabBar()->tabButton(index, QTabBar::LeftSide));
-    if (!label)
-        return;
-    label->setText(title);
-    label->setFixedWidth(label->fontMetrics().horizontalAdvance(title) + 52);
-}
-}
-
-MainWindowUiBuilder::MainWindowUiBuilder(MainWindow &window)
-    : m_window(window)
-{
-}
-
-void MainWindowUiBuilder::build()
-{
-    MainWindow *window = &m_window;
-    window->setWindowTitle(QStringLiteral(SC2DH_GUI_TITLE));
-    window->setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
-    QSize initialSize(1550, 980);
-    if (const QScreen *screen = QApplication::primaryScreen())
+    namespace
     {
-        const QRect available = screen->availableGeometry();
-        initialSize.setWidth(qMin(initialSize.width(), qMax(1100, available.width() - 80)));
-        initialSize.setHeight(qMin(initialSize.height(), qMax(720, available.height() - 90)));
-        window->resize(initialSize);
-        window->move(available.center() - QRect(QPoint(), initialSize).center());
-    }
-    else
-    {
-        window->resize(initialSize);
+        [[maybe_unused]] const char *const mainWindowTranslationSources[] = {
+            QT_TRANSLATE_NOOP("MainWindow", "SC2 Data Helper"),
+            QT_TRANSLATE_NOOP("MainWindow", "Open SC2 File"),
+            QT_TRANSLATE_NOOP("MainWindow", "Open Folder"),
+            QT_TRANSLATE_NOOP("MainWindow", "Analyze"),
+            QT_TRANSLATE_NOOP("MainWindow", "Optimization"),
+            QT_TRANSLATE_NOOP("MainWindow", "Review Optimization Plan"),
+            QT_TRANSLATE_NOOP("MainWindow", "Settings"),
+            QT_TRANSLATE_NOOP("MainWindow", "Fullscreen"),
+            QT_TRANSLATE_NOOP("MainWindow", "Windowed"),
+            QT_TRANSLATE_NOOP("MainWindow", "Exit"),
+            QT_TRANSLATE_NOOP("MainWindow", "Analyze / refresh the current project (F5)"),
+            QT_TRANSLATE_NOOP("MainWindow", "Selected source path"),
+            QT_TRANSLATE_NOOP("MainWindow", "Join Discord"),
+            QT_TRANSLATE_NOOP("MainWindow", "Support on Boosty"),
+            QT_TRANSLATE_NOOP("MainWindow", "Objects"),
+            QT_TRANSLATE_NOOP("MainWindow", "Dependencies"),
+            QT_TRANSLATE_NOOP("MainWindow", "Graph"),
+            QT_TRANSLATE_NOOP("MainWindow", "Map Performance"),
+            QT_TRANSLATE_NOOP("MainWindow", "Properties"),
+            QT_TRANSLATE_NOOP("MainWindow", "Data Collection"),
+            QT_TRANSLATE_NOOP("MainWindow", "Rename To Standard"),
+            QT_TRANSLATE_NOOP("MainWindow", "Duplicate Merge"),
+            QT_TRANSLATE_NOOP("MainWindow", "Unused Data Objects"),
+            QT_TRANSLATE_NOOP("MainWindow", "Logs"),
+            QT_TRANSLATE_NOOP("MainWindow", "XML Source"),
+            QT_TRANSLATE_NOOP("MainWindow", "Toggle fullscreen mode (F11)")};
+
+        QString mainText(const char *source)
+        {
+            return QCoreApplication::translate("MainWindow", source);
+        }
+
+        void setWorkspaceTabTitle(QTabWidget *tabs, QWidget *page, const char *source)
+        {
+            if (!tabs || !page)
+                return;
+            const int index = tabs->indexOf(page);
+            if (index < 0)
+                return;
+
+            const QString title = mainText(source);
+            tabs->setTabToolTip(index, title);
+            auto *label = qobject_cast<QLabel *>(tabs->tabBar()->tabButton(index, QTabBar::LeftSide));
+            if (!label)
+                return;
+            label->setText(title);
+            label->setFixedWidth(label->fontMetrics().horizontalAdvance(title) + 52);
+        }
     }
 
-    auto *toolbar = window->addToolBar(QStringLiteral("Main"));
-    toolbar->setObjectName(QStringLiteral("mainToolbar"));
-    toolbar->setMovable(false);
-    toolbar->setIconSize(QSize(0, 0));
-    toolbar->setMinimumHeight(58);
-
-    window->m_openFileAction = new QAction(mainText("Open SC2 File"), window);
-    window->m_openFolderAction = new QAction(mainText("Open Folder"), window);
-    window->m_analyzeAction = new QAction(mainText("Analyze"), window);
-    window->m_dryRunAction = new QAction(mainText("Optimization"), window);
-    window->m_applyAction = new QAction(mainText("Review Optimization Plan"), window);
-    window->m_settingsAction = new QAction(mainText("Settings"), window);
-    window->m_fullscreenAction = new QAction(mainText("Fullscreen"), window);
-    window->m_exitAction = new QAction(mainText("Exit"), window);
-    window->m_analyzeAction->setShortcut(QKeySequence(Qt::Key_F5));
-    window->m_analyzeAction->setShortcutContext(Qt::ApplicationShortcut);
-    window->m_analyzeAction->setToolTip(mainText("Analyze / refresh the current project (F5)"));
-    window->m_dryRunAction->setEnabled(false);
-    window->m_applyAction->setEnabled(false);
-
-    window->m_pathEdit = new QLineEdit(window);
-    window->m_pathEdit->setObjectName(QStringLiteral("pathEdit"));
-    window->m_pathEdit->setPlaceholderText(mainText("Selected source path"));
-    window->m_pathEdit->setReadOnly(true);
-    window->m_pathEdit->setCursorPosition(0);
-    window->m_pathEdit->hide();
-
-    auto *toolbarContent = new QWidget(toolbar);
-    toolbarContent->setObjectName(QStringLiteral("mainToolbarContent"));
-    toolbarContent->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto *toolbarLayout = new QHBoxLayout(toolbarContent);
-    toolbarLayout->setContentsMargins(0, 0, 0, 0);
-    toolbarLayout->setSpacing(0);
-    const auto addActionButton = [toolbarContent, toolbarLayout](QAction *action, int stretch)
+    MainWindowUiBuilder::MainWindowUiBuilder(MainWindow &window)
+        : m_window(window)
     {
-        auto *button = new QToolButton(toolbarContent);
-        button->setDefaultAction(action);
-        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-        button->setFocusPolicy(Qt::NoFocus);
-        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        toolbarLayout->addWidget(button, stretch);
-        return button;
-    };
-    addActionButton(window->m_openFileAction, 1);
-    addActionButton(window->m_openFolderAction, 1);
-    addActionButton(window->m_analyzeAction, 1);
-    addActionButton(window->m_dryRunAction, 1);
-    addActionButton(window->m_applyAction, 2);
-    addActionButton(window->m_settingsAction, 1);
-    addActionButton(window->m_fullscreenAction, 1);
-    addActionButton(window->m_exitAction, 1);
-
-    auto *discordButton = new QToolButton(toolbarContent);
-    discordButton->setObjectName(QStringLiteral("discordPromoButton"));
-    discordButton->setIcon(QIcon(QStringLiteral(":/textures/Discord.png")));
-    discordButton->setIconSize(QSize(42, 42));
-    discordButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    discordButton->setToolTip(mainText("Join Discord"));
-    discordButton->setCursor(Qt::PointingHandCursor);
-    discordButton->setFocusPolicy(Qt::NoFocus);
-    discordButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    toolbarLayout->addWidget(discordButton, 1);
-
-    auto *boostyButton = new QToolButton(toolbarContent);
-    boostyButton->setObjectName(QStringLiteral("boostyPromoButton"));
-    boostyButton->setText(QStringLiteral("Boosty"));
-    boostyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    boostyButton->setToolTip(mainText("Support on Boosty"));
-    boostyButton->setCursor(Qt::PointingHandCursor);
-    boostyButton->setFocusPolicy(Qt::NoFocus);
-    boostyButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    toolbarLayout->addWidget(boostyButton, 1);
-    toolbar->addWidget(toolbarContent);
-
-    auto *root = createSc2BackgroundWidget(window);
-    root->setObjectName(QStringLiteral("workspaceRoot"));
-    auto *rootLayout = new QVBoxLayout(root);
-    rootLayout->setContentsMargins(0, 0, 0, 0);
-    rootLayout->setSpacing(0);
-
-    auto *splitterFrame = new QFrame(root);
-    splitterFrame->setObjectName(QStringLiteral("workspaceFrame"));
-    auto *splitterLayout = new QVBoxLayout(splitterFrame);
-    splitterLayout->setContentsMargins(0, 0, 0, 0);
-
-    window->m_tabs = new QTabWidget(splitterFrame);
-    window->m_tabs->setObjectName(QStringLiteral("workspaceTabs"));
-    window->m_analysisPage = new OverviewPage(window->m_tabs);
-    window->m_dependenciesPage = new DependenciesPage(window->m_tabs);
-    window->m_graphPage = new GraphPage(window->m_tabs);
-    window->m_mapPerformancePage = new MapPerformancePage(window->m_tabs);
-    QObject::connect(window->m_mapPerformancePage, &MapPerformancePage::operationFinished,
-                     window, [window](const OperationResult &result) {
-                         window->showOperationResult(result);
-                     });
-    window->m_propertiesPage = new PropertiesPage(window->m_tabs);
-    window->m_dataCollectionPage = new DataCollectionPage(window->m_tabs);
-    window->m_renameIdsPage = new RenameIdsPage(window->m_tabs);
-    window->m_duplicatesPage = new DuplicatesPage(window->m_tabs);
-    window->m_cleanupPage = new UnusedPage(window->m_tabs);
-    window->m_dryRunPage = new FormatterPage(window);
-    window->m_dryRunPage->hide();
-    window->m_logPanel = new LogPanel(window->m_tabs);
-    window->m_xmlSourcePage = new XmlSourcePage(window->m_tabs);
-
-    window->m_tabs->addTab(window->m_analysisPage, mainText("Objects"));
-    window->m_tabs->addTab(window->m_dependenciesPage, mainText("Dependencies"));
-    window->m_tabs->addTab(window->m_graphPage, mainText("Graph"));
-    window->m_tabs->addTab(window->m_mapPerformancePage, mainText("Map Performance"));
-    window->m_tabs->addTab(window->m_propertiesPage, mainText("Properties"));
-    window->m_tabs->addTab(window->m_dataCollectionPage, mainText("Data Collection"));
-    window->m_tabs->addTab(window->m_renameIdsPage, mainText("Rename To Standard"));
-    window->m_tabs->addTab(window->m_duplicatesPage, mainText("Duplicate Merge"));
-    window->m_tabs->addTab(window->m_cleanupPage, mainText("Unused Data Objects"));
-    window->m_tabs->addTab(window->m_logPanel, mainText("Logs"));
-    window->m_tabs->addTab(window->m_xmlSourcePage, mainText("XML Source"));
-    window->m_tabs->tabBar()->setExpanding(false);
-    window->m_tabs->tabBar()->setUsesScrollButtons(true);
-    window->m_tabs->tabBar()->setElideMode(Qt::ElideNone);
-    window->m_tabs->setFocusPolicy(Qt::NoFocus);
-    window->m_tabs->tabBar()->setFocusPolicy(Qt::NoFocus);
-    for (int index = 0; index < window->m_tabs->count(); ++index)
-    {
-        const QString title = window->m_tabs->tabText(index);
-        window->m_tabs->setTabToolTip(index, title);
-        auto *label = new QLabel(title, window->m_tabs->tabBar());
-        label->setObjectName(QStringLiteral("workspaceTabLabel"));
-        label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        label->setFocusPolicy(Qt::NoFocus);
-        label->setTextInteractionFlags(Qt::NoTextInteraction);
-        QFont labelFont = label->font();
-        labelFont.setBold(true);
-        label->setFont(labelFont);
-        // Leave room for both edge glyphs and the glow. QTabBar clips custom
-        // tab buttons to their size hint, which previously cut off letters.
-        label->setFixedWidth(label->fontMetrics().horizontalAdvance(title) + 52);
-        label->setMinimumHeight(30);
-        label->setContentsMargins(12, 0, 12, 0);
-        label->setAlignment(Qt::AlignCenter);
-        label->setStyleSheet(QStringLiteral("background: transparent; color: #e8fffb; padding: 0;"));
-        window->m_tabs->tabBar()->setTabButton(index, QTabBar::LeftSide, label);
-        window->m_tabs->setTabText(index, QString());
     }
-    window->m_tabs->tabBar()->setMouseTracking(true);
-    installPersistentTabToolTips(window->m_tabs->tabBar());
-    const auto updateTabGlow = [window](int selected)
+
+    void MainWindowUiBuilder::build()
     {
+        MainWindow *window = &m_window;
+        window->setWindowTitle(QStringLiteral(SC2DH_GUI_TITLE));
+        window->setWindowIcon(QIcon(QStringLiteral(":/icons/Icon.png")));
+        QSize initialSize(1550, 980);
+        if (const QScreen *screen = QApplication::primaryScreen())
+        {
+            const QRect available = screen->availableGeometry();
+            initialSize.setWidth(qMin(initialSize.width(), qMax(1100, available.width() - 80)));
+            initialSize.setHeight(qMin(initialSize.height(), qMax(720, available.height() - 90)));
+            window->resize(initialSize);
+            window->move(available.center() - QRect(QPoint(), initialSize).center());
+        }
+        else
+        {
+            window->resize(initialSize);
+        }
+
+        auto *toolbar = window->addToolBar(QStringLiteral("Main"));
+        toolbar->setObjectName(QStringLiteral("mainToolbar"));
+        toolbar->setMovable(false);
+        toolbar->setIconSize(QSize(0, 0));
+        toolbar->setMinimumHeight(58);
+
+        window->m_openFileAction = new QAction(mainText("Open SC2 File"), window);
+        window->m_openFolderAction = new QAction(mainText("Open Folder"), window);
+        window->m_analyzeAction = new QAction(mainText("Analyze"), window);
+        window->m_dryRunAction = new QAction(mainText("Optimization"), window);
+        window->m_applyAction = new QAction(mainText("Review Optimization Plan"), window);
+        window->m_settingsAction = new QAction(mainText("Settings"), window);
+        window->m_fullscreenAction = new QAction(mainText("Fullscreen"), window);
+        window->m_exitAction = new QAction(mainText("Exit"), window);
+        window->m_analyzeAction->setShortcut(QKeySequence(Qt::Key_F5));
+        window->m_analyzeAction->setShortcutContext(Qt::ApplicationShortcut);
+        window->m_analyzeAction->setToolTip(mainText("Analyze / refresh the current project (F5)"));
+        window->m_dryRunAction->setEnabled(false);
+        window->m_applyAction->setEnabled(false);
+
+        window->m_pathEdit = new QLineEdit(window);
+        window->m_pathEdit->setObjectName(QStringLiteral("pathEdit"));
+        window->m_pathEdit->setPlaceholderText(mainText("Selected source path"));
+        window->m_pathEdit->setReadOnly(true);
+        window->m_pathEdit->setCursorPosition(0);
+        window->m_pathEdit->hide();
+
+        auto *toolbarContent = new QWidget(toolbar);
+        toolbarContent->setObjectName(QStringLiteral("mainToolbarContent"));
+        toolbarContent->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        auto *toolbarLayout = new QHBoxLayout(toolbarContent);
+        toolbarLayout->setContentsMargins(0, 0, 0, 0);
+        toolbarLayout->setSpacing(0);
+        const auto addActionButton = [toolbarContent, toolbarLayout](QAction *action, int stretch)
+        {
+            auto *button = new QToolButton(toolbarContent);
+            button->setDefaultAction(action);
+            button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            button->setFocusPolicy(Qt::NoFocus);
+            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+            toolbarLayout->addWidget(button, stretch);
+            return button;
+        };
+        addActionButton(window->m_openFileAction, 1);
+        addActionButton(window->m_openFolderAction, 1);
+        addActionButton(window->m_analyzeAction, 1);
+        addActionButton(window->m_dryRunAction, 1);
+        addActionButton(window->m_applyAction, 2);
+        addActionButton(window->m_settingsAction, 1);
+        addActionButton(window->m_fullscreenAction, 1);
+        addActionButton(window->m_exitAction, 1);
+
+        auto *discordButton = new QToolButton(toolbarContent);
+        discordButton->setObjectName(QStringLiteral("discordPromoButton"));
+        discordButton->setIcon(QIcon(QStringLiteral(":/textures/Discord.png")));
+        discordButton->setIconSize(QSize(42, 42));
+        discordButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        discordButton->setToolTip(mainText("Join Discord"));
+        discordButton->setCursor(Qt::PointingHandCursor);
+        discordButton->setFocusPolicy(Qt::NoFocus);
+        discordButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        toolbarLayout->addWidget(discordButton, 1);
+
+        auto *boostyButton = new QToolButton(toolbarContent);
+        boostyButton->setObjectName(QStringLiteral("boostyPromoButton"));
+        boostyButton->setText(QStringLiteral("Boosty"));
+        boostyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        boostyButton->setToolTip(mainText("Support on Boosty"));
+        boostyButton->setCursor(Qt::PointingHandCursor);
+        boostyButton->setFocusPolicy(Qt::NoFocus);
+        boostyButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        toolbarLayout->addWidget(boostyButton, 1);
+        toolbar->addWidget(toolbarContent);
+
+        auto *root = createSc2BackgroundWidget(window);
+        root->setObjectName(QStringLiteral("workspaceRoot"));
+        auto *rootLayout = new QVBoxLayout(root);
+        rootLayout->setContentsMargins(0, 0, 0, 0);
+        rootLayout->setSpacing(0);
+
+        auto *splitterFrame = new QFrame(root);
+        splitterFrame->setObjectName(QStringLiteral("workspaceFrame"));
+        auto *splitterLayout = new QVBoxLayout(splitterFrame);
+        splitterLayout->setContentsMargins(0, 0, 0, 0);
+
+        window->m_tabs = new QTabWidget(splitterFrame);
+        window->m_tabs->setObjectName(QStringLiteral("workspaceTabs"));
+        window->m_analysisPage = new OverviewPage(window->m_tabs);
+        window->m_dependenciesPage = new DependenciesPage(window->m_tabs);
+        window->m_graphPage = new GraphPage(window->m_tabs);
+        window->m_mapPerformancePage = new MapPerformancePage(window->m_tabs);
+        QObject::connect(window->m_mapPerformancePage, &MapPerformancePage::operationFinished,
+                         window, [window](const OperationResult &result)
+                         { window->showOperationResult(result); });
+        window->m_propertiesPage = new PropertiesPage(window->m_tabs);
+        window->m_dataCollectionPage = new DataCollectionPage(window->m_tabs);
+        window->m_renameIdsPage = new RenameIdsPage(window->m_tabs);
+        window->m_duplicatesPage = new DuplicatesPage(window->m_tabs);
+        window->m_cleanupPage = new UnusedPage(window->m_tabs);
+        window->m_dryRunPage = new FormatterPage(window);
+        window->m_dryRunPage->hide();
+        window->m_logPanel = new LogPanel(window->m_tabs);
+        window->m_xmlSourcePage = new XmlSourcePage(window->m_tabs);
+
+        window->m_tabs->addTab(window->m_analysisPage, mainText("Objects"));
+        window->m_tabs->addTab(window->m_dependenciesPage, mainText("Dependencies"));
+        window->m_tabs->addTab(window->m_graphPage, mainText("Graph"));
+        window->m_tabs->addTab(window->m_mapPerformancePage, mainText("Map Performance"));
+        window->m_tabs->addTab(window->m_propertiesPage, mainText("Properties"));
+        window->m_tabs->addTab(window->m_dataCollectionPage, mainText("Data Collection"));
+        window->m_tabs->addTab(window->m_renameIdsPage, mainText("Rename To Standard"));
+        window->m_tabs->addTab(window->m_duplicatesPage, mainText("Duplicate Merge"));
+        window->m_tabs->addTab(window->m_cleanupPage, mainText("Unused Data Objects"));
+        window->m_tabs->addTab(window->m_logPanel, mainText("Logs"));
+        window->m_tabs->addTab(window->m_xmlSourcePage, mainText("XML Source"));
+        window->m_tabs->tabBar()->setExpanding(false);
+        window->m_tabs->tabBar()->setUsesScrollButtons(true);
+        window->m_tabs->tabBar()->setElideMode(Qt::ElideNone);
+        window->m_tabs->setFocusPolicy(Qt::NoFocus);
+        window->m_tabs->tabBar()->setFocusPolicy(Qt::NoFocus);
         for (int index = 0; index < window->m_tabs->count(); ++index)
         {
-            auto *label = qobject_cast<QLabel *>(window->m_tabs->tabBar()->tabButton(index, QTabBar::LeftSide));
-            if (!label)
-                continue;
-            auto *glow = new QGraphicsDropShadowEffect(label);
-            glow->setOffset(0, 0);
-            glow->setBlurRadius(index == selected ? 14.0 : 11.0);
-            glow->setColor(index == selected ? QColor(255, 120, 38, 235) : QColor(65, 235, 210, 185));
-            label->setStyleSheet(index == selected
-                                     ? QStringLiteral("background: transparent; color: #fff4e9; padding: 0;")
-                                     : QStringLiteral("background: transparent; color: #e8fffb; padding: 0;"));
-            label->setGraphicsEffect(glow);
+            const QString title = window->m_tabs->tabText(index);
+            window->m_tabs->setTabToolTip(index, title);
+            auto *label = new QLabel(title, window->m_tabs->tabBar());
+            label->setObjectName(QStringLiteral("workspaceTabLabel"));
+            label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+            label->setFocusPolicy(Qt::NoFocus);
+            label->setTextInteractionFlags(Qt::NoTextInteraction);
+            QFont labelFont = label->font();
+            labelFont.setBold(true);
+            label->setFont(labelFont);
+            // Leave room for both edge glyphs and the glow. QTabBar clips custom
+            // tab buttons to their size hint, which previously cut off letters.
+            label->setFixedWidth(label->fontMetrics().horizontalAdvance(title) + 52);
+            label->setMinimumHeight(30);
+            label->setContentsMargins(12, 0, 12, 0);
+            label->setAlignment(Qt::AlignCenter);
+            label->setStyleSheet(QStringLiteral("background: transparent; color: #e8fffb; padding: 0;"));
+            window->m_tabs->tabBar()->setTabButton(index, QTabBar::LeftSide, label);
+            window->m_tabs->setTabText(index, QString());
         }
-    };
-    updateTabGlow(window->m_tabs->currentIndex());
-    QObject::connect(window->m_tabs, &QTabWidget::currentChanged, window, updateTabGlow);
-
-    splitterLayout->addWidget(window->m_tabs);
-    rootLayout->addWidget(splitterFrame, 1);
-    window->setCentralWidget(root);
-    QObject::connect(window->m_openFileAction, &QAction::triggered, window, &MainWindow::openSc2File);
-    QObject::connect(window->m_openFolderAction, &QAction::triggered, window, &MainWindow::openSourceFolder);
-    QObject::connect(window->m_analyzeAction, &QAction::triggered, window, &MainWindow::analyzeFolder);
-    QObject::connect(window->m_dryRunAction, &QAction::triggered, window, &MainWindow::runDryRun);
-    QObject::connect(window->m_applyAction, &QAction::triggered, window, &MainWindow::showDryRunTab);
-    QObject::connect(window->m_settingsAction, &QAction::triggered, window, &MainWindow::showSettingsDialog);
-    QObject::connect(window->m_fullscreenAction, &QAction::triggered, window, &MainWindow::toggleFullscreen);
-    QObject::connect(window->m_exitAction, &QAction::triggered, window, []
+        window->m_tabs->tabBar()->setMouseTracking(true);
+        installPersistentTabToolTips(window->m_tabs->tabBar());
+        const auto updateTabGlow = [window](int selected)
+        {
+            for (int index = 0; index < window->m_tabs->count(); ++index)
             {
+                auto *label = qobject_cast<QLabel *>(window->m_tabs->tabBar()->tabButton(index, QTabBar::LeftSide));
+                if (!label)
+                    continue;
+                auto *glow = new QGraphicsDropShadowEffect(label);
+                glow->setOffset(0, 0);
+                glow->setBlurRadius(index == selected ? 14.0 : 11.0);
+                glow->setColor(index == selected ? QColor(255, 120, 38, 235) : QColor(65, 235, 210, 185));
+                label->setStyleSheet(index == selected
+                                         ? QStringLiteral("background: transparent; color: #fff4e9; padding: 0;")
+                                         : QStringLiteral("background: transparent; color: #e8fffb; padding: 0;"));
+                label->setGraphicsEffect(glow);
+            }
+        };
+        updateTabGlow(window->m_tabs->currentIndex());
+        QObject::connect(window->m_tabs, &QTabWidget::currentChanged, window, updateTabGlow);
+
+        splitterLayout->addWidget(window->m_tabs);
+        rootLayout->addWidget(splitterFrame, 1);
+        window->setCentralWidget(root);
+        QObject::connect(window->m_openFileAction, &QAction::triggered, window, &MainWindow::openSc2File);
+        QObject::connect(window->m_openFolderAction, &QAction::triggered, window, &MainWindow::openSourceFolder);
+        QObject::connect(window->m_analyzeAction, &QAction::triggered, window, &MainWindow::analyzeFolder);
+        QObject::connect(window->m_dryRunAction, &QAction::triggered, window, &MainWindow::runDryRun);
+        QObject::connect(window->m_applyAction, &QAction::triggered, window, &MainWindow::showDryRunTab);
+        QObject::connect(window->m_settingsAction, &QAction::triggered, window, &MainWindow::showSettingsDialog);
+        QObject::connect(window->m_fullscreenAction, &QAction::triggered, window, &MainWindow::toggleFullscreen);
+        QObject::connect(window->m_exitAction, &QAction::triggered, window, []
+                         {
         AudioManager::instance()->shutdown();
         QApplication::closeAllWindows();
         QCoreApplication::quit(); });
-    const auto openSupportUrl = [window](const char *url, const QString &label)
-    {
-        if (!QDesktopServices::openUrl(QUrl(QString::fromLatin1(url))))
+        const auto openSupportUrl = [window](const char *url, const QString &label)
         {
-            QMessageBox::warning(window, label, QStringLiteral("Unable to open link: %1").arg(QString::fromLatin1(url)));
-        }
-    };
-    QObject::connect(discordButton, &QToolButton::clicked, window, [openSupportUrl]
-            { openSupportUrl(discordInviteUrl(), QStringLiteral("Discord")); });
-    QObject::connect(boostyButton, &QToolButton::clicked, window, [openSupportUrl]
-            { openSupportUrl(boostyUrl(), QStringLiteral("Boosty")); });
-    QObject::connect(window->m_duplicatesPage, &DuplicatesPage::previewMergeRequested, window, &MainWindow::previewMerge);
-    QObject::connect(window->m_duplicatesPage, &DuplicatesPage::applyMergeRequested, window, &MainWindow::applyMerge);
-    QObject::connect(window->m_cleanupPage, &UnusedPage::previewDeletionRequested, window, &MainWindow::previewUnusedDeletion);
-    QObject::connect(window->m_cleanupPage, &UnusedPage::applyDeletionRequested, window, &MainWindow::applyUnusedDeletion);
-    QObject::connect(window->m_renameIdsPage, &RenameIdsPage::previewRequested, window, &MainWindow::previewStandardRename);
-    QObject::connect(window->m_renameIdsPage, &RenameIdsPage::applyRequested, window, &MainWindow::applyStandardRename);
-    QObject::connect(window->m_renameIdsPage, &RenameIdsPage::exportRequested, window, &MainWindow::exportStandardRenameReport);
-    QObject::connect(window->m_dataCollectionPage, &DataCollectionPage::previewRequested, window, &MainWindow::previewDataCollection);
-    QObject::connect(window->m_dataCollectionPage, &DataCollectionPage::applyRequested, window, &MainWindow::applyDataCollection);
-    QObject::connect(window->m_dataCollectionPage, &DataCollectionPage::exportRequested, window, &MainWindow::exportDataCollectionReport);
-    QObject::connect(window->m_dryRunPage, &FormatterPage::previewBuilt, window, [window]
-            { window->m_applyAction->setEnabled(true); });
-    QObject::connect(window->m_dryRunPage, &FormatterPage::openUnusedRequested, window, [window](const QVector<int> &rows)
+            if (!QDesktopServices::openUrl(QUrl(QString::fromLatin1(url))))
             {
+                QMessageBox::warning(window, label, QStringLiteral("Unable to open link: %1").arg(QString::fromLatin1(url)));
+            }
+        };
+        QObject::connect(discordButton, &QToolButton::clicked, window, [openSupportUrl]
+                         { openSupportUrl(discordInviteUrl(), QStringLiteral("Discord")); });
+        QObject::connect(boostyButton, &QToolButton::clicked, window, [openSupportUrl]
+                         { openSupportUrl(boostyUrl(), QStringLiteral("Boosty")); });
+        QObject::connect(window->m_duplicatesPage, &DuplicatesPage::previewMergeRequested, window, &MainWindow::previewMerge);
+        QObject::connect(window->m_duplicatesPage, &DuplicatesPage::applyMergeRequested, window, &MainWindow::applyMerge);
+        QObject::connect(window->m_cleanupPage, &UnusedPage::previewDeletionRequested, window, &MainWindow::previewUnusedDeletion);
+        QObject::connect(window->m_cleanupPage, &UnusedPage::applyDeletionRequested, window, &MainWindow::applyUnusedDeletion);
+        QObject::connect(window->m_renameIdsPage, &RenameIdsPage::previewRequested, window, &MainWindow::previewStandardRename);
+        QObject::connect(window->m_renameIdsPage, &RenameIdsPage::applyRequested, window, &MainWindow::applyStandardRename);
+        QObject::connect(window->m_renameIdsPage, &RenameIdsPage::exportRequested, window, &MainWindow::exportStandardRenameReport);
+        QObject::connect(window->m_dataCollectionPage, &DataCollectionPage::previewRequested, window, &MainWindow::previewDataCollection);
+        QObject::connect(window->m_dataCollectionPage, &DataCollectionPage::applyRequested, window, &MainWindow::applyDataCollection);
+        QObject::connect(window->m_dataCollectionPage, &DataCollectionPage::exportRequested, window, &MainWindow::exportDataCollectionReport);
+        QObject::connect(window->m_dryRunPage, &FormatterPage::previewBuilt, window, [window]
+                         { window->m_applyAction->setEnabled(true); });
+        QObject::connect(window->m_dryRunPage, &FormatterPage::openUnusedRequested, window, [window](const QVector<int> &rows)
+                         {
         if (window->m_optimizationDialog) window->m_optimizationDialog->accept();
         window->m_cleanupPage->selectRows(rows); window->m_tabs->setCurrentWidget(window->m_cleanupPage); });
-    QObject::connect(window->m_dryRunPage, &FormatterPage::openDuplicateRequested, window, [window](const MergeRequest &request)
-            {
+        QObject::connect(window->m_dryRunPage, &FormatterPage::openDuplicateRequested, window, [window](const MergeRequest &request)
+                         {
         if (window->m_optimizationDialog) window->m_optimizationDialog->accept();
         window->m_duplicatesPage->selectRequest(request); window->m_tabs->setCurrentWidget(window->m_duplicatesPage); });
-    QObject::connect(window->m_dryRunPage, &FormatterPage::openRenameRequested, window, [window]
-            {
+        QObject::connect(window->m_dryRunPage, &FormatterPage::openRenameRequested, window, [window]
+                         {
         if (window->m_optimizationDialog) window->m_optimizationDialog->accept(); window->m_tabs->setCurrentWidget(window->m_renameIdsPage); });
-    QObject::connect(window->m_dryRunPage, &FormatterPage::openCollectionRequested, window, [window]
-            {
+        QObject::connect(window->m_dryRunPage, &FormatterPage::openCollectionRequested, window, [window]
+                         {
         if (window->m_optimizationDialog) window->m_optimizationDialog->accept(); window->m_tabs->setCurrentWidget(window->m_dataCollectionPage); });
-    QObject::connect(window->m_dryRunPage, &FormatterPage::applyWizardRequested, window, &MainWindow::applyOptimizationWizardPlan);
-    QObject::connect(window->m_dryRunPage, &FormatterPage::wizardFinished, window, [window]
-            {
+        QObject::connect(window->m_dryRunPage, &FormatterPage::applyWizardRequested, window, &MainWindow::applyOptimizationWizardPlan);
+        QObject::connect(window->m_dryRunPage, &FormatterPage::wizardFinished, window, [window]
+                         {
         if (window->m_optimizationDialog) window->m_optimizationDialog->accept(); });
-    QObject::connect(window->m_duplicatesPage, &DuplicatesPage::sourceRequested, window, [window](int nodeIndex)
-            {
+        QObject::connect(window->m_duplicatesPage, &DuplicatesPage::sourceRequested, window, [window](int nodeIndex)
+                         {
         window->m_xmlSourcePage->showNode(nodeIndex);
         window->m_tabs->setCurrentWidget(window->m_xmlSourcePage); });
 
-    auto *undoAction = new QAction(QStringLiteral("Undo"), window);
-    undoAction->setShortcut(QKeySequence::Undo);
-    undoAction->setShortcutContext(Qt::ApplicationShortcut);
-    window->addAction(undoAction);
-    QObject::connect(undoAction, &QAction::triggered, window, &MainWindow::undoFocusedEditor);
+        auto *undoAction = new QAction(QStringLiteral("Undo"), window);
+        undoAction->setShortcut(QKeySequence::Undo);
+        undoAction->setShortcutContext(Qt::ApplicationShortcut);
+        window->addAction(undoAction);
+        QObject::connect(undoAction, &QAction::triggered, window, &MainWindow::undoFocusedEditor);
 
-    auto *redoAction = new QAction(QStringLiteral("Redo"), window);
-    redoAction->setShortcuts({QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y)});
-    redoAction->setShortcutContext(Qt::ApplicationShortcut);
-    window->addAction(redoAction);
-    QObject::connect(redoAction, &QAction::triggered, window, &MainWindow::redoFocusedEditor);
+        auto *redoAction = new QAction(QStringLiteral("Redo"), window);
+        redoAction->setShortcuts({QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y)});
+        redoAction->setShortcutContext(Qt::ApplicationShortcut);
+        window->addAction(redoAction);
+        QObject::connect(redoAction, &QAction::triggered, window, &MainWindow::redoFocusedEditor);
 
-    auto *fullscreenAction = new QAction(QStringLiteral("Toggle Fullscreen"), window);
-    fullscreenAction->setShortcut(QKeySequence(Qt::Key_F11));
-    fullscreenAction->setShortcutContext(Qt::ApplicationShortcut);
-    window->addAction(fullscreenAction);
-    QObject::connect(fullscreenAction, &QAction::triggered, window, &MainWindow::toggleFullscreen);
-    QObject::connect(window->m_analysisPage, &OverviewPage::folderPathChanged, window, [window](const QString &folder)
-            { window->m_rootFolder = folder; });
-    QObject::connect(window->m_analysisPage, &OverviewPage::currentRowChanged, window, [window](int row)
-            {
+        auto *fullscreenAction = new QAction(QStringLiteral("Toggle Fullscreen"), window);
+        fullscreenAction->setShortcut(QKeySequence(Qt::Key_F11));
+        fullscreenAction->setShortcutContext(Qt::ApplicationShortcut);
+        window->addAction(fullscreenAction);
+        QObject::connect(fullscreenAction, &QAction::triggered, window, &MainWindow::toggleFullscreen);
+        QObject::connect(window->m_analysisPage, &OverviewPage::folderPathChanged, window, [window](const QString &folder)
+                         { window->m_rootFolder = folder; });
+        QObject::connect(window->m_analysisPage, &OverviewPage::currentRowChanged, window, [window](int row)
+                         {
         window->m_dependenciesPage->setCurrentRow(row);
         window->m_graphPage->setCurrentRow(row);
         window->m_propertiesPage->setCurrentRow(row);
@@ -385,104 +383,103 @@ void MainWindowUiBuilder::build()
                                              node.elementName.isEmpty() ? node.id : node.elementName,
                                               node.id.isEmpty() ? QStringLiteral("-") : node.id));
         } });
-    QObject::connect(window->m_tabs, &QTabWidget::currentChanged, window, [window](int index)
-            {
+        QObject::connect(window->m_tabs, &QTabWidget::currentChanged, window, [window](int index)
+                         {
         if (window->m_tabs->widget(index) == window->m_graphPage) {
             QMetaObject::invokeMethod(window->m_graphPage, "fitGraph", Qt::QueuedConnection);
         } });
-    QObject::connect(window->m_analysisPage, &OverviewPage::objectDoubleClicked, window, [window](int row)
-            { window->showGraphForRow(row); });
+        QObject::connect(window->m_analysisPage, &OverviewPage::objectDoubleClicked, window, [window](int row)
+                         { window->showGraphForRow(row); });
 
-    auto *mainStatusBar = window->statusBar();
-    mainStatusBar->setObjectName(QStringLiteral("mainStatusBar"));
-    mainStatusBar->setSizeGripEnabled(false);
-    mainStatusBar->setMinimumHeight(30);
-    mainStatusBar->showMessage(QStringLiteral("Ready"));
+        auto *mainStatusBar = window->statusBar();
+        mainStatusBar->setObjectName(QStringLiteral("mainStatusBar"));
+        mainStatusBar->setSizeGripEnabled(false);
+        mainStatusBar->setMinimumHeight(30);
+        mainStatusBar->showMessage(QStringLiteral("Ready"));
 
-    const QList<QAbstractButton *> buttons = window->findChildren<QAbstractButton *>();
-    for (QAbstractButton *button : buttons)
-    {
-        if (auto *toolButton = qobject_cast<QToolButton *>(button))
+        const QList<QAbstractButton *> buttons = window->findChildren<QAbstractButton *>();
+        for (QAbstractButton *button : buttons)
         {
-            const QString name = toolButton->objectName();
-            if (name != QStringLiteral("discordPromoButton") && name != QStringLiteral("boostyPromoButton"))
+            if (auto *toolButton = qobject_cast<QToolButton *>(button))
             {
-                const int textWidth = toolButton->fontMetrics().horizontalAdvance(toolButton->text());
-                toolButton->setMinimumWidth(qMax(toolButton->minimumWidth(), textWidth + 58));
+                const QString name = toolButton->objectName();
+                if (name != QStringLiteral("discordPromoButton") && name != QStringLiteral("boostyPromoButton"))
+                {
+                    const int textWidth = toolButton->fontMetrics().horizontalAdvance(toolButton->text());
+                    toolButton->setMinimumWidth(qMax(toolButton->minimumWidth(), textWidth + 58));
+                }
             }
         }
-    }
-    installButtonEffects(window, buttons);
-    installPromoButtonAnimations(window, discordButton, boostyButton);
+        installButtonEffects(window, buttons);
+        installPromoButtonAnimations(window, discordButton, boostyButton);
 
-    for (QLabel *label : window->findChildren<QLabel *>())
-    {
-        const QString name = label->objectName();
-        if (name != QStringLiteral("workspaceTabLabel")
-            && name != QStringLiteral("panelTitle")
-            && (label->wordWrap() || name == QStringLiteral("inspectorValue")
-                || name == QStringLiteral("objectContextLabel"))) {
-            label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-            label->setFocusPolicy(Qt::ClickFocus);
-        }
-        if (name == QStringLiteral("panelTitle") || name == QStringLiteral("modeBadge"))
+        for (QLabel *label : window->findChildren<QLabel *>())
         {
-            auto *glow = new QGraphicsDropShadowEffect(label);
-            glow->setBlurRadius(name == QStringLiteral("panelTitle") ? 16.0 : 10.0);
-            glow->setColor(name == QStringLiteral("panelTitle")
-                               ? QColor(74, 255, 203, 150)
-                               : QColor(62, 175, 255, 120));
-            glow->setOffset(0.0, 0.0);
-            label->setGraphicsEffect(glow);
+            const QString name = label->objectName();
+            if (name != QStringLiteral("workspaceTabLabel") && name != QStringLiteral("panelTitle") && (label->wordWrap() || name == QStringLiteral("inspectorValue") || name == QStringLiteral("objectContextLabel")))
+            {
+                label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+                label->setFocusPolicy(Qt::ClickFocus);
+            }
+            if (name == QStringLiteral("panelTitle") || name == QStringLiteral("modeBadge"))
+            {
+                auto *glow = new QGraphicsDropShadowEffect(label);
+                glow->setBlurRadius(name == QStringLiteral("panelTitle") ? 16.0 : 10.0);
+                glow->setColor(name == QStringLiteral("panelTitle")
+                                   ? QColor(74, 255, 203, 150)
+                                   : QColor(62, 175, 255, 120));
+                glow->setOffset(0.0, 0.0);
+                label->setGraphicsEffect(glow);
+            }
         }
-    }
-    TranslationManager::captureWidgetTree(window);
-}
-
-void MainWindowUiBuilder::retranslate(MainWindow &window)
-{
-    window.setWindowTitle(QStringLiteral(SC2DH_GUI_TITLE));
-
-    if (window.m_openFileAction)
-        window.m_openFileAction->setText(mainText("Open SC2 File"));
-    if (window.m_openFolderAction)
-        window.m_openFolderAction->setText(mainText("Open Folder"));
-    if (window.m_analyzeAction) {
-        window.m_analyzeAction->setText(mainText("Analyze"));
-        window.m_analyzeAction->setToolTip(mainText("Analyze / refresh the current project (F5)"));
-    }
-    if (window.m_dryRunAction)
-        window.m_dryRunAction->setText(mainText("Optimization"));
-    if (window.m_applyAction)
-        window.m_applyAction->setText(mainText("Review Optimization Plan"));
-    if (window.m_settingsAction)
-        window.m_settingsAction->setText(mainText("Settings"));
-    if (window.m_exitAction)
-        window.m_exitAction->setText(mainText("Exit"));
-    if (window.m_pathEdit)
-        window.m_pathEdit->setPlaceholderText(mainText("Selected source path"));
-
-    if (auto *discordButton = window.findChild<QToolButton *>(QStringLiteral("discordPromoButton")))
-        discordButton->setToolTip(mainText("Join Discord"));
-    if (auto *boostyButton = window.findChild<QToolButton *>(QStringLiteral("boostyPromoButton")))
-        boostyButton->setToolTip(mainText("Support on Boosty"));
-
-    if (window.m_tabs) {
-        setWorkspaceTabTitle(window.m_tabs, window.m_analysisPage, "Objects");
-        setWorkspaceTabTitle(window.m_tabs, window.m_dependenciesPage, "Dependencies");
-        setWorkspaceTabTitle(window.m_tabs, window.m_graphPage, "Graph");
-        setWorkspaceTabTitle(window.m_tabs, window.m_mapPerformancePage, "Map Performance");
-        setWorkspaceTabTitle(window.m_tabs, window.m_propertiesPage, "Properties");
-        setWorkspaceTabTitle(window.m_tabs, window.m_dataCollectionPage, "Data Collection");
-        setWorkspaceTabTitle(window.m_tabs, window.m_renameIdsPage, "Rename To Standard");
-        setWorkspaceTabTitle(window.m_tabs, window.m_duplicatesPage, "Duplicate Merge");
-        setWorkspaceTabTitle(window.m_tabs, window.m_cleanupPage, "Unused Data Objects");
-        setWorkspaceTabTitle(window.m_tabs, window.m_logPanel, "Logs");
-        setWorkspaceTabTitle(window.m_tabs, window.m_xmlSourcePage, "XML Source");
+        TranslationManager::captureWidgetTree(window);
     }
 
-    window.updateFullscreenActionText();
-    TranslationManager::retranslateWidgetTree(&window);
-}
-}
+    void MainWindowUiBuilder::retranslate(MainWindow &window)
+    {
+        window.setWindowTitle(QStringLiteral(SC2DH_GUI_TITLE));
 
+        if (window.m_openFileAction)
+            window.m_openFileAction->setText(mainText("Open SC2 File"));
+        if (window.m_openFolderAction)
+            window.m_openFolderAction->setText(mainText("Open Folder"));
+        if (window.m_analyzeAction)
+        {
+            window.m_analyzeAction->setText(mainText("Analyze"));
+            window.m_analyzeAction->setToolTip(mainText("Analyze / refresh the current project (F5)"));
+        }
+        if (window.m_dryRunAction)
+            window.m_dryRunAction->setText(mainText("Optimization"));
+        if (window.m_applyAction)
+            window.m_applyAction->setText(mainText("Review Optimization Plan"));
+        if (window.m_settingsAction)
+            window.m_settingsAction->setText(mainText("Settings"));
+        if (window.m_exitAction)
+            window.m_exitAction->setText(mainText("Exit"));
+        if (window.m_pathEdit)
+            window.m_pathEdit->setPlaceholderText(mainText("Selected source path"));
+
+        if (auto *discordButton = window.findChild<QToolButton *>(QStringLiteral("discordPromoButton")))
+            discordButton->setToolTip(mainText("Join Discord"));
+        if (auto *boostyButton = window.findChild<QToolButton *>(QStringLiteral("boostyPromoButton")))
+            boostyButton->setToolTip(mainText("Support on Boosty"));
+
+        if (window.m_tabs)
+        {
+            setWorkspaceTabTitle(window.m_tabs, window.m_analysisPage, "Objects");
+            setWorkspaceTabTitle(window.m_tabs, window.m_dependenciesPage, "Dependencies");
+            setWorkspaceTabTitle(window.m_tabs, window.m_graphPage, "Graph");
+            setWorkspaceTabTitle(window.m_tabs, window.m_mapPerformancePage, "Map Performance");
+            setWorkspaceTabTitle(window.m_tabs, window.m_propertiesPage, "Properties");
+            setWorkspaceTabTitle(window.m_tabs, window.m_dataCollectionPage, "Data Collection");
+            setWorkspaceTabTitle(window.m_tabs, window.m_renameIdsPage, "Rename To Standard");
+            setWorkspaceTabTitle(window.m_tabs, window.m_duplicatesPage, "Duplicate Merge");
+            setWorkspaceTabTitle(window.m_tabs, window.m_cleanupPage, "Unused Data Objects");
+            setWorkspaceTabTitle(window.m_tabs, window.m_logPanel, "Logs");
+            setWorkspaceTabTitle(window.m_tabs, window.m_xmlSourcePage, "XML Source");
+        }
+
+        window.updateFullscreenActionText();
+        TranslationManager::retranslateWidgetTree(&window);
+    }
+}

@@ -9,6 +9,7 @@
 #include <QWidget>
 
 class QLabel;
+class QCheckBox;
 class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
@@ -35,7 +36,9 @@ private:
     void updateDetails();
     void selectCellIndex(int cellIndex);
     void updateDecorPreview();
+    void openUnitExclusions();
     void createDecorOptimizedMapCopy();
+    void restoreDecorFromGalaxyCopy();
     void createMaximumCompressedCopy();
     static bool readObjectsFile(const AnalysisResult &result, QByteArray *objectsBytes, QString *sourceLabel,
                                 const ScannedFileReader *sharedReader = nullptr);
@@ -58,12 +61,14 @@ private:
     QVector<sc2dh::decor::DecorZone> zonesFromModel() const;
     QVector<sc2dh::decor::DecorZone> selectedRegionZones() const;
     void populateRegionSelector();
+    void filterRegionList();
     void updateOptimizationScope();
     void toggleRegionFromMap(int regionIndex);
     sc2dh::decor::DecorationSafetyContext decorationSafetyContextFromDoodadTable() const;
-    void populateZoneTable(const QVector<sc2dh::decor::DecorZone> &zones);
-    void populateDoodadTable(const QVector<sc2dh::decor::DoodadPlacement> &doodads);
+    void populateDoodadTable(const QVector<sc2dh::decor::DoodadPlacement> &doodads,
+                             const QVector<sc2dh::decor::UnitPlacement> &units = {});
     void updateDoodadTableState(const sc2dh::decor::DecorationVisibilityPlan &plan);
+    void updateDoodadTableState(const sc2dh::decor::DecorationStreamingPlan &plan);
     QString detailTextForCell(const sc2dh::perf::MapPerformanceCell &cell) const;
 
     AnalysisResult m_result;
@@ -75,8 +80,10 @@ private:
     sc2dh::region::RegionReadResult m_regionReadResult;
     sc2dh::perf::MapPerformanceReport m_report;
     QVector<sc2dh::decor::DoodadPlacement> m_allDoodads;
+    sc2dh::decor::DecorationSafetyContext m_archiveSafetyContext;
     QVector<sc2dh::decor::DecorZone> m_decorZones;
     sc2dh::decor::DecorationVisibilityArtifacts m_decorPreview;
+    sc2dh::decor::DecorationOptimizedArtifacts m_recreatePreview;
     QLabel *m_summaryLabel = nullptr;
     QLabel *m_warningLabel = nullptr;
     QWidget *m_heatmap = nullptr;
@@ -85,16 +92,19 @@ private:
     QPlainTextEdit *m_details = nullptr;
     QLabel *m_decorSummaryLabel = nullptr;
     QLabel *m_regionStatusLabel = nullptr;
-    QPushButton *m_chooseRegionsButton = nullptr;
+    QLabel *m_selectedRegionsLabel = nullptr;
     QPushButton *m_previewButton = nullptr;
+    QPushButton *m_unitExclusionsButton = nullptr;
     QListWidget *m_regionList = nullptr;
+    QLineEdit *m_regionSearch = nullptr;
+    QCheckBox *m_showSelectedOnly = nullptr;
+    QCheckBox *m_restoreSidecars = nullptr;
     QLineEdit *m_prefixEdit = nullptr;
-    QStandardItemModel *m_zoneModel = nullptr;
-    QTableView *m_zoneTable = nullptr;
     QStandardItemModel *m_doodadModel = nullptr;
     QTableView *m_doodadTable = nullptr;
     QPlainTextEdit *m_galaxyPreview = nullptr;
     QPushButton *m_createCopyButton = nullptr;
+    QPushButton *m_restoreButton = nullptr;
     QPushButton *m_compressButton = nullptr;
     quint64 m_previewGeneration = 0;
 };

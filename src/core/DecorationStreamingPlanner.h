@@ -34,6 +34,7 @@ struct DoodadPlacement
     QString rawSource;
     QHash<QString, QString> otherAttributes;
     bool hasUnsupportedChildren = false;
+    bool hasInvalidTransform = false;
     bool losslessRoundTripSupported = false;
     QStringList safetyReferenceFiles;
     bool hasPosition = false;
@@ -52,6 +53,24 @@ struct DoodadPlacement
     qsizetype sourceEnd = -1;
 };
 
+struct UnitPlacement
+{
+    QString id;
+    QString name;
+    QString type;
+    int player = -1;
+    double x = 0.0;
+    double y = 0.0;
+    double rotation = 0.0;
+    bool forcePlacement = false;
+    QString rawSource;
+    qsizetype sourceStart = -1;
+    qsizetype sourceEnd = -1;
+    bool dynamicCandidate = false;
+    QString staticOnlyReason;
+    QStringList safetyReferenceFiles;
+};
+
 struct DecorZone
 {
     int id = 0;
@@ -67,15 +86,22 @@ struct ZoneAssignment
 {
     int zoneId = 0;
     QVector<int> doodadIndices;
+    QVector<int> unitIndices;
+    QString zoneName;
 };
 
 struct DecorationStreamingPlan
 {
     QVector<DoodadPlacement> doodads;
+    QVector<UnitPlacement> units;
     QVector<ZoneAssignment> zones;
+    QVector<DecorZone> decorZones;
     QVector<int> staticOnlyDoodads;
     QVector<int> unassignedDoodads;
     QVector<int> boundaryDoodads;
+    QVector<int> staticOnlyUnits;
+    QVector<int> unassignedUnits;
+    QVector<int> boundaryUnits;
     QStringList warnings;
 };
 
@@ -95,13 +121,23 @@ struct DecorationSafetyContext
     QSet<QString> excludedDoodadKeys;
     QHash<QString, int> forcedZoneByDoodadKey;
     QHash<QString, QString> staticOnlyReasonByDoodadType;
+    QSet<QString> excludedUnitKeys;
+    QSet<QString> excludedUnitTypeKeys;
 };
 
 struct GalaxyGenerationOptions
 {
-    QString functionPrefix = QStringLiteral("NAME_OUT_FUNK");
+    QString functionPrefix = QStringLiteral("Game_area");
     int batchLimit = 64;
+    bool useRegionNames = false;
+    int entireMapEntryZoneId = 0;
+    QHash<int, QString> publicFunctionNames;
 };
+
+QString galaxyRegionFunctionStem(const DecorationStreamingPlan &plan,
+                                 const ZoneAssignment &zone,
+                                 const GalaxyGenerationOptions &options);
+
 
 struct DecorationOptimizedArtifacts
 {
@@ -109,6 +145,7 @@ struct DecorationOptimizedArtifacts
     QByteArray optimizedObjectsBytes;
     QString galaxySource;
     QVector<int> removedDoodadIndices;
+    QVector<int> removedUnitIndices;
     bool roundTripVerified = false;
     bool outsideScopePreserved = false;
     bool valid = false;
@@ -151,6 +188,7 @@ class DecorationStreamingPlanner
 {
 public:
     QVector<DoodadPlacement> parseObjects(const QByteArray &objectsBytes, QStringList *warnings = nullptr) const;
+    QVector<UnitPlacement> parseUnits(const QByteArray &objectsBytes, QStringList *warnings = nullptr) const;
     QByteArray serializePlacementLosslessly(const DoodadPlacement &placement,
                                             QString *errorMessage = nullptr) const;
     bool verifyPlacementRoundTrip(const DoodadPlacement &placement,
@@ -171,6 +209,20 @@ public:
                                                  QStringList *warnings = nullptr) const;
     QString generateGalaxy(const DecorationStreamingPlan &plan,
                            const GalaxyGenerationOptions &options = {}) const;
+    // Merge private placement profiles into the map catalog; existing actor
+    // entries and their animation/fog settings are not overridden.
+    bool generateRuntimeActorCatalog(const DecorationStreamingPlan &plan,
+                                     const QByteArray &originalCatalog,
+                                     QByteArray *catalog,
+                                     QString *errorMessage = nullptr) const;
+    bool generateRuntimePreload(const DecorationStreamingPlan &plan,
+                                const QByteArray &originalPreload,
+                                QByteArray *preload,
+                                QString *errorMessage = nullptr) const;
+    bool restoreObjectsFromGalaxy(const QByteArray &objects, const QString &galaxy,
+                                  QByteArray *restored, int *doodads, int *units,
+                                  QString *error = nullptr) const;
+    QString staticPlacementGalaxy(const QString &galaxy) const;
     bool validateGeneratedGalaxy(const QString &galaxySource, QStringList *errors = nullptr) const;
     QString generateVisibilityGalaxy(const DecorationVisibilityPlan &plan,
                                      const GalaxyGenerationOptions &options = {}) const;
@@ -183,7 +235,8 @@ public:
     QByteArray removeDynamicDoodadsFromObjects(const QByteArray &objectsBytes,
                                                const DecorationStreamingPlan &plan,
                                                QVector<int> *removedDoodadIndices = nullptr,
-                                               QStringList *warnings = nullptr) const;
+                                               QStringList *warnings = nullptr,
+                                               QVector<int> *removedUnitIndices = nullptr) const;
     DecorationOptimizedArtifacts createOptimizedArtifacts(const QByteArray &objectsBytes,
                                                           const QVector<DecorZone> &zones,
                                                           const DecorationSafetyContext &safetyContext,

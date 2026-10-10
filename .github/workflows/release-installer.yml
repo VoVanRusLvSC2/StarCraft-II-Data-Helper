@@ -11,7 +11,7 @@ on:
       release_tag:
         description: Existing GitHub release tag that receives the installer
         required: true
-        default: v4.0.0-beta.1
+        default: v4.0.0-beta.2
 
 jobs:
   installer:
@@ -59,6 +59,7 @@ jobs:
           Copy-Item LICENSE $stage/
           Copy-Item README.md $stage/
           Copy-Item docs/USER_GUIDE.md $stage/
+          Copy-Item docs/DECOR_GUI_RU.md $stage/
       - name: Deploy Qt
         shell: pwsh
         run: |
@@ -127,7 +128,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw 'The packaged SC2DecorOptimizeMap.exe did not start successfully.'
           }
-          $gui = Start-Process -FilePath (Join-Path $stage 'SC2DataHelper.exe') -WorkingDirectory $stage -PassThru
+          $gui = Start-Process -FilePath (Join-Path $stage 'SC2DataHelper.exe') -WorkingDirectory $stage -WindowStyle Hidden -PassThru
           try {
             Start-Sleep -Seconds 5
             $gui.Refresh()
@@ -149,4 +150,14 @@ jobs:
       - name: Upload installer
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload $env:RELEASE_TAG dist/SC2DataHelper-*-setup.exe --clobber
+        shell: pwsh
+        run: |
+          $installer = Get-Item "dist/SC2DataHelper-$($env:RELEASE_TAG.TrimStart('v'))-setup.exe"
+          $assets = gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read release assets.' }
+          if ($assets -contains $installer.Name) {
+            Write-Host 'Installer already published; preserving the existing binary and checksums.'
+          } else {
+            gh release upload $env:RELEASE_TAG $installer.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'Installer upload failed.' }
+          }

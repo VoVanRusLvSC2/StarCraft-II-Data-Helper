@@ -2,12 +2,15 @@
 
 #include "core/BackupManager.h"
 #include "core/FolderAnalyzer.h"
+#include "core/GalaxyReferenceSpans.h"
 #include "core/Sc2Archive.h"
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -16,9 +19,83 @@
 #include <QTemporaryFile>
 
 #include <algorithm>
+#include <pugixml.hpp>
 
 namespace
 {
+
+const QString DecorRestoreManifestEntry = QStringLiteral("sc2dh/decor_restore_v1.json");
+const QString DecorActorCatalogEntry = QStringLiteral("Base.SC2Data/GameData/ActorData.xml");
+const QString DecorImportEntry = QStringLiteral("sc2dh/decor_import.xml");
+
+QByteArray sha256Hex(const QByteArray &bytes)
+{
+    return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+}
+
+QByteArray compressedBase64(const QByteArray &bytes)
+{
+    return qCompress(bytes, 9).toBase64();
+}
+
+QByteArray restoredBytes(const QJsonObject &manifest, const QString &field)
+{
+    return qUncompress(QByteArray::fromBase64(manifest.value(field).toString().toLatin1()));
+}
+
+bool restorePreloadPatch(const Sc2Archive &source, QString galaxy,
+                         QHash<QString, QByteArray> *replacements, QStringList *removals,
+                         QString *error)
+{
+    const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
+    const QRegularExpression record(QStringLiteral("^// SC2DH preload rollback ([01]) ([a-f0-9]{64})$"), QRegularExpression::MultilineOption);
+    if (!record.match(galaxy).hasMatch()) {
+        QByteArray metadata;
+        if (source.readEntry(DecorImportEntry, &metadata, nullptr)) {
+            pugi::xml_document doc;
+            if (!doc.load_buffer(metadata.constData(), size_t(metadata.size())) || !doc.child("SC2DHImport"))
+                return fail(QStringLiteral("Invalid decoration import metadata."));
+            galaxy += QLatin1Char('\n') + QString::fromUtf8(doc.child("SC2DHImport").child("Annotations").text().get());
+        }
+    }
+    const auto match = record.match(galaxy);
+    if (!match.hasMatch()) return true; // Exports before native variant preload support.
+    QByteArray current;
+    if (!source.readEntry(QStringLiteral("Preload.xml"), &current, error)
+        || sha256Hex(current) != match.captured(2).toLatin1())
+        return fail(QStringLiteral("Preload.xml changed after Galaxy export; no copy created."));
+    QByteArray encoded;
+    const QRegularExpression part(QStringLiteral("^// SC2DH preload data ([A-Za-z0-9+/=]+)$"), QRegularExpression::MultilineOption);
+    auto matches = part.globalMatch(galaxy);
+    while (matches.hasNext()) encoded += matches.next().captured(1).toLatin1();
+    const QByteArray compressed = QByteArray::fromBase64(encoded);
+    if (compressed.size() < 4) return fail(QStringLiteral("Invalid Galaxy preload cleanup data."));
+    const auto *data = reinterpret_cast<const unsigned char *>(compressed.constData());
+    const quint32 size = (quint32(data[0]) << 24) | (quint32(data[1]) << 16) | (quint32(data[2]) << 8) | data[3];
+    if (size > 16 * 1024 * 1024) return fail(QStringLiteral("Galaxy preload cleanup data is too large."));
+    const QByteArray original = qUncompress(compressed);
+    if (original.size() != size) return fail(QStringLiteral("Invalid Galaxy preload cleanup data."));
+    if (match.captured(1) == QStringLiteral("1")) {
+        pugi::xml_document doc;
+        if (!doc.load_buffer(original.constData(), size_t(original.size())) || !doc.child("Preload"))
+            return fail(QStringLiteral("Invalid original Preload.xml."));
+        replacements->insert(QStringLiteral("Preload.xml"), original);
+    } else {
+        if (!original.isEmpty()) return fail(QStringLiteral("Invalid absent-preload cleanup data."));
+        *removals << QStringLiteral("Preload.xml");
+    }
+    return true;
+}
+
+bool verifyPreloadPatch(const Sc2Archive &archive, const QHash<QString, QByteArray> &replacements,
+                        const QStringList &removals)
+{
+    QByteArray actual;
+    const QString entry = QStringLiteral("Preload.xml");
+    if (replacements.contains(entry)) return archive.readEntry(entry, &actual, nullptr) && actual == replacements.value(entry);
+    if (removals.contains(entry)) return !archive.readEntry(entry, &actual, nullptr);
+    return true;
+}
 
 QString defaultOutputPath(const QString &sourceArchivePath)
 {
@@ -285,6 +362,15 @@ bool verifyArchiveWithFolderAnalysis(const Sc2Archive &archive,
 QString normalizedEntry(QString entry)
 {
     return QDir::cleanPath(entry).replace('\\', '/').toCaseFolded();
+}
+
+bool archiveContainsEntry(const Sc2Archive &archive, const QString &wanted)
+{
+    const QString normalized = normalizedEntry(wanted);
+    for (const QString &entry : archive.allEntries()) {
+        if (normalizedEntry(entry) == normalized) return true;
+    }
+    return false;
 }
 
 bool isTokenKey(const QString &value)
@@ -557,7 +643,10 @@ void scanXmlForStaticOnlyDoodadTypes(sc2dh::decor::DecorationSafetyContext *cont
         else
             blockEnd = int(std::min<qsizetype>(folded.size(), qsizetype(blockEnd) + 300));
         const QString block = folded.mid(blockStart, blockEnd - blockStart);
-        if (!block.contains(QStringLiteral("footprint"))
+        const bool surface = block.contains(QStringLiteral("doodadtype:terrainobject"))
+            || block.startsWith(QStringLiteral("<cterrainobject"))
+            || block.contains(QStringLiteral("<terrainobject "));
+        if (!surface && !block.contains(QStringLiteral("footprint"))
             && !block.contains(QStringLiteral("pathing"))
             && !block.contains(QStringLiteral("blocker"))
             && !block.contains(QStringLiteral("destruct"))) {
@@ -566,9 +655,54 @@ void scanXmlForStaticOnlyDoodadTypes(sc2dh::decor::DecorationSafetyContext *cont
 
         context->staticOnlyReasonByDoodadType.insert(
             typeKey,
-            QStringLiteral("Static-only: pathing/gameplay dependency (doodad type has footprint/pathing data in %1).")
+            QStringLiteral("Static-only: terrain surface or pathing/gameplay catalog dependency in %1.")
                 .arg(entryName));
     }
+}
+
+QSet<int> actorRegionTypeArguments(const QVector<sc2dh::galaxy::Token> &tokens)
+{
+    // These stock helpers send to the Doodad actor alias with ScopeContains
+    // <original actor ID>. They do not enumerate placed ObjectDoodad records.
+    // Export keeps both the original ID and its inherited alias, so these
+    // group commands can still address recreated actors. Unknown helpers and
+    // individual placement references remain protected.
+    const QHash<QString, QPair<int, int>> helpers = {
+        {QStringLiteral("libNtve_gf_PlayAnimationOnDoodadsInRegion"), {1, 6}},
+        {QStringLiteral("libNtve_gf_ShowHideDoodadsInRegion"), {2, 3}},
+        {QStringLiteral("libNtve_gf_KillDoodadsInRegion"), {1, 2}},
+        {QStringLiteral("libVCMI_gf_SendActorMessageToDoodadsInRegion"), {1, 3}}
+    };
+    QSet<int> result;
+    for (int i = 0; i + 1 < tokens.size(); ++i) {
+        const auto helper = helpers.constFind(tokens[i].raw);
+        if (helper == helpers.cend() || tokens[i + 1].raw != QStringLiteral("("))
+            continue;
+        QVector<QPair<int, int>> arguments;
+        int depth = 0, first = i + 2, end = first;
+        for (; end < tokens.size(); ++end) {
+            if (tokens[end].literal)
+                continue;
+            const QString raw = tokens[end].raw;
+            if (raw == QStringLiteral(")") && depth == 0) {
+                arguments.append({first, end});
+                break;
+            }
+            if (raw == QStringLiteral("(") || raw == QStringLiteral("[")) ++depth;
+            if (raw == QStringLiteral(")") || raw == QStringLiteral("]")) --depth;
+            if (raw == QStringLiteral(",") && depth == 0) {
+                arguments.append({first, end});
+                first = end + 1;
+            }
+        }
+        if (end == tokens.size() || arguments.size() != helper.value().second
+            || (end + 1 < tokens.size() && tokens[end + 1].raw == QStringLiteral("{")))
+            continue;
+        const auto range = arguments.at(helper.value().first);
+        if (range.second == range.first + 1 && tokens[range.first].literal)
+            result.insert(range.first);
+    }
+    return result;
 }
 
 sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive &archive,
@@ -580,6 +714,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
     sc2dh::decor::DecorationSafetyContext context = request.safetyContext;
     sc2dh::decor::DecorationStreamingPlanner planner;
     const QVector<sc2dh::decor::DoodadPlacement> doodads = planner.parseObjects(objectsBytes);
+    const QVector<sc2dh::decor::UnitPlacement> units = planner.parseUnits(objectsBytes);
 
     QSet<QString> tokenKeys;
     QSet<QString> phraseKeys;
@@ -598,6 +733,19 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
                 phraseKeys.insert(key);
         }
     }
+    if (request.mode == sc2dh::decor::DecorationOptimizationMode::RecreateActors) {
+        for (const sc2dh::decor::UnitPlacement &unit : units) {
+            for (const QString &value : {unit.id, unit.name}) {
+                const QString key = value.trimmed().toCaseFolded();
+                if (key.isEmpty())
+                    continue;
+                if (isTokenKey(value.trimmed()))
+                    tokenKeys.insert(key);
+                else if (key.size() >= 3)
+                    phraseKeys.insert(key);
+            }
+        }
+    }
     if (tokenKeys.isEmpty() && phraseKeys.isEmpty() && doodadTypes.isEmpty())
         return context;
     const PhraseMatcher phraseMatcher(phraseKeys);
@@ -611,7 +759,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
         if (!archive.readEntry(entry, &bytes, &readError)) {
             addReferencesForAllKeys(&context, tokenKeys, phraseKeys, entry);
             if (warnings)
-                *warnings << QStringLiteral("Decoration safety: treated all doodads as referenced by unreadable text entry %1: %2")
+                *warnings << QStringLiteral("Decoration safety: treated all decor and units as referenced by unreadable text entry %1: %2")
                                  .arg(entry, readError);
             continue;
         }
@@ -633,11 +781,34 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
             }
             addReferencesForAllKeys(&context, tokenKeys, phraseKeys, entry);
             if (warnings)
-                *warnings << QStringLiteral("Decoration safety: treated all doodads as referenced by undecodable text entry %1.")
+                *warnings << QStringLiteral("Decoration safety: treated all decor and units as referenced by undecodable text entry %1.")
                                  .arg(entry);
             continue;
         }
         scanTextForDoodadKeys(&context, entry, text, tokenKeys, phraseMatcher);
+        if (entry.endsWith(QStringLiteral(".galaxy"), Qt::CaseInsensitive)) {
+            // Protect unknown uses of type IDs. Stock ActorRegionSend helpers
+            // work with recreated original-ID doodad actors; they do not need
+            // native placement records. Lex to exclude comments and classify
+            // only the exact type argument of those verified helpers.
+            bool complete = true;
+            const auto tokens = sc2dh::galaxy::lex(text, &complete);
+            const auto compatibleArguments = actorRegionTypeArguments(tokens);
+            for (int i = 0; i < tokens.size(); ++i) {
+                const auto &token = tokens[i];
+                if (!token.literal || compatibleArguments.contains(i))
+                    continue;
+                const QString key = token.value.toCaseFolded();
+                if (doodadTypes.contains(key))
+                    context.staticOnlyReasonByDoodadType.insert(key,
+                        QStringLiteral("Static-only: doodad type referenced by an unknown Galaxy operation in %1.").arg(entry));
+            }
+            if (!complete) {
+                for (const QString &key : doodadTypes)
+                    context.staticOnlyReasonByDoodadType.insert(key,
+                        QStringLiteral("Static-only: incomplete Galaxy safety scan in %1.").arg(entry));
+            }
+        }
         // Visibility-only mode keeps collision data intact, but hiding a
         // catalog-defined footprint/pathing doodad would still create an
         // invisible gameplay blocker. Keep those types static in both modes.
@@ -654,6 +825,18 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
 
 namespace sc2dh::decor
 {
+
+DecorationSafetyContext DecorationMapCopyService::inspectSafety(const DecorOptimizedMapRequest &request, QString *error) const
+{
+    if (error)
+        error->clear();
+    Sc2Archive archive;
+    QByteArray objects;
+    if (!archive.load(request.sourceArchivePath, error)
+        || !archive.readEntry(request.objectsEntry, &objects, error))
+        return request.safetyContext;
+    return buildArchiveSafetyContext(archive, objects, request, nullptr, error);
+}
 
 DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const DecorOptimizedMapRequest &request) const
 {
@@ -754,10 +937,136 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         return result;
     }
 
+    if (request.mode == DecorationOptimizationMode::RecreateActors) {
+        QByteArray existingRuntime;
+        if (archive.readEntry(request.runtimeEntry, &existingRuntime, nullptr)
+            && existingRuntime.contains("// SC2DH identities v2")) {
+            result.error = QStringLiteral("This map already contains Galaxy placements; rebuild them before exporting again.");
+            return result;
+        }
+        if (archiveContainsEntry(archive, DecorRestoreManifestEntry)) {
+            result.error = QStringLiteral("This map already contains a decor restore manifest; restore that conversion before optimizing it again.");
+            return result;
+        }
+        if (archiveContainsEntry(archive, DecorImportEntry)) {
+            result.error = QStringLiteral("This map already contains decoration import metadata; restore it before exporting again.");
+            return result;
+        }
+        const QByteArray optimizedObjects = result.patch.replacementEntries.value(request.objectsEntry);
+        const QByteArray optimizedScript = result.patch.replacementEntries.value(request.mapScriptEntry);
+        QByteArray galaxy = result.patch.replacementEntries.value(request.runtimeEntry);
+        QString actorCatalogEntry = DecorActorCatalogEntry;
+        bool actorCatalogExisted = false;
+        QByteArray originalActorCatalog;
+        if (!result.patch.artifacts.removedDoodadIndices.isEmpty()) {
+            for (const QString &entry : archive.allEntries()) {
+                if (normalizedEntry(entry).compare(DecorActorCatalogEntry, Qt::CaseInsensitive) == 0) {
+                    actorCatalogEntry = entry;
+                    actorCatalogExisted = true;
+                    break;
+                }
+            }
+            if (actorCatalogExisted && !archive.readEntry(actorCatalogEntry, &originalActorCatalog, &error)) {
+                result.error = QStringLiteral("Unable to read original actor catalog: %1").arg(error);
+                return result;
+            }
+            QByteArray runtimeActorCatalog;
+            if (!planner.generateRuntimeActorCatalog(result.patch.artifacts.plan, originalActorCatalog,
+                                                       &runtimeActorCatalog, &error)) {
+                result.error = error;
+                return result;
+            }
+            result.patch.replacementEntries.insert(actorCatalogEntry, runtimeActorCatalog);
+            // Catalog cleanup metadata only: placements are never read from it.
+            galaxy += QByteArray("// SC2DH catalog rollback ") + (actorCatalogExisted ? "1 " : "0 ")
+                + sha256Hex(runtimeActorCatalog) + '\n';
+            const QByteArray encodedCatalog = compressedBase64(originalActorCatalog);
+            for (qsizetype i = 0; i < encodedCatalog.size(); i += 200)
+                galaxy += QByteArray("// SC2DH catalog data ") + encodedCatalog.mid(i, 200) + '\n';
+            result.patch.replacementEntries.insert(request.runtimeEntry, galaxy);
+        }
+        if (!result.patch.artifacts.removedDoodadIndices.isEmpty()) {
+            const QString preloadEntry = QStringLiteral("Preload.xml");
+            const bool existed = archiveContainsEntry(archive, preloadEntry);
+            QByteArray originalPreload, runtimePreload;
+            if ((existed && !archive.readEntry(preloadEntry, &originalPreload, &error))
+                || !planner.generateRuntimePreload(result.patch.artifacts.plan, originalPreload, &runtimePreload, &error)) {
+                result.error = error;
+                return result;
+            }
+            result.patch.replacementEntries.insert(preloadEntry, runtimePreload);
+            galaxy += QByteArray("// SC2DH preload rollback ") + (existed ? "1 " : "0 ")
+                + sha256Hex(runtimePreload) + '\n';
+            const QByteArray encoded = compressedBase64(originalPreload);
+            for (qsizetype i = 0; i < encoded.size(); i += 200)
+                galaxy += QByteArray("// SC2DH preload data ") + encoded.mid(i, 200) + '\n';
+            result.patch.replacementEntries.insert(request.runtimeEntry, galaxy);
+        }
+        if (request.writeRestoreSidecars) {
+            // Optional external bookkeeping and exact archive rollback.
+            // This XML carries only import bookkeeping; placement geometry is
+            // still read exclusively from the executable creation statements.
+            QByteArray annotations;
+            QByteArray cleanGalaxy;
+            for (const QByteArray &line : galaxy.split('\n')) {
+                if (line.startsWith("// SC2DH ")) annotations += line + '\n';
+                else if (!line.trimmed().startsWith("//") || line.startsWith("// Generated by SC2 Data Helper Decoration Streaming.")) cleanGalaxy += line + '\n';
+            }
+            pugi::xml_document importDoc;
+            auto importRoot = importDoc.append_child("SC2DHImport");
+            importRoot.append_attribute("Version") = "1";
+            importRoot.append_child("Annotations").text() = annotations.constData();
+            struct ImportWriter : pugi::xml_writer {
+                QByteArray bytes;
+                void write(const void *data, size_t size) override { bytes.append(static_cast<const char *>(data), qsizetype(size)); }
+            } importWriter;
+            importDoc.save(importWriter, "    ", pugi::format_default, pugi::encoding_utf8);
+            result.patch.replacementEntries.insert(DecorImportEntry, importWriter.bytes);
+            galaxy = cleanGalaxy;
+            result.patch.replacementEntries.insert(request.runtimeEntry, galaxy);
+            QJsonObject manifest;
+            manifest.insert(QStringLiteral("format"), QStringLiteral("SC2DH-DecorRestore"));
+            manifest.insert(QStringLiteral("version"), 1);
+            manifest.insert(QStringLiteral("objectsEntry"), request.objectsEntry);
+            manifest.insert(QStringLiteral("mapScriptEntry"), request.mapScriptEntry);
+            manifest.insert(QStringLiteral("runtimeEntry"), request.runtimeEntry);
+            manifest.insert(QStringLiteral("originalObjects"), QString::fromLatin1(compressedBase64(objectsBytes)));
+            manifest.insert(QStringLiteral("originalMapScript"), QString::fromLatin1(compressedBase64(mapScriptBytes)));
+            manifest.insert(QStringLiteral("originalObjectsSha256"), QString::fromLatin1(sha256Hex(objectsBytes)));
+            manifest.insert(QStringLiteral("originalMapScriptSha256"), QString::fromLatin1(sha256Hex(mapScriptBytes)));
+            manifest.insert(QStringLiteral("optimizedObjectsSha256"), QString::fromLatin1(sha256Hex(optimizedObjects)));
+            manifest.insert(QStringLiteral("optimizedMapScriptSha256"), QString::fromLatin1(sha256Hex(optimizedScript)));
+            manifest.insert(QStringLiteral("runtimeSha256"), QString::fromLatin1(sha256Hex(galaxy)));
+            if (!result.patch.artifacts.removedDoodadIndices.isEmpty()) {
+                manifest.insert(QStringLiteral("actorCatalogEntry"), actorCatalogEntry);
+                manifest.insert(QStringLiteral("originalActorCatalogExisted"), actorCatalogExisted);
+                manifest.insert(QStringLiteral("originalActorCatalog"), QString::fromLatin1(compressedBase64(originalActorCatalog)));
+                manifest.insert(QStringLiteral("originalActorCatalogSha256"), QString::fromLatin1(sha256Hex(originalActorCatalog)));
+                manifest.insert(QStringLiteral("optimizedActorCatalogSha256"),
+                                QString::fromLatin1(sha256Hex(result.patch.replacementEntries.value(actorCatalogEntry))));
+            }
+            manifest.insert(QStringLiteral("removedDoodads"), result.patch.artifacts.removedDoodadIndices.size());
+            manifest.insert(QStringLiteral("removedUnits"), result.patch.artifacts.removedUnitIndices.size());
+            result.patch.replacementEntries.insert(DecorRestoreManifestEntry,
+                                                   QJsonDocument(manifest).toJson(QJsonDocument::Compact));
+        } else {
+            // A self-contained script import needs the original IDs/flags and
+            // catalog cleanup record, not a backup of placement geometry.
+            QByteArray compactGalaxy;
+            for (const QByteArray &line : galaxy.split('\n')) {
+                if (!line.trimmed().startsWith("//") || line.startsWith("// SC2DH ")
+                    || line.startsWith("// Generated by SC2 Data Helper Decoration Streaming."))
+                    compactGalaxy += line + '\n';
+            }
+            result.patch.replacementEntries.insert(request.runtimeEntry, compactGalaxy);
+        }
+    }
+
     if (request.mode == DecorationOptimizationMode::VisibilityOnly) {
         result.visibilityControlledDoodads = result.patch.visibilityArtifacts.controlledDoodadIndices.size();
     } else {
         result.removedDoodads = result.patch.artifacts.removedDoodadIndices.size();
+        result.removedUnits = result.patch.artifacts.removedUnitIndices.size();
     }
 
     if (!fileSha256(request.sourceArchivePath, &result.sourceSha256After, &sourceHashError)) {
@@ -957,6 +1266,350 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         return result;
     }
     result.sourceUnchanged = true;
+    result.success = true;
+    return result;
+}
+
+DecorRestoreMapResult DecorationMapCopyService::restoreGalaxyCopy(const DecorRestoreMapRequest &request) const
+{
+    DecorRestoreMapResult result;
+    result.outputArchivePath = QFileInfo(request.outputArchivePath).absoluteFilePath();
+    if (request.sourceArchivePath.isEmpty() || request.outputArchivePath.isEmpty()
+        || samePath(request.sourceArchivePath, request.outputArchivePath)) {
+        result.error = QStringLiteral("Choose distinct source and output map archives.");
+        return result;
+    }
+    if (QFileInfo::exists(result.outputArchivePath)) {
+        result.error = QStringLiteral("Restored output already exists; choose a new file name.");
+        return result;
+    }
+    QByteArray sourceHashBefore;
+    QString error;
+    if (!fileSha256(request.sourceArchivePath, &sourceHashBefore, &error)) {
+        result.error = error;
+        return result;
+    }
+    Sc2Archive source;
+    if (!source.load(request.sourceArchivePath, &error)) {
+        result.error = error;
+        return result;
+    }
+    const QString objectsEntry = request.objectsEntry;
+    const QString runtimeEntry = request.runtimeEntry;
+    QByteArray currentObjects, runtime;
+    if (!source.readEntry(objectsEntry, &currentObjects, &error)
+        || !source.readEntry(runtimeEntry, &runtime, &error)) {
+        result.error = QStringLiteral("Missing Objects or SC2DataHelper Galaxy: %1").arg(error);
+        return result;
+    }
+    DecorationStreamingPlanner planner;
+    QString importGalaxy = QString::fromUtf8(runtime);
+    if (archiveContainsEntry(source, DecorImportEntry)) {
+        QByteArray metadata;
+        pugi::xml_document doc;
+        if (!source.readEntry(DecorImportEntry, &metadata, &error) || metadata.size() > 16 * 1024 * 1024
+            || !doc.load_buffer(metadata.constData(), size_t(metadata.size()))
+            || QString::fromUtf8(doc.child("SC2DHImport").attribute("Version").value()) != QStringLiteral("1")) {
+            result.error = QStringLiteral("Invalid decoration import metadata; no copy created.");
+            return result;
+        }
+        importGalaxy += QLatin1Char('\n') + QString::fromUtf8(doc.child("SC2DHImport").child("Annotations").text().get());
+    }
+    QByteArray originalObjects;
+    if (!planner.restoreObjectsFromGalaxy(currentObjects, importGalaxy, &originalObjects,
+                                          &result.restoredDoodads, &result.restoredUnits, &error)) {
+        result.error = error;
+        return result;
+    }
+    const QByteArray staticRuntime = planner.staticPlacementGalaxy(QString::fromUtf8(runtime)).toUtf8();
+    QByteArray actorCatalog;
+    const bool hasCatalog = source.readEntry(DecorActorCatalogEntry, &actorCatalog, nullptr);
+    const QRegularExpression record(QStringLiteral("^// SC2DH catalog rollback ([01]) ([a-f0-9]{64})(?: ([A-Za-z0-9+/=]+))?$"),QRegularExpression::MultilineOption);
+    const auto match = record.match(importGalaxy);
+    const bool restoreCatalog = match.hasMatch();
+    bool removeCatalog = false;
+    if (hasCatalog && result.restoredDoodads > 0 && !restoreCatalog) {
+        result.error = QStringLiteral("Galaxy actor catalog cleanup record is missing; no copy created.");
+        return result;
+    }
+    if (restoreCatalog) {
+        if (!hasCatalog || sha256Hex(actorCatalog) != match.captured(2).toLatin1()) {
+            result.error = QStringLiteral("Runtime actor catalog changed or its Galaxy cleanup record is missing; no copy created.");
+            return result;
+        }
+        QByteArray encodedCatalog = match.captured(3).toLatin1();
+        if (encodedCatalog.isEmpty()) {
+            const QRegularExpression part(QStringLiteral("^// SC2DH catalog data ([A-Za-z0-9+/=]+)$"), QRegularExpression::MultilineOption);
+            auto matches = part.globalMatch(importGalaxy);
+            while (matches.hasNext()) encodedCatalog += matches.next().captured(1).toLatin1();
+        }
+        actorCatalog = qUncompress(QByteArray::fromBase64(encodedCatalog));
+        removeCatalog = match.captured(1) == QStringLiteral("0");
+        if (!removeCatalog) {
+            pugi::xml_document doc;
+            if (!doc.load_buffer(actorCatalog.constData(),size_t(actorCatalog.size())) || !doc.child("Catalog")) {
+                result.error = QStringLiteral("Invalid Galaxy catalog cleanup data."); return result;
+            }
+        } else if (!actorCatalog.isEmpty()) {
+            result.error = QStringLiteral("Invalid absent-catalog cleanup data."); return result;
+        }
+    }
+    QByteArray sourceHashAfter;
+    if (!fileSha256(request.sourceArchivePath, &sourceHashAfter, &error)
+        || sourceHashAfter != sourceHashBefore) {
+        result.error = QStringLiteral("Source map changed during restore preflight.");
+        return result;
+    }
+    QString stagingPath;
+    if (!makeStagingArchivePath(result.outputArchivePath, &stagingPath, &error)) {
+        result.error = error;
+        return result;
+    }
+    const auto discardStaging = [&] {
+        QFile::remove(stagingPath);
+        QFile::remove(stagingPath + QStringLiteral(".compact"));
+    };
+    QHash<QString, QByteArray> replacements{{objectsEntry, originalObjects}, {runtimeEntry, staticRuntime}};
+    QStringList removals;
+    if (archiveContainsEntry(source, DecorImportEntry)) removals << DecorImportEntry;
+    if (archiveContainsEntry(source, DecorRestoreManifestEntry)) removals << DecorRestoreManifestEntry;
+    if (restoreCatalog) {
+        if (removeCatalog) removals << DecorActorCatalogEntry;
+        else replacements.insert(DecorActorCatalogEntry, actorCatalog);
+    }
+    if (!restorePreloadPatch(source, importGalaxy, &replacements, &removals, &error)) {
+        discardStaging(); result.error = error; return result;
+    }
+    if (!source.saveCopy(stagingPath, replacements,
+                         removals, &error)) {
+        discardStaging();
+        result.error = QStringLiteral("Could not stage restored map: %1").arg(error);
+        return result;
+    }
+    Sc2Archive verification;
+    QByteArray verifiedObjects;
+    QByteArray verifiedRuntime;
+    if (!verification.load(stagingPath, &error)
+        || !verification.readEntry(objectsEntry, &verifiedObjects, &error)
+        || !verification.readEntry(runtimeEntry, &verifiedRuntime, &error)
+        || verifiedObjects != originalObjects || verifiedRuntime != staticRuntime
+        || !verifyPreloadPatch(verification, replacements, removals)
+        || archiveContainsEntry(verification, DecorRestoreManifestEntry)) {
+        discardStaging();
+        result.error = QStringLiteral("Galaxy import failed staged archive verification: %1").arg(error);
+        return result;
+    }
+    if (hasCatalog) {
+        QByteArray verifiedCatalog;
+        const bool catalogMatches = removeCatalog
+            ? !archiveContainsEntry(verification, DecorActorCatalogEntry)
+            : verification.readEntry(DecorActorCatalogEntry, &verifiedCatalog, &error) && verifiedCatalog == actorCatalog;
+        if (!catalogMatches) {
+            discardStaging(); result.error = QStringLiteral("Catalog verification failed."); return result;
+        }
+    }
+    DecorOptimizedMapResult analysis;
+    if (!verifyArchiveWithFolderAnalysis(verification, &analysis, &error)) {
+        discardStaging();
+        result.error = QStringLiteral("Restored map failed full analysis: %1").arg(error);
+        return result;
+    }
+    QByteArray stagedHash;
+    if (!fileSha256(stagingPath, &stagedHash, &error)
+        || !fileSha256(request.sourceArchivePath, &sourceHashAfter, &error)
+        || sourceHashAfter != sourceHashBefore || QFileInfo::exists(result.outputArchivePath)) {
+        discardStaging();
+        result.error = QStringLiteral("Source or output changed during restore verification; no output was committed.");
+        return result;
+    }
+    if (!replaceFileAtomicallyAndVerify(stagingPath, result.outputArchivePath, stagedHash, &error)) {
+        discardStaging();
+        result.error = QStringLiteral("Could not commit restored map: %1").arg(error);
+        return result;
+    }
+    discardStaging();
+    if (!fileSha256(request.sourceArchivePath, &sourceHashAfter, &error)
+        || sourceHashAfter != sourceHashBefore) {
+        QFile::remove(result.outputArchivePath);
+        result.error = QStringLiteral("Source changed during final restore check; restored output was removed.");
+        return result;
+    }
+    result.sourceUnchanged = true;
+    result.success = true;
+    return result;
+}
+
+DecorRestoreMapResult DecorationMapCopyService::restoreOptimizedCopy(const DecorRestoreMapRequest &request) const
+{
+    DecorRestoreMapResult result;
+    result.outputArchivePath = QFileInfo(request.outputArchivePath).absoluteFilePath();
+    if (request.sourceArchivePath.isEmpty() || request.outputArchivePath.isEmpty()
+        || samePath(request.sourceArchivePath, request.outputArchivePath)) {
+        result.error = QStringLiteral("Choose distinct source and output map archives.");
+        return result;
+    }
+    if (QFileInfo::exists(result.outputArchivePath)) {
+        result.error = QStringLiteral("Restored output already exists; choose a new file name.");
+        return result;
+    }
+    QByteArray sourceHashBefore;
+    QString error;
+    if (!fileSha256(request.sourceArchivePath, &sourceHashBefore, &error)) {
+        result.error = error;
+        return result;
+    }
+    Sc2Archive source;
+    if (!source.load(request.sourceArchivePath, &error)) {
+        result.error = error;
+        return result;
+    }
+    QByteArray manifestBytes;
+    if (!source.readEntry(DecorRestoreManifestEntry, &manifestBytes, &error)) {
+        result.error = QStringLiteral("This map has no SC2DataHelper decor restore data. Only maps created with the new reversible export can be restored.");
+        return result;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(manifestBytes);
+    if (!document.isObject()) {
+        result.error = QStringLiteral("Decor restore data is malformed.");
+        return result;
+    }
+    const QJsonObject manifest = document.object();
+    if (manifest.value(QStringLiteral("format")).toString() != QStringLiteral("SC2DH-DecorRestore")
+        || manifest.value(QStringLiteral("version")).toInt() != 1) {
+        result.error = QStringLiteral("Unsupported decor restore data version.");
+        return result;
+    }
+    const QString objectsEntry = manifest.value(QStringLiteral("objectsEntry")).toString();
+    const QString mapScriptEntry = manifest.value(QStringLiteral("mapScriptEntry")).toString();
+    const QString runtimeEntry = manifest.value(QStringLiteral("runtimeEntry")).toString();
+    const QString actorCatalogEntry = manifest.value(QStringLiteral("actorCatalogEntry")).toString();
+    const bool originalActorCatalogExisted = manifest.value(QStringLiteral("originalActorCatalogExisted")).toBool();
+    const QByteArray originalActorCatalog = restoredBytes(manifest, QStringLiteral("originalActorCatalog"));
+    if (objectsEntry.isEmpty() || mapScriptEntry.isEmpty() || runtimeEntry.isEmpty()
+        || objectsEntry == mapScriptEntry || objectsEntry == runtimeEntry || mapScriptEntry == runtimeEntry
+        || objectsEntry == DecorRestoreManifestEntry || mapScriptEntry == DecorRestoreManifestEntry
+        || runtimeEntry == DecorRestoreManifestEntry) {
+        result.error = QStringLiteral("Decor restore data contains invalid archive entry names.");
+        return result;
+    }
+    if (!actorCatalogEntry.isEmpty()) {
+        QByteArray current;
+        if (normalizedEntry(actorCatalogEntry).compare(DecorActorCatalogEntry, Qt::CaseInsensitive) != 0
+            || sha256Hex(originalActorCatalog) != manifest.value(QStringLiteral("originalActorCatalogSha256")).toString().toLatin1()
+            || (originalActorCatalogExisted && originalActorCatalog.isEmpty())
+            || !source.readEntry(actorCatalogEntry, &current, &error)
+            || sha256Hex(current) != manifest.value(QStringLiteral("optimizedActorCatalogSha256")).toString().toLatin1()) {
+            result.error = QStringLiteral("Actor catalog restore data is invalid or ActorData.xml changed after Galaxy export; no copy was created.");
+            return result;
+        }
+    }
+    const QByteArray originalObjects = restoredBytes(manifest, QStringLiteral("originalObjects"));
+    const QByteArray originalMapScript = restoredBytes(manifest, QStringLiteral("originalMapScript"));
+    if (originalObjects.isEmpty() || originalMapScript.isEmpty()
+        || sha256Hex(originalObjects) != manifest.value(QStringLiteral("originalObjectsSha256")).toString().toLatin1()
+        || sha256Hex(originalMapScript) != manifest.value(QStringLiteral("originalMapScriptSha256")).toString().toLatin1()) {
+        result.error = QStringLiteral("Saved original Objects or MapScript failed integrity verification.");
+        return result;
+    }
+    for (const auto &entry : {qMakePair(objectsEntry, QStringLiteral("optimizedObjectsSha256")),
+                              qMakePair(mapScriptEntry, QStringLiteral("optimizedMapScriptSha256")),
+                              qMakePair(runtimeEntry, QStringLiteral("runtimeSha256"))}) {
+        QByteArray current;
+        if (!source.readEntry(entry.first, &current, &error)
+            || sha256Hex(current) != manifest.value(entry.second).toString().toLatin1()) {
+            result.error = QStringLiteral("%1 changed after Galaxy export; reverse conversion would discard edits. No copy was created.")
+                               .arg(entry.first);
+            return result;
+        }
+    }
+    QByteArray sourceHashAfter;
+    if (!fileSha256(request.sourceArchivePath, &sourceHashAfter, &error)
+        || sourceHashAfter != sourceHashBefore) {
+        result.error = QStringLiteral("Source map changed during restore preflight.");
+        return result;
+    }
+    QString stagingPath;
+    if (!makeStagingArchivePath(result.outputArchivePath, &stagingPath, &error)) {
+        result.error = error;
+        return result;
+    }
+    const auto discardStaging = [&] {
+        QFile::remove(stagingPath);
+        QFile::remove(stagingPath + QStringLiteral(".compact"));
+    };
+    QHash<QString, QByteArray> replacements{{objectsEntry, originalObjects},
+                                                   {mapScriptEntry, originalMapScript}};
+    QStringList removals{runtimeEntry, DecorRestoreManifestEntry};
+    if (archiveContainsEntry(source, DecorImportEntry)) removals << DecorImportEntry;
+    if (!actorCatalogEntry.isEmpty()) {
+        if (originalActorCatalogExisted) replacements.insert(actorCatalogEntry, originalActorCatalog);
+        else removals << actorCatalogEntry;
+    }
+    QByteArray runtimeForPreload;
+    if (!source.readEntry(runtimeEntry, &runtimeForPreload, &error)
+        || !restorePreloadPatch(source, QString::fromUtf8(runtimeForPreload), &replacements, &removals, &error)) {
+        discardStaging(); result.error = error; return result;
+    }
+    if (!source.saveCopy(stagingPath, replacements,
+                         removals, &error)) {
+        discardStaging();
+        result.error = QStringLiteral("Could not stage restored map: %1").arg(error);
+        return result;
+    }
+    Sc2Archive verification;
+    QByteArray verifiedObjects;
+    QByteArray verifiedScript;
+    if (!verification.load(stagingPath, &error)
+        || !verification.readEntry(objectsEntry, &verifiedObjects, &error)
+        || !verification.readEntry(mapScriptEntry, &verifiedScript, &error)
+        || verifiedObjects != originalObjects || verifiedScript != originalMapScript
+        || !verifyPreloadPatch(verification, replacements, removals)
+        || archiveContainsEntry(verification, runtimeEntry)
+        || archiveContainsEntry(verification, DecorRestoreManifestEntry)) {
+        discardStaging();
+        result.error = QStringLiteral("Staged reverse conversion failed archive verification: %1").arg(error);
+        return result;
+    }
+    if (!actorCatalogEntry.isEmpty()) {
+        QByteArray verifiedCatalog;
+        const bool catalogMatches = originalActorCatalogExisted
+            ? verification.readEntry(actorCatalogEntry, &verifiedCatalog, &error) && verifiedCatalog == originalActorCatalog
+            : !archiveContainsEntry(verification, actorCatalogEntry);
+        if (!catalogMatches) {
+            discardStaging();
+            result.error = QStringLiteral("Restored actor catalog failed archive verification.");
+            return result;
+        }
+    }
+    DecorOptimizedMapResult analysis;
+    if (!verifyArchiveWithFolderAnalysis(verification, &analysis, &error)) {
+        discardStaging();
+        result.error = QStringLiteral("Restored map failed full analysis: %1").arg(error);
+        return result;
+    }
+    QByteArray stagedHash;
+    if (!fileSha256(stagingPath, &stagedHash, &error)
+        || !fileSha256(request.sourceArchivePath, &sourceHashAfter, &error)
+        || sourceHashAfter != sourceHashBefore || QFileInfo::exists(result.outputArchivePath)) {
+        discardStaging();
+        result.error = QStringLiteral("Source or output changed during restore verification; no output was committed.");
+        return result;
+    }
+    if (!replaceFileAtomicallyAndVerify(stagingPath, result.outputArchivePath, stagedHash, &error)) {
+        discardStaging();
+        result.error = QStringLiteral("Could not commit restored map: %1").arg(error);
+        return result;
+    }
+    discardStaging();
+    if (!fileSha256(request.sourceArchivePath, &sourceHashAfter, &error)
+        || sourceHashAfter != sourceHashBefore) {
+        QFile::remove(result.outputArchivePath);
+        result.error = QStringLiteral("Source changed during final restore check; restored output was removed.");
+        return result;
+    }
+    result.sourceUnchanged = true;
+    result.restoredDoodads = manifest.value(QStringLiteral("removedDoodads")).toInt();
+    result.restoredUnits = manifest.value(QStringLiteral("removedUnits")).toInt();
     result.success = true;
     return result;
 }

@@ -19,6 +19,9 @@ struct DecorOptimizedMapRequest
     QString runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy");
     DecorationOptimizationMode mode = DecorationOptimizationMode::RecreateActors;
     bool overwriteExisting = false;
+    // Optional exact-backup JSON and external import XML. Default exports
+    // keep compact identity/catalog bookkeeping in Galaxy for script import.
+    bool writeRestoreSidecars = false;
     // Build the exact archive-aware safety plan, but do not create or mutate
     // any output file. Diagnostic runners use this to report the same plan
     // that an apply operation would execute.
@@ -38,6 +41,7 @@ struct DecorOptimizedMapResult
     QString previousOutputBackupPath;
     DecorationArchivePatch patch;
     int removedDoodads = 0;
+    int removedUnits = 0;
     int visibilityControlledDoodads = 0;
     // True only after the staged visibility-only output is reopened and its
     // Objects entry compares byte-for-byte with the source entry.
@@ -50,10 +54,33 @@ struct DecorOptimizedMapResult
     QString error;
 };
 
+struct DecorRestoreMapRequest
+{
+    QString sourceArchivePath;
+    QString outputArchivePath;
+    QString objectsEntry = QStringLiteral("Objects");
+    QString runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy");
+};
+
+struct DecorRestoreMapResult
+{
+    bool success = false;
+    QString outputArchivePath;
+    bool sourceUnchanged = false;
+    int restoredDoodads = 0;
+    int restoredUnits = 0;
+    QString error;
+};
+
 class DecorationMapCopyService
 {
 public:
+    // Read-only archive preflight shared with the GUI preview.
+    DecorationSafetyContext inspectSafety(const DecorOptimizedMapRequest &request, QString *error) const;
     DecorOptimizedMapResult createOptimizedCopy(const DecorOptimizedMapRequest &request) const;
+    DecorRestoreMapResult restoreGalaxyCopy(const DecorRestoreMapRequest &request) const;
+    // Exact backup rollback remains separate from executable Galaxy import.
+    DecorRestoreMapResult restoreOptimizedCopy(const DecorRestoreMapRequest &request) const;
 };
 
 } // namespace sc2dh::decor

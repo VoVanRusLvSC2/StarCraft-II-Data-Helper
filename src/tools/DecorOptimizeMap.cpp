@@ -384,13 +384,18 @@ QJsonArray zonesJson(const QVector<DecorZone> &zones,
                      const QString &countKey)
 {
     QHash<int, int> dynamicCounts;
-    for (const ZoneAssignment &assignment : assignments)
+    QHash<int, int> unitCounts;
+    for (const ZoneAssignment &assignment : assignments) {
         dynamicCounts.insert(assignment.zoneId, assignment.doodadIndices.size());
+        unitCounts.insert(assignment.zoneId, assignment.unitIndices.size());
+    }
 
     QJsonArray array;
     for (const DecorZone &zone : zones) {
         QJsonObject object = zoneJson(zone);
         object.insert(countKey, dynamicCounts.value(zone.id));
+        if (countKey == QStringLiteral("dynamicDoodads"))
+            object.insert(QStringLiteral("dynamicUnits"), unitCounts.value(zone.id));
         array.append(object);
     }
     return array;
@@ -423,6 +428,7 @@ QJsonObject reportObject(const QString &sourcePath,
     report.insert(QStringLiteral("source"), QDir::toNativeSeparators(sourcePath));
     report.insert(QStringLiteral("output"), QDir::toNativeSeparators(result.outputArchivePath));
     report.insert(QStringLiteral("removedDoodads"), result.removedDoodads);
+    report.insert(QStringLiteral("removedUnits"), result.removedUnits);
     report.insert(QStringLiteral("visibilityControlledDoodads"), result.visibilityControlledDoodads);
     report.insert(QStringLiteral("objectsPreserved"), result.objectsPreserved);
     report.insert(QStringLiteral("mode"), request.mode == DecorationOptimizationMode::VisibilityOnly
@@ -433,6 +439,14 @@ QJsonObject reportObject(const QString &sourcePath,
     report.insert(QStringLiteral("objectsEntry"), request.objectsEntry);
     report.insert(QStringLiteral("mapScriptEntry"), request.mapScriptEntry);
     report.insert(QStringLiteral("runtimeEntry"), request.runtimeEntry);
+    QStringList keptUnitIds;
+    for (const QString &id : request.safetyContext.excludedUnitKeys)
+        keptUnitIds << id;
+    report.insert(QStringLiteral("requestedKeptUnitIds"), stringArray(keptUnitIds, true));
+    QStringList keptUnitTypes;
+    for (const QString &type : request.safetyContext.excludedUnitTypeKeys)
+        keptUnitTypes << type;
+    report.insert(QStringLiteral("requestedKeptUnitTypes"), stringArray(keptUnitTypes, true));
     if (!autoGridReport.isEmpty())
         report.insert(QStringLiteral("autoGrid"), autoGridReport);
 
@@ -454,10 +468,49 @@ QJsonObject reportObject(const QString &sourcePath,
         if (request.mode != DecorationOptimizationMode::VisibilityOnly) {
             const DecorationStreamingPlan &plan = result.patch.artifacts.plan;
             report.insert(QStringLiteral("totalDoodads"), plan.doodads.size());
+            report.insert(QStringLiteral("totalUnits"), plan.units.size());
             report.insert(QStringLiteral("staticOnlyDoodads"), plan.staticOnlyDoodads.size());
+            QJsonObject doodadSafetyReasons;
+            for (int index : plan.staticOnlyDoodads) {
+                if (index < 0 || index >= plan.doodads.size())
+                    continue;
+                const QString reason = plan.doodads.at(index).staticOnlyReason.isEmpty()
+                    ? QStringLiteral("Unspecified safety reason")
+                    : plan.doodads.at(index).staticOnlyReason;
+                doodadSafetyReasons.insert(reason, doodadSafetyReasons.value(reason).toInt() + 1);
+            }
+            report.insert(QStringLiteral("doodadSafetyReasons"), doodadSafetyReasons);
+            report.insert(QStringLiteral("staticOnlyUnits"), plan.staticOnlyUnits.size());
             report.insert(QStringLiteral("unassignedDynamicDoodads"), plan.unassignedDoodads.size());
-            report.insert(QStringLiteral("zones"), zonesJson(zones, plan.zones,
-                                                               QStringLiteral("dynamicDoodads")));
+            QJsonObject unitSafetyReasons;
+            QJsonArray keptUnits;
+            for (int index : plan.staticOnlyUnits) {
+                if (index < 0 || index >= plan.units.size())
+                    continue;
+                const auto &unit = plan.units.at(index);
+                const QString reason = unit.staticOnlyReason.isEmpty()
+                    ? QStringLiteral("Unspecified safety reason") : unit.staticOnlyReason;
+                unitSafetyReasons.insert(reason, unitSafetyReasons.value(reason).toInt() + 1);
+                QJsonObject item;
+                item.insert(QStringLiteral("id"), unit.id);
+                item.insert(QStringLiteral("type"), unit.type);
+                item.insert(QStringLiteral("x"), unit.x);
+                item.insert(QStringLiteral("y"), unit.y);
+                item.insert(QStringLiteral("reason"), reason);
+                keptUnits.append(item);
+            }
+            report.insert(QStringLiteral("unitSafetyReasons"), unitSafetyReasons);
+            report.insert(QStringLiteral("keptUnits"), keptUnits);
+            QJsonArray zoneReport = zonesJson(zones, plan.zones, QStringLiteral("dynamicDoodads"));
+            for (int i = 0; i < zoneReport.size() && i < plan.zones.size(); ++i) {
+                QJsonObject item = zoneReport.at(i).toObject();
+                const QString stem = sc2dh::decor::galaxyRegionFunctionStem(
+                    plan, plan.zones.at(i), request.galaxyOptions);
+                item.insert(QStringLiteral("createFunction"), QStringLiteral("Create_%1").arg(stem));
+                item.insert(QStringLiteral("clearFunction"), QStringLiteral("Clear_%1").arg(stem));
+                zoneReport.replace(i, item);
+            }
+            report.insert(QStringLiteral("zones"), zoneReport);
         }
         QStringList entries = result.patch.replacementEntries.keys();
         report.insert(QStringLiteral("patchedEntries"), stringArray(entries, true));
@@ -478,16 +531,26 @@ struct CliOptions
     bool overwrite = false;
     bool visibilityOnly = false;
     bool mapRegions = false;
+    bool restore = false;
+    bool galaxyOnly = false;
+    bool writeRestoreSidecars = false;
     QString sourcePath;
     QString outputPath;
     QString zonesPath;
     QString autoGridSpec;
-    QString prefix = QStringLiteral("NAME_OUT_FUNK");
+    QString prefix = QStringLiteral("Game_area");
+    bool useRegionNames = false;
+    int entireMapEntryZoneId = 0;
+    QHash<int, QString> publicFunctionNames;
     QString padding = QStringLiteral("0");
     QString reportPath;
     QString objectsEntry = QStringLiteral("Objects");
     QString mapScriptEntry = QStringLiteral("MapScript.galaxy");
     QString runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy");
+    QStringList keepUnitIds;
+    QStringList keepUnitTypes;
+    QStringList keepDoodadIds;
+    QStringList keepDoodadTypes;
 };
 
 QString usageText()
@@ -497,14 +560,25 @@ QString usageText()
         "  SC2DecorOptimizeMap <source.SC2Map> <output.SC2Map> --zones <zones.json> [options]\n"
         "  SC2DecorOptimizeMap <source.SC2Map> <output.SC2Map> --auto-grid <COLSxROWS> [options]\n"
         "  SC2DecorOptimizeMap <source.SC2Map> <output.SC2Map> --map-regions [options]\n"
+        "  SC2DecorOptimizeMap <converted.SC2Map> <restored.SC2Map> --restore [--report <file>]\n"
         "\n"
         "Options:\n"
         "  --zones <file>              JSON array/object with zones: id/name/xMin/yMin/xMax/yMax.\n"
         "  --auto-grid <COLSxROWS>     Build zones from current runtime-safe doodad bounds, e.g. 4x3.\n"
         "  --map-regions              Use every supported exact Region from the map.\n"
+        "  --restore                  Rebuild native placements from executable SC2DataHelper Galaxy (no JSON backup).\n"
+        "  --galaxy-only              Export .galaxy and support XML files; do not write a map or GUI Triggers.\n"
+        "  --restore-sidecars         Include optional JSON rollback backup and import XML (off by default).\n"
         "  --visibility-only            Keep Objects unchanged; add hide/restore actor visibility API (requires --zones).\n"
         "  --padding <tiles>           Non-negative auto-grid padding. Default: 0.\n"
-        "  --prefix <name>             Generated public function prefix. Default: NAME_OUT_FUNK.\n"
+        "  --prefix <name>             Name used by Create_<name>_<RegionId>(). Default: Game_area.\n"
+        "  --region-names              Name Create/Clear functions after selected Regions.\n"
+        "  --entire-map-zone <id>      Make this Region's Create function show the entire map.\n"
+        "  --entry-name <id:name>      Public Create/Clear name for this Region (repeatable).\n"
+        "  --keep-unit-id <id>         Keep this placed unit in Objects (repeatable).\n"
+        "  --keep-unit-type <type>     Keep every unit of this type in Objects (repeatable).\n"
+        "  --keep-doodad-id <id>       Keep this original doodad placement (repeatable).\n"
+        "  --keep-doodad-type <type>   Keep every doodad of this type (repeatable).\n"
         "  --report <file>             Write JSON report.\n"
         "  --overwrite                 Replace existing output archive.\n"
         "  --objects-entry <entry>     Placement entry. Default: Objects.\n"
@@ -567,7 +641,8 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
         }
 
         if (name == QStringLiteral("--overwrite") || name == QStringLiteral("--visibility-only")
-            || name == QStringLiteral("--map-regions")) {
+            || name == QStringLiteral("--region-names") || name == QStringLiteral("--restore-sidecars")
+            || name == QStringLiteral("--map-regions") || name == QStringLiteral("--restore") || name == QStringLiteral("--galaxy-only")) {
             if (equals >= 0) {
                 if (error)
                     *error = QStringLiteral("%1 does not accept a value.").arg(name);
@@ -575,8 +650,16 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
             }
             if (name == QStringLiteral("--overwrite"))
                 options->overwrite = true;
+            else if (name == QStringLiteral("--region-names"))
+                options->useRegionNames = true;
             else if (name == QStringLiteral("--map-regions"))
                 options->mapRegions = true;
+            else if (name == QStringLiteral("--restore"))
+                options->restore = true;
+            else if (name == QStringLiteral("--galaxy-only"))
+                options->galaxyOnly = true;
+            else if (name == QStringLiteral("--restore-sidecars"))
+                options->writeRestoreSidecars = true;
             else
                 options->visibilityOnly = true;
         } else if (name == QStringLiteral("--zones")) {
@@ -591,6 +674,28 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
         } else if (name == QStringLiteral("--prefix")) {
             if (!consumeOptionValue(args, &i, suppliedValue, &options->prefix, error))
                 return false;
+        } else if (name == QStringLiteral("--entire-map-zone")) {
+            QString value;
+            if (!consumeOptionValue(args, &i, suppliedValue, &value, error)) return false;
+            bool ok = false;
+            options->entireMapEntryZoneId = value.toInt(&ok);
+            if (!ok || options->entireMapEntryZoneId <= 0) {
+                if (error) *error = QStringLiteral("--entire-map-zone requires a positive Region ID.");
+                return false;
+            }
+        } else if (name == QStringLiteral("--entry-name")) {
+            QString value;
+            if (!consumeOptionValue(args, &i, suppliedValue, &value, error)) return false;
+            const QRegularExpression expression(QStringLiteral("^([1-9][0-9]*):([A-Za-z_][A-Za-z0-9_]*)$"));
+            const auto match = expression.match(value);
+            bool ok = false;
+            const int id = match.captured(1).toInt(&ok);
+            if (!match.hasMatch() || !ok || options->publicFunctionNames.contains(id)
+                || options->publicFunctionNames.values().contains(match.captured(2))) {
+                if (error) *error = QStringLiteral("--entry-name requires a unique positive Region ID and Galaxy identifier, e.g. 35:Map_1.");
+                return false;
+            }
+            options->publicFunctionNames.insert(id, match.captured(2));
         } else if (name == QStringLiteral("--report")) {
             if (!consumeOptionValue(args, &i, suppliedValue, &options->reportPath, error))
                 return false;
@@ -603,6 +708,25 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
         } else if (name == QStringLiteral("--runtime-entry")) {
             if (!consumeOptionValue(args, &i, suppliedValue, &options->runtimeEntry, error))
                 return false;
+        } else if (name == QStringLiteral("--keep-unit-id") || name == QStringLiteral("--keep-unit-type")
+                   || name == QStringLiteral("--keep-doodad-id") || name == QStringLiteral("--keep-doodad-type")) {
+            QString value;
+            if (!consumeOptionValue(args, &i, suppliedValue, &value, error))
+                return false;
+            value = value.trimmed();
+            if (value.isEmpty()) {
+                if (error)
+                    *error = QStringLiteral("%1 needs a non-empty value.").arg(name);
+                return false;
+            }
+            if (name == QStringLiteral("--keep-unit-id"))
+                options->keepUnitIds << value;
+            else if (name == QStringLiteral("--keep-unit-type"))
+                options->keepUnitTypes << value;
+            else if (name == QStringLiteral("--keep-doodad-id"))
+                options->keepDoodadIds << value;
+            else
+                options->keepDoodadTypes << value;
         } else {
             if (error)
                 *error = QStringLiteral("Unknown option: %1").arg(name);
@@ -620,7 +744,15 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
     const int zoneSources = int(!options->zonesPath.isEmpty())
         + int(!options->autoGridSpec.isEmpty())
         + int(options->mapRegions);
-    if (zoneSources != 1) {
+    if (options->restore) {
+        if (zoneSources != 0 || options->visibilityOnly || options->overwrite || options->galaxyOnly || options->entireMapEntryZoneId != 0 || !options->publicFunctionNames.isEmpty()
+            || !options->keepUnitIds.isEmpty() || !options->keepUnitTypes.isEmpty()
+            || !options->keepDoodadIds.isEmpty() || !options->keepDoodadTypes.isEmpty()) {
+            if (error)
+                *error = QStringLiteral("--restore cannot be combined with zones, unit exclusions, visibility-only or overwrite.");
+            return false;
+        }
+    } else if (zoneSources != 1) {
         if (error)
             *error = QStringLiteral("Specify exactly one of --zones, --auto-grid, or --map-regions.");
         return false;
@@ -632,6 +764,10 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
     }
     options->sourcePath = positional.at(0);
     options->outputPath = positional.at(1);
+    if (options->galaxyOnly && (options->overwrite || !options->outputPath.endsWith(QStringLiteral(".galaxy"), Qt::CaseInsensitive))) {
+        if (error) *error = QStringLiteral("--galaxy-only requires a new .galaxy output and cannot use --overwrite.");
+        return false;
+    }
     return true;
 }
 
@@ -664,6 +800,28 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+    if (cli.restore) {
+        sc2dh::decor::DecorRestoreMapRequest request;
+        request.sourceArchivePath = QFileInfo(cli.sourcePath).absoluteFilePath();
+        request.outputArchivePath = QFileInfo(cli.outputPath).absoluteFilePath();
+        request.objectsEntry = cli.objectsEntry;
+        request.runtimeEntry = cli.runtimeEntry;
+        const auto restored = DecorationMapCopyService().restoreGalaxyCopy(request);
+        QJsonObject report{{QStringLiteral("success"), restored.success},
+                           {QStringLiteral("source"), request.sourceArchivePath},
+                           {QStringLiteral("output"), restored.outputArchivePath},
+                           {QStringLiteral("restoredDoodads"), restored.restoredDoodads},
+                           {QStringLiteral("restoredUnits"), restored.restoredUnits},
+                           {QStringLiteral("sourceUnchanged"), restored.sourceUnchanged}};
+        if (!restored.success)
+            report.insert(QStringLiteral("error"), restored.error);
+        if (!cli.reportPath.isEmpty()
+            && !writeJsonFile(cli.reportPath, report, &error))
+            return fail(error, 5);
+        QTextStream(stdout) << QJsonDocument(report).toJson(QJsonDocument::Compact) << '\n';
+        return restored.success ? 0 : fail(restored.error, 4);
+    }
+
     bool ok = false;
 
     const QString sourcePath = QFileInfo(cli.sourcePath).absoluteFilePath();
@@ -689,20 +847,75 @@ int main(int argc, char *argv[])
             return fail(QStringLiteral("Auto-grid failed: %1").arg(error), 3);
     }
 
+    if (cli.entireMapEntryZoneId != 0) {
+        if (cli.visibilityOnly)
+            return fail(QStringLiteral("--entire-map-zone requires actor recreation mode."), 2);
+        if (std::none_of(zones.cbegin(), zones.cend(), [&](const auto &zone) { return zone.id == cli.entireMapEntryZoneId; }))
+            return fail(QStringLiteral("--entire-map-zone must identify one of the selected Regions."), 2);
+    }
+    for (auto it = cli.publicFunctionNames.cbegin(); it != cli.publicFunctionNames.cend(); ++it) {
+        if (cli.visibilityOnly || std::none_of(zones.cbegin(), zones.cend(), [&](const auto &zone) { return zone.id == it.key(); }))
+            return fail(QStringLiteral("--entry-name requires actor recreation and a selected Region ID."), 2);
+    }
     DecorOptimizedMapRequest request;
     request.sourceArchivePath = sourcePath;
     request.outputArchivePath = outputPath;
     request.zones = zones;
-    request.galaxyOptions = GalaxyGenerationOptions{cli.prefix, 64};
+    request.galaxyOptions = GalaxyGenerationOptions{cli.prefix, 64, cli.useRegionNames, cli.entireMapEntryZoneId};
+    request.galaxyOptions.publicFunctionNames = cli.publicFunctionNames;
     request.objectsEntry = cli.objectsEntry;
     request.mapScriptEntry = cli.mapScriptEntry;
     request.runtimeEntry = cli.runtimeEntry;
     request.mode = cli.visibilityOnly ? DecorationOptimizationMode::VisibilityOnly
                                       : DecorationOptimizationMode::RecreateActors;
+    for (const QString &id : cli.keepUnitIds)
+        request.safetyContext.excludedUnitKeys.insert(id.toCaseFolded());
+    for (const QString &type : cli.keepUnitTypes)
+        request.safetyContext.excludedUnitTypeKeys.insert(type.toCaseFolded());
+    for (const QString &id : cli.keepDoodadIds)
+        request.safetyContext.excludedDoodadKeys.insert(id.toCaseFolded());
+    for (const QString &type : cli.keepDoodadTypes)
+        request.safetyContext.staticOnlyReasonByDoodadType.insert(type.toCaseFolded(),
+            QStringLiteral("Static-only: doodad type explicitly kept by user."));
     request.overwriteExisting = cli.overwrite;
+    request.writeRestoreSidecars = cli.writeRestoreSidecars;
+    request.dryRun = cli.galaxyOnly;
 
     const DecorOptimizedMapResult result = DecorationMapCopyService().createOptimizedCopy(request);
-    const QJsonObject report = reportObject(sourcePath, zones, request, result, autoGridReport);
+    QJsonObject report = reportObject(sourcePath, zones, request, result, autoGridReport);
+    if (cli.galaxyOnly && result.success) {
+        const QString base = QFileInfo(outputPath).absolutePath() + QLatin1Char('/') + QFileInfo(outputPath).completeBaseName();
+        QMap<QString, QByteArray> exports;
+        exports.insert(outputPath, result.patch.replacementEntries.value(request.runtimeEntry));
+        for (auto it = result.patch.replacementEntries.cbegin(); it != result.patch.replacementEntries.cend(); ++it) {
+            const QString entry = QString(it.key()).replace('\\', '/');
+            if (entry.compare(QStringLiteral("Base.SC2Data/GameData/ActorData.xml"), Qt::CaseInsensitive) == 0)
+                exports.insert(base + QStringLiteral(".ActorData.xml"), it.value());
+            if (entry.compare(QStringLiteral("Preload.xml"), Qt::CaseInsensitive) == 0)
+                exports.insert(base + QStringLiteral(".Preload.xml"), it.value());
+            if (entry.compare(QStringLiteral("sc2dh/decor_import.xml"), Qt::CaseInsensitive) == 0)
+                exports.insert(base + QStringLiteral(".import.xml"), it.value());
+            if (entry.compare(QStringLiteral("sc2dh/decor_restore_v1.json"), Qt::CaseInsensitive) == 0)
+                exports.insert(base + QStringLiteral(".restore.json"), it.value());
+        }
+        for (auto it = exports.cbegin(); it != exports.cend(); ++it) {
+            if (QFileInfo::exists(it.key())) return fail(QStringLiteral("Export file already exists: %1").arg(it.key()), 4);
+            if (it.value().isEmpty()) return fail(QStringLiteral("Generated export is empty: %1").arg(it.key()), 4);
+        }
+        QStringList written;
+        for (auto it = exports.cbegin(); it != exports.cend(); ++it) {
+            QSaveFile file(it.key());
+            if (!file.open(QIODevice::WriteOnly) || file.write(it.value()) != it.value().size() || !file.commit()) {
+                for (const QString &path : written) QFile::remove(path);
+                return fail(QStringLiteral("Unable to write generated export: %1").arg(it.key()), 4);
+            }
+            written << it.key();
+        }
+        report.insert(QStringLiteral("mode"), QStringLiteral("galaxy-only"));
+        report.insert(QStringLiteral("guiTriggersWritten"), false);
+        report.insert(QStringLiteral("mapArchiveWritten"), false);
+        report.insert(QStringLiteral("generatedFiles"), QJsonArray::fromStringList(written));
+    }
 
     if (!cli.reportPath.isEmpty()) {
         if (!writeJsonFile(cli.reportPath, report, &error))

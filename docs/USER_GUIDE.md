@@ -21,22 +21,43 @@ catalog XML files.
 
 ## Decoration and unused objects
 
-The installed `SC2DecorOptimizeMap.exe` handles placed map decoration. It is a
-command-line tool, separate from the GUI. It always writes a new `.SC2Map`
-unless you explicitly use `--overwrite` for the output path.
+In the GUI, open **Map Performance**, search for map Regions by name or ID,
+then select them in the list or on the map. The selected Regions are highlighted
+and listed above the results. Press **Preview** to see
+which placements can be converted and which stay static. **Create
+Galaxy-Converted Map Copy** writes a separate `.SC2Map` with the generated
+Galaxy file and keeps the source map unchanged.
 
-For a selected zone, actor recreation removes supported, unreferenced doodad
-placements from the new map's `Objects` entry and generates Galaxy functions
-such as `NAME_OUT_FUNK_Create_1()` and `NAME_OUT_FUNK_Clear_1()`. Call these
-functions from your map triggers when the zone should appear or disappear.
-Unsupported or referenced placements stay static.
+**Include restore backup files (JSON/XML)** is off by default and remembered
+between sessions. Enable it for a separate exact rollback backup. The normal
+**Rebuild Placements from Galaxy** operation reads placement statements and
+compact annotations from Galaxy without either restore sidecar. The CLI switch
+is `--restore-sidecars`. Runtime actor catalog data is still included where
+needed; it is not a restoration backup. Conversion also merges the exported
+actors' zero-based variant indices into the map's native `Preload.xml` so their
+models are requested before actor creation. Restoration restores that file too.
+Standalone `--galaxy-only` exports include `.ActorData.xml` and `.Preload.xml`;
+import these at `Base.SC2Data/GameData/ActorData.xml` and `Preload.xml` respectively.
+
+The installed `SC2DecorOptimizeMap.exe` offers the same conversion from a
+command line. It always writes a new `.SC2Map` unless you explicitly use
+`--overwrite` for the output path.
+
+For each selected Region, the copy removes supported doodads and simple units
+with no direct ID/name references in scripts or triggers. One Galaxy function
+per Region, such as `Create_Map_1()` for a Region named `Map_1`, recreates both
+without batch functions; `Clear_Map_1()` removes the generated objects. Call them from
+your map triggers when the Region should appear or disappear. Unsupported or
+directly referenced placements stay static. Broad actions such as “all units
+in Region” do not count as direct references: they will see fewer units before
+`Create` and after `Clear`.
 
 ```powershell
 SC2DecorOptimizeMap.exe source.SC2Map optimized.SC2Map --zones zones.json --report decor-report.json
 ```
 
-If you need to hide and restore the *original* placed doodads, use
-`--visibility-only`. This keeps `Objects` byte-identical and generates
+The separate CLI also has an optional `--visibility-only` mode. It keeps
+`Objects` byte-identical and generates
 `NAME_OUT_FUNK_Hide_1()` and `NAME_OUT_FUNK_Restore_1()` for your triggers.
 It does not remove those placements from the map.
 
