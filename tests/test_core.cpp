@@ -385,6 +385,7 @@ private slots:
     void decorationMapCopyPreloadsNativeVariants();
     void decorationModelsPreventVariantFallbackAndRestoreExactly();
     void decorationAiBuildingsFollowControllersAndStructureInheritance();
+    void decorationHiddenAiProtectionRequiresBothFlags();
     void decorationStreamingRegionEntryRestoresVisibility();
     void decorationStreamingPreservesNullableTintAndTerrainObjects();
     void decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads();
@@ -7886,6 +7887,30 @@ void CoreTests::decorationStreamingExtendedUnitsAndWholeMapFallback()
     QCOMPARE(protectedTypes.removedUnitIndices.size(), 3);
 }
 
+void CoreTests::decorationHiddenAiProtectionRequiresBothFlags()
+{
+    using namespace sc2dh::decor;
+    const QByteArray objects = QByteArrayLiteral(
+        "<PlacedObjects><ObjectUnit Id=\"1995243290\" UnitType=\"Barracks\" Player=\"10\" Position=\"39.5,133.5,0\"><Flag Index=\"UnitNoCreate\" Value=\"1\"/><Flag Index=\"UnitHidden\" Value=\"1\"/></ObjectUnit>"
+        "<ObjectUnit Id=\"100000002\" UnitType=\"Barracks\" Player=\"10\" Position=\"40,134,0\"><AIFlag Index=\"IsUseable\" Value=\"1\"/></ObjectUnit>"
+        "<ObjectUnit Id=\"100000003\" UnitType=\"SupplyDepot\" Player=\"10\" Position=\"41,134,0\"><Flag Index=\"UnitNoCreate\" Value=\"1\"/><Flag Index=\"UnitHidden\" Value=\"1\"/><AIFlag Index=\"IsUseable\" Value=\"0\"/></ObjectUnit>"
+        "<ObjectUnit Id=\"100000004\" UnitType=\"Gateway\" Player=\"6\" Position=\"42,134,0\"><Flag Index=\"UnitNoCreate\" Value=\"1\"/><AIFlag Index=\"IsUseable\" Value=\"1\"/></ObjectUnit>"
+        "<ObjectUnit Id=\"100000005\" UnitType=\"Marine\" Player=\"10\" Position=\"43,134,0\"/></PlacedObjects>");
+    DecorationStreamingPlanner planner;
+    const auto result = planner.createOptimizedArtifacts(objects, {{1, QStringLiteral("Area"), 0, 0, 100, 200}});
+    QVERIFY(result.valid);
+    QCOMPARE(result.removedUnitIndices, (QVector<int>{1, 2, 4}));
+    QVERIFY(result.optimizedObjectsBytes.contains("1995243290"));
+    QVERIFY(result.optimizedObjectsBytes.contains("100000004"));
+    QCOMPARE(result.plan.units[0].stateFlags & 3, 3); // Screenshot: original hidden/no-create flags intact.
+    QByteArray restored; QString error; int doodads=0, units=0;
+    QVERIFY2(planner.restoreObjectsFromGalaxy(result.optimizedObjectsBytes, result.galaxySource, &restored, &doodads, &units, &error), qPrintable(error));
+    pugi::xml_document doc;
+    QVERIFY(doc.load_buffer(restored.constData(), size_t(restored.size())));
+    auto explicitTrue = doc.child("PlacedObjects").find_child_by_attribute("ObjectUnit", "Id", "100000002");
+    QVERIFY(explicitTrue.find_child_by_attribute("AIFlag", "Index", "IsUseable").attribute("Value").as_bool());
+}
+
 void CoreTests::decorationAiBuildingsFollowControllersAndStructureInheritance()
 {
 #ifndef SC2DH_USE_STORMLIB
@@ -7916,11 +7941,18 @@ void CoreTests::decorationAiBuildingsFollowControllersAndStructureInheritance()
     DecorOptimizedMapRequest request;
     request.sourceArchivePath = path(QStringLiteral("Source.SC2Map"));
     request.outputArchivePath = path(QStringLiteral("Runtime.SC2Map"));
+    request.safetyContext.keepAiBuildings = true; // Broader protection is an explicit option.
     request.zones = {{1, QStringLiteral("Area"), 0, 0, 20, 20}};
     const auto safety = DecorationMapCopyService().inspectSafety(request, &error);
     QCOMPARE(safety.aiPlayerSlots, (QSet<int>{6}));
     QVERIFY(safety.structureUnitTypes.contains(QStringLiteral("customdepot")));
     QVERIFY(!safety.structureUnitTypes.contains(QStringLiteral("mobile")));
+    auto ordinary = request;
+    ordinary.safetyContext.keepAiBuildings = false;
+    const auto ordinarySafety = DecorationMapCopyService().inspectSafety(ordinary, &error);
+    QCOMPARE(ordinarySafety.aiPlayerSlots, safety.aiPlayerSlots); // GUI can toggle the option after preflight.
+    const auto ordinaryPlan = DecorationStreamingPlanner().createOptimizedArtifacts(objects, request.zones, ordinarySafety);
+    QCOMPARE(ordinaryPlan.removedUnitIndices.size(), 5); // Visible AI buildings convert by default.
     const auto result = DecorationMapCopyService().createOptimizedCopy(request);
     QVERIFY2(result.success, qPrintable(result.error));
     QCOMPARE(result.removedUnits, 3);

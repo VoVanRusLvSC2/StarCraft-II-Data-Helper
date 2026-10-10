@@ -536,7 +536,7 @@ struct CliOptions
     bool writeRestoreSidecars = false;
     bool keepReferencedTypes = false;
     bool keepAiTemplates = true;
-    bool keepAiBuildings = true;
+    bool keepAiBuildings = false;
     sc2dh::decor::DecorGuiActionOptions guiAction;
     QString sourcePath;
     QString outputPath;
@@ -575,8 +575,9 @@ QString usageText()
         "  --restore-sidecars         Include optional JSON rollback backup and import XML (off by default).\n"
         "  --gui-action               Add a GUI Action Definition, Region preset and Switch cases.\n"
         "  --keep-referenced-types    Optional broad type protection. Default: protect direct ID/name links only.\n"
-        "  --convert-ai-templates     Experimental: also move initially hidden and UnitNoCreate placements (kept by default).\n"
-        "  --convert-ai-buildings     Also move Computer/Hostile buildings (kept by default).\n"
+        "  --convert-ai-templates     Also move hidden placements available to AI (kept by default).\n"
+        "  --keep-all-ai-buildings    Optional: keep all Computer/Hostile buildings, including visible ones.\n"
+        "  --convert-ai-buildings     Disable optional broad building protection (compatibility alias).\n"
         "  --gui-action-name <name>    Display name (enables GUI action generation).\n"
         "  --gui-preset-name <name>    Preset display name (enables GUI action generation).\n"
         "  --visibility-only            Keep Objects unchanged; add hide/restore actor visibility API (requires --zones).\n"
@@ -653,13 +654,15 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
         if (name == QStringLiteral("--overwrite") || name == QStringLiteral("--visibility-only")
             || name == QStringLiteral("--region-names") || name == QStringLiteral("--restore-sidecars")
             || name == QStringLiteral("--map-regions") || name == QStringLiteral("--restore") || name == QStringLiteral("--galaxy-only")
-            || name == QStringLiteral("--gui-action") || name == QStringLiteral("--keep-referenced-types") || name == QStringLiteral("--convert-ai-templates") || name == QStringLiteral("--convert-ai-buildings")) {
+            || name == QStringLiteral("--gui-action") || name == QStringLiteral("--keep-referenced-types") || name == QStringLiteral("--convert-ai-templates") || name == QStringLiteral("--convert-ai-buildings") || name == QStringLiteral("--keep-all-ai-buildings")) {
             if (equals >= 0) {
                 if (error)
                     *error = QStringLiteral("%1 does not accept a value.").arg(name);
                 return false;
             }
-            if (name == QStringLiteral("--convert-ai-buildings"))
+            if (name == QStringLiteral("--keep-all-ai-buildings"))
+                options->keepAiBuildings = true;
+            else if (name == QStringLiteral("--convert-ai-buildings"))
                 options->keepAiBuildings = false;
             else if (name == QStringLiteral("--convert-ai-templates"))
                 options->keepAiTemplates = false;

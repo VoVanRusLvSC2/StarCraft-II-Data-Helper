@@ -827,6 +827,7 @@ QVector<UnitPlacement> DecorationStreamingPlanner::parseUnits(const QByteArray &
             bool extra = !optionalOk || !validNumericTuple(attribute("Position"), {2,3})
                 || (node.attribute("Rotation") && !validNumericTuple(attribute("Rotation"), {1}))
                 || (node.attribute("Scale") && !validNumericTuple(attribute("Scale"), {1,3}));
+            bool seenAiUsable = false;
             for (pugi::xml_node child : node.children()) {
                 if (child.type() != pugi::node_element)
                     continue;
@@ -846,8 +847,14 @@ QVector<UnitPlacement> DecorationStreamingPlanner::parseUnits(const QByteArray &
                 else if (stateFlag && index == QStringLiteral("HeightOffset")) unit.stateFlags |= 4;
                 else if (stateFlag && index == QStringLiteral("DeferModelLoad")) unit.stateFlags |= 8;
                 else if (QString::fromUtf8(child.name()) == QStringLiteral("AIFlag")
-                         && index == QStringLiteral("IsUseable") && QString::fromUtf8(child.attribute("Value").value()) == QStringLiteral("0")
-                         && std::distance(child.attributes_begin(), child.attributes_end()) == 2 && !child.first_child()) unit.stateFlags |= 16;
+                         && index == QStringLiteral("IsUseable")
+                         && (QString::fromUtf8(child.attribute("Value").value()) == QStringLiteral("0")
+                             || QString::fromUtf8(child.attribute("Value").value()) == QStringLiteral("1"))
+                         && std::distance(child.attributes_begin(), child.attributes_end()) == 2 && !child.first_child()) {
+                    extra = extra || seenAiUsable;
+                    seenAiUsable = true;
+                    if (QString::fromUtf8(child.attribute("Value").value()) == QStringLiteral("0")) unit.stateFlags |= 16;
+                }
                 else if (QString::fromUtf8(child.name()) == QStringLiteral("Texture")
                          && QString::fromUtf8(child.attribute("TexSlot").value()) == QStringLiteral("main")
                          && QString::fromUtf8(child.attribute("TexLink").value()).isEmpty()
@@ -1093,9 +1100,9 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
         plan.warnings.removeAll(QStringLiteral("PlacedObjects XML contains no parseable ObjectDoodad elements."));
     for (int index = 0; index < plan.units.size(); ++index) {
         UnitPlacement &unit = plan.units[index];
-        if (safetyContext.keepAiTemplates && (unit.stateFlags & 3) != 0) {
+        if (safetyContext.keepAiTemplates && (unit.stateFlags & 3) != 0 && (unit.stateFlags & 16) == 0) {
             unit.dynamicCandidate = false;
-            unit.staticOnlyReason = QStringLiteral("Initially hidden unit or AI placement template stays native.");
+            unit.staticOnlyReason = QStringLiteral("Initially hidden placement available to AI stays native.");
         }
         if (safetyContext.keepAiBuildings && safetyContext.aiPlayerSlots.contains(unit.player)
             && safetyContext.structureUnitTypes.contains(unit.type.toCaseFolded())) {

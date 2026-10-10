@@ -69,10 +69,11 @@ Galaxy comments do not count as type references. Computed type names/custom
 enumeration wrappers require manual **Keep in map** exclusions. **Unit types to
 keep** explicitly preserves a whole type; the GUI default is `CommandCenter`.
 The individual-unit chooser supports manual keep selections.
-Initially hidden units and UnitNoCreate AI templates stay native by default.
-Computer/Hostile buildings also stay native, using MapInfo controllers and the
-Structure attribute (including local unit inheritance). These protections have
-separate GUI checkboxes. Exported nonzero model variants enable VariationPreload
+Initially hidden/UnitNoCreate placements available to AI stay native by default;
+both conditions are required. Visible AI buildings remain eligible for conversion.
+Keeping every Computer/Hostile building is a separate option, off by default,
+using MapInfo controllers and the Structure attribute with local inheritance.
+Exported nonzero model variants enable VariationPreload
 and disable VariationFallback, with constant-ID model preloads before creation.
 ModelData.xml changes are reversed exactly alongside actor data and preload data.
 An unfiltered query for all units does not automatically exclude every type.

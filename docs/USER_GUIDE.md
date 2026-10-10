@@ -61,14 +61,16 @@ When variants are exported, import `.ModelData.xml` at
 prevents the engine from silently substituting variant zero for the saved index.
 All original model catalog data is restored byte-for-byte during reversal.
 
-**Keep initially hidden units and AI templates** is on by default. UnitHidden
-and UnitNoCreate placements stay native so the AI retains its base templates.
+**Keep initially hidden placements available to AI** is on by default. A placement
+must have UnitHidden/UnitNoCreate and AI IsUseable enabled (including its default)
+to receive this protection. Its original hidden flags stay intact. Visible AI
+buildings remain eligible for conversion.
 Disabling it (CLI `--convert-ai-templates`) is experimental and requires checking
 the map's AI behavior; matching placement properties alone is insufficient.
-**Keep AI buildings in native placement** also defaults to on. It preserves
+**Keep all AI buildings in native placement (optional)** defaults to off. It preserves
 structures belonging to Computer/Hostile slots from MapInfo, including local
 unit types inheriting the Structure attribute. Ordinary combat units remain
-eligible for conversion. CLI `--convert-ai-buildings` disables this protection.
+eligible for conversion. CLI `--keep-all-ai-buildings` enables this protection.
 
 The installed `SC2DecorOptimizeMap.exe` offers the same conversion from a
 command line. It always writes a new `.SC2Map` unless you explicitly use

@@ -1155,16 +1155,16 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     m_keepUnitTypes->setObjectName(QStringLiteral("decorKeepUnitTypes"));
     m_keepUnitTypes->setToolTip(tr("Comma-separated exact unit type IDs to keep. Use Choose units to keep for individual placements."));
     form->addRow(m_keepReferencedTypes);
-    m_keepAiTemplates = new QCheckBox(tr("Keep initially hidden units and AI templates"), decorGroup);
+    m_keepAiTemplates = new QCheckBox(tr("Keep initially hidden placements available to AI"), decorGroup);
     m_keepAiTemplates->setChecked(QSettings().value(QStringLiteral("decor/keepAiTemplates"), true).toBool());
-    m_keepAiTemplates->setToolTip(tr("Keep UnitHidden and UnitNoCreate placements native so the AI can still use its original base templates."));
+    m_keepAiTemplates->setToolTip(tr("Keep only initially hidden/template placements with AI IsUseable enabled (including its default). Preserve their original hidden flags."));
     form->addRow(m_keepAiTemplates);
-    m_keepAiBuildings = new QCheckBox(tr("Keep AI buildings in native placement"), decorGroup);
-    m_keepAiBuildings->setChecked(QSettings().value(QStringLiteral("decor/keepAiBuildings"), true).toBool());
+    m_keepAiBuildings = new QCheckBox(tr("Keep all AI buildings in native placement (optional)"), decorGroup);
+    m_keepAiBuildings->setChecked(QSettings().value(QStringLiteral("decor/keepAllAiBuildings"), false).toBool());
     m_keepAiBuildings->setToolTip(tr("Keep structures owned by Computer/Hostile player slots. Uses MapInfo controllers and the Structure unit attribute, including local inheritance."));
     form->addRow(m_keepAiBuildings);
     connect(m_keepAiBuildings, &QCheckBox::toggled, this, [](bool checked) {
-        QSettings().setValue(QStringLiteral("decor/keepAiBuildings"), checked);
+        QSettings().setValue(QStringLiteral("decor/keepAllAiBuildings"), checked);
     });
     connect(m_keepAiTemplates, &QCheckBox::toggled, this, [](bool checked) {
         QSettings().setValue(QStringLiteral("decor/keepAiTemplates"), checked);

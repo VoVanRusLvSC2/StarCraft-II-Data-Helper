@@ -789,14 +789,15 @@ QSet<int> mapInfoAiSlots(const QByteArray &bytes, bool *valid)
 
 void addAiBuildingSafety(const Sc2Archive &archive, sc2dh::decor::DecorationSafetyContext *context, QStringList *warnings)
 {
-    if (!context->keepAiBuildings) return;
+    // Collect metadata even when the option is off: the GUI can enable it
+    // after archive preflight without getting a different preview/export plan.
     QByteArray mapInfo;
     if (archive.readEntry(QStringLiteral("MapInfo"), &mapInfo, nullptr)) {
         bool valid = false;
         context->aiPlayerSlots.unite(mapInfoAiSlots(mapInfo, &valid));
         if (!valid) {
             for (int player = 0; player < 16; ++player) context->aiPlayerSlots.insert(player);
-            if (warnings) *warnings << QStringLiteral("Player controls could not be decoded; keeping all recognized buildings native.");
+            if (warnings && context->keepAiBuildings) *warnings << QStringLiteral("Player controls could not be decoded; keeping all recognized buildings native.");
         }
     }
     QHash<QString, QString> parents; QHash<QString, bool> flags;

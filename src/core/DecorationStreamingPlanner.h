@@ -133,7 +133,7 @@ struct DecorationSafetyContext
     QHash<QString, QStringList> referenceFilesByDoodadType;
     bool keepReferencedTypes = false;
     bool keepAiTemplates = true;
-    bool keepAiBuildings = true;
+    bool keepAiBuildings = false;
     QSet<int> aiPlayerSlots;
     QSet<QString> structureUnitTypes;
     QSet<QString> excludedUnitKeys;
