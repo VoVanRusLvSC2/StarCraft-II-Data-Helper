@@ -1068,6 +1068,16 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
             }
         }
         if (unit.dynamicCandidate) {
+            unit.safetyReferenceFiles = safetyContext.referenceFilesByUnitType.value(unit.type.trimmed().toCaseFolded());
+            if (!unit.safetyReferenceFiles.isEmpty()) {
+                unit.safetyReferenceFiles.removeDuplicates();
+                std::sort(unit.safetyReferenceFiles.begin(), unit.safetyReferenceFiles.end());
+                unit.dynamicCandidate = false;
+                unit.staticOnlyReason = QStringLiteral("Unit type referenced by trigger/script in %1.")
+                                            .arg(unit.safetyReferenceFiles.join(QStringLiteral(", ")));
+            }
+        }
+        if (unit.dynamicCandidate) {
             unit.safetyReferenceFiles = externalReferenceFiles(unit, safetyContext);
             if (!unit.safetyReferenceFiles.isEmpty()) {
                 unit.dynamicCandidate = false;

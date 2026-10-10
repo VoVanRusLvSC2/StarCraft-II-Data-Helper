@@ -121,6 +121,7 @@ struct DecorationSafetyContext
     QSet<QString> excludedDoodadKeys;
     QHash<QString, int> forcedZoneByDoodadKey;
     QHash<QString, QString> staticOnlyReasonByDoodadType;
+    QHash<QString, QStringList> referenceFilesByUnitType;
     QSet<QString> excludedUnitKeys;
     QSet<QString> excludedUnitTypeKeys;
 };

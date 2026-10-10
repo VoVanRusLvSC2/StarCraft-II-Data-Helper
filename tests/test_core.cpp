@@ -386,6 +386,7 @@ private slots:
     void decorationStreamingRegionEntryRestoresVisibility();
     void decorationStreamingPreservesNullableTintAndTerrainObjects();
     void decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads();
+    void decorationMapCopyKeepsTriggerReferencedUnitTypes();
     void decorationStreamingKeepsExternallyReferencedDoodadsStatic();
     void decorationStreamingSupportsManualAssignmentOverrides();
     void decorationStreamingSupportsSparseZoneIds();
@@ -7422,14 +7423,14 @@ void CoreTests::decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads()
     const auto result = sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
     QVERIFY2(result.success, qPrintable(result.error));
     QCOMPARE(result.removedDoodads, 5);
-    QCOMPARE(result.removedUnits, 2); // A bridge-shaped unit is not a terrain object.
+    QCOMPARE(result.removedUnits, 1); // Marine is queried by type; the bridge-shaped unit remains eligible.
     Sc2Archive archive;
     QVERIFY2(archive.load(output, &error), qPrintable(error));
     QByteArray kept;
     QByteArray runtime;
     QVERIFY(archive.readEntry(QStringLiteral("Objects"), &kept, &error));
     QVERIFY(archive.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error));
-    for (const char *type : {"CustomSurface", "CinematicWalls"}) {
+    for (const char *type : {"CustomSurface", "CinematicWalls", "Marine"}) {
         QVERIFY(kept.contains(type));
         QVERIFY(!runtime.contains(type));
     }
@@ -7457,6 +7458,87 @@ void CoreTests::decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads()
     QVERIFY2(visibility.success, qPrintable(visibility.error));
     QCOMPARE(visibility.visibilityControlledDoodads, 5);
     QVERIFY(!QFileInfo::exists(request.outputArchivePath));
+#endif
+}
+
+void CoreTests::decorationMapCopyKeepsTriggerReferencedUnitTypes()
+{
+#ifndef SC2DH_USE_STORMLIB
+    QSKIP("StormLib archive writer is unavailable.");
+#else
+    const QByteArray objects = QByteArrayLiteral(
+        "<PlacedObjects>"
+        "<ObjectUnit Id=\"601\" UnitType=\"CommandCenter\" Player=\"1\" Position=\"10,10,0\"/>"
+        "<ObjectUnit Id=\"602\" UnitType=\"CommandCenter\" Player=\"6\" Position=\"20,20,0\"/>"
+        "<ObjectUnit Id=\"603\" UnitType=\"Marine\" Player=\"10\" Position=\"30,30,0\"/>"
+        "</PlacedObjects>");
+    const QVector<QPair<QString, QByteArray>> references = {
+        {QStringLiteral("scripts/spawn.galaxy"), QByteArrayLiteral(
+            "// UnitGroup(\"Marine\", 1, RegionEntireMap(), null, 0);\n"
+            "/* const string example = \"Marine\"; */\n"
+            "void SpawnHero() { unit cc = UnitGroupUnit(UnitGroup(\"CommandCenter\", 1, RegionEntireMap(), null, 0), 1);"
+            " UnitCreate(1, \"Hero\", 0, 1, UnitGetPosition(cc), 0); Lookup(\"MarineOther\"); }")},
+        {QStringLiteral("Triggers"), QByteArrayLiteral(
+            "<TriggerData><Element Type=\"Param\" Id=\"CCType\"><Value>CommandCenter</Value>"
+            "<ValueType Type=\"gamelink\"/><ValueGameType Type=\"Unit\"/></Element>"
+            "<!-- <Value>Marine</Value> --><Element Type=\"Comment\"><Value>Marine</Value></Element></TriggerData>")},
+        {QStringLiteral("TriggerLibs/Spawn.SC2Lib"), QByteArrayLiteral(
+            "<TriggerData><Library Id=\"Spawn\"><Element Type=\"FunctionDef\">"
+            "<ScriptCode><![CDATA[// Lookup(\"Marine\");\n"
+            "FindSpawnAnchor(\"CommandCenter\");]]></ScriptCode></Element></Library></TriggerData>")}
+    };
+    for (const auto &reference : references) {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString source = QDir(dir.path()).filePath(QStringLiteral("Source.SC2Map"));
+        const QString output = QDir(dir.path()).filePath(QStringLiteral("Output.SC2Map"));
+        QString error;
+        QVERIFY2(createTestMpqArchive(source, {
+            {QStringLiteral("Objects"), objects},
+            {QStringLiteral("MapScript.galaxy"), QByteArrayLiteral("void InitMap() {}")},
+            {reference.first, reference.second},
+            {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog><CUnit id=\"Marine\"/></Catalog>")},
+            {QStringLiteral("Preload.xml"), QByteArrayLiteral("<Preload><Unit id=\"Marine\"/></Preload>")},
+            {QStringLiteral("enUS.SC2Data/LocalizedData/GameStrings.txt"), QByteArrayLiteral("Unit/Name/Marine=Marine\n")}
+        }, &error), qPrintable(error));
+        sc2dh::decor::DecorOptimizedMapRequest request;
+        request.sourceArchivePath = source;
+        request.outputArchivePath = output;
+        request.zones = {{1, QStringLiteral("Map"), 0, 0, 50, 50}};
+        sc2dh::decor::DecorationMapCopyService service;
+        const auto safety = service.inspectSafety(request, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        const auto files = safety.referenceFilesByUnitType.value(QStringLiteral("commandcenter"));
+        QCOMPARE(files.size(), 1);
+        QCOMPARE(QString(files.first()).replace(QLatin1Char('\\'), QLatin1Char('/')), reference.first);
+        QVERIFY(!safety.referenceFilesByUnitType.contains(QStringLiteral("marine")));
+        const auto result = service.createOptimizedCopy(request);
+        QVERIFY2(result.success, qPrintable(result.error));
+        QCOMPARE(result.removedUnits, 1);
+        QCOMPARE(result.patch.artifacts.plan.staticOnlyUnits.size(), 2);
+        for (int index : result.patch.artifacts.plan.staticOnlyUnits) {
+            const auto &unit = result.patch.artifacts.plan.units[index];
+            QCOMPARE(unit.type, QStringLiteral("CommandCenter"));
+            QVERIFY(QString(unit.staticOnlyReason).replace(QLatin1Char('\\'), QLatin1Char('/')).contains(reference.first));
+        }
+        Sc2Archive archive;
+        QVERIFY(archive.load(output, &error));
+        QByteArray kept, runtime;
+        QVERIFY(archive.readEntry(QStringLiteral("Objects"), &kept, &error));
+        QVERIFY(archive.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error));
+        QCOMPARE(kept.count("UnitType=\"CommandCenter\""), 2);
+        QVERIFY(!kept.contains("UnitType=\"Marine\""));
+        QVERIFY(!runtime.contains("\"CommandCenter\""));
+        QVERIFY(runtime.contains("\"Marine\""));
+        const QString restored = QDir(dir.path()).filePath(QStringLiteral("Restored.SC2Map"));
+        const auto restore = service.restoreGalaxyCopy({output, restored});
+        QVERIFY2(restore.success, qPrintable(restore.error));
+        QCOMPARE(restore.restoredUnits, 1);
+        QVERIFY(archive.load(restored, &error));
+        QVERIFY(archive.readEntry(QStringLiteral("Objects"), &kept, &error));
+        QCOMPARE(kept.count("UnitType=\"CommandCenter\""), 2);
+        QCOMPARE(kept.count("UnitType=\"Marine\""), 1);
+    }
 #endif
 }
 

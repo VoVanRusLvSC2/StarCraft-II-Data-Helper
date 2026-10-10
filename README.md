@@ -68,8 +68,10 @@ address recreated actors with their original catalog ID and Doodad alias. Those
 group commands do not exclude every placement of the type. Unknown uses of a
 doodad-type string in executable Galaxy conservatively keep that type native.
 Galaxy comments do not count as type references. Computed type names/custom
-enumeration wrappers require manual **Keep in map** exclusions. Broad unit-group
-queries keep their existing behavior and do not automatically exclude all units.
+enumeration wrappers require manual **Keep in map** exclusions. A concrete unit
+type used in GUI triggers or Galaxy keeps every placed unit of that type in
+`Objects`, including type-based group lookups used to find a hero's spawn anchor.
+An unfiltered query for all units does not automatically exclude every type.
 CLI `--keep-doodad-id` and `--keep-doodad-type` offer repeatable explicit exclusions
 when a whole cinematic area should stay native.
 The runtime uses the actor returned directly by `ActorCreate`, so creation of
@@ -188,9 +190,12 @@ with the reason shown in Preview.
 
 Only simple unit placements that can be recreated safely are moved. A direct
 trigger or script reference to a **specific unit** (by its ID or name) keeps
-that unit in the map. Generic trigger operations that enumerate or affect
-**all units in a Region** do **not** count as references to each individual
-unit and do not block their conversion. Such operations may see different
+that unit in the map. A reference to its **unit type**, such as
+`UnitGroup("CommandCenter", ...)`, keeps all placements of that type; Preview
+names the referencing file. Comments, catalog definitions and preload entries
+alone do not count as trigger references. Generic operations that enumerate
+**all units in a Region**, without a concrete type, do not block conversion.
+Such operations may see different
 units before and after you call `Create_<RegionName>()`; check the
 timing of your triggers and use **Keep in map** for units that must exist from
 map start. Preview the result before applying the copy.

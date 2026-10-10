@@ -705,6 +705,79 @@ QSet<int> actorRegionTypeArguments(const QVector<sc2dh::galaxy::Token> &tokens)
     return result;
 }
 
+void addUnitTypeReference(sc2dh::decor::DecorationSafetyContext *context,
+                          const QString &key, const QString &entry)
+{
+    QStringList &files = context->referenceFilesByUnitType[key];
+    if (!files.contains(entry))
+        files << entry;
+}
+
+void protectAllUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
+                         const QSet<QString> &types, const QString &entry)
+{
+    for (const QString &type : types)
+        addUnitTypeReference(context, type, entry);
+}
+
+void scanGalaxyUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
+                         const QVector<sc2dh::galaxy::Token> &tokens,
+                         const QSet<QString> &types, const QString &entry)
+{
+    // Even a lookup in a helper or an assignment to a variable needs the
+    // original units to exist before the region's Create function is called.
+    for (const auto &token : tokens) {
+        const QString key = token.value.toCaseFolded();
+        if (token.literal && types.contains(key))
+            addUnitTypeReference(context, key, entry);
+    }
+}
+
+void scanTriggerUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
+                          const QString &text, const QSet<QString> &types,
+                          const QString &entry)
+{
+    if (types.isEmpty())
+        return;
+    const QString fileName = QFileInfo(entry).fileName().toLower();
+    const bool triggerFile = fileName == QStringLiteral("triggers")
+        || fileName.endsWith(QStringLiteral(".sc2triggers"))
+        || fileName.endsWith(QStringLiteral(".sc2lib"));
+    pugi::xml_document document;
+    const QByteArray utf8 = text.toUtf8();
+    const bool valid = bool(document.load_buffer(utf8.constData(), utf8.size()));
+    const bool triggerRoot = QString::fromUtf8(document.document_element().name()) == QStringLiteral("TriggerData");
+    if (!triggerFile && !triggerRoot)
+        return; // Catalog definitions, preload lists and localized text are not trigger uses.
+    if (!valid) {
+        protectAllUnitTypes(context, types, entry);
+        return;
+    }
+    QVector<pugi::xml_node> pending{document.document_element()};
+    while (!pending.isEmpty()) {
+        const auto node = pending.takeLast();
+        const QString name = QString::fromUtf8(node.name());
+        if (name.compare(QStringLiteral("Comment"), Qt::CaseInsensitive) == 0
+            || QString::fromUtf8(node.attribute("Type").value()) == QStringLiteral("Comment"))
+            continue;
+        // Value carries GUI game links; ScriptCode carries custom Galaxy.
+        if (name == QStringLiteral("Value") || name == QStringLiteral("ScriptCode")) {
+            const QString value = QString::fromUtf8(node.text().get()).trimmed();
+            const QString key = value.toCaseFolded();
+            if (types.contains(key))
+                addUnitTypeReference(context, key, entry);
+            bool complete = true;
+            const auto tokens = sc2dh::galaxy::lex(value, &complete);
+            scanGalaxyUnitTypes(context, tokens, types, entry);
+            if (!complete && name == QStringLiteral("ScriptCode"))
+                protectAllUnitTypes(context, types, entry);
+        }
+        for (auto child : node.children())
+            if (child.type() == pugi::node_element)
+                pending << child;
+    }
+}
+
 sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive &archive,
                                                                 const QByteArray &objectsBytes,
                                                                 const sc2dh::decor::DecorOptimizedMapRequest &request,
@@ -719,6 +792,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
     QSet<QString> tokenKeys;
     QSet<QString> phraseKeys;
     QSet<QString> doodadTypes;
+    QSet<QString> unitTypes;
     for (const sc2dh::decor::DoodadPlacement &doodad : doodads) {
         const QString typeKey = doodad.type.trimmed().toCaseFolded();
         if (!typeKey.isEmpty())
@@ -735,6 +809,8 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
     }
     if (request.mode == sc2dh::decor::DecorationOptimizationMode::RecreateActors) {
         for (const sc2dh::decor::UnitPlacement &unit : units) {
+            if (!unit.type.trimmed().isEmpty())
+                unitTypes.insert(unit.type.trimmed().toCaseFolded());
             for (const QString &value : {unit.id, unit.name}) {
                 const QString key = value.trimmed().toCaseFolded();
                 if (key.isEmpty())
@@ -746,7 +822,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
             }
         }
     }
-    if (tokenKeys.isEmpty() && phraseKeys.isEmpty() && doodadTypes.isEmpty())
+    if (tokenKeys.isEmpty() && phraseKeys.isEmpty() && doodadTypes.isEmpty() && unitTypes.isEmpty())
         return context;
     const PhraseMatcher phraseMatcher(phraseKeys);
 
@@ -758,6 +834,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
         QString readError;
         if (!archive.readEntry(entry, &bytes, &readError)) {
             addReferencesForAllKeys(&context, tokenKeys, phraseKeys, entry);
+            protectAllUnitTypes(&context, unitTypes, entry);
             if (warnings)
                 *warnings << QStringLiteral("Decoration safety: treated all decor and units as referenced by unreadable text entry %1: %2")
                                  .arg(entry, readError);
@@ -780,6 +857,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
                 continue;
             }
             addReferencesForAllKeys(&context, tokenKeys, phraseKeys, entry);
+            protectAllUnitTypes(&context, unitTypes, entry);
             if (warnings)
                 *warnings << QStringLiteral("Decoration safety: treated all decor and units as referenced by undecodable text entry %1.")
                                  .arg(entry);
@@ -793,6 +871,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
             // only the exact type argument of those verified helpers.
             bool complete = true;
             const auto tokens = sc2dh::galaxy::lex(text, &complete);
+            scanGalaxyUnitTypes(&context, tokens, unitTypes, entry);
             const auto compatibleArguments = actorRegionTypeArguments(tokens);
             for (int i = 0; i < tokens.size(); ++i) {
                 const auto &token = tokens[i];
@@ -804,10 +883,13 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
                         QStringLiteral("Static-only: doodad type referenced by an unknown Galaxy operation in %1.").arg(entry));
             }
             if (!complete) {
+                protectAllUnitTypes(&context, unitTypes, entry);
                 for (const QString &key : doodadTypes)
                     context.staticOnlyReasonByDoodadType.insert(key,
                         QStringLiteral("Static-only: incomplete Galaxy safety scan in %1.").arg(entry));
             }
+        } else {
+            scanTriggerUnitTypes(&context, text, unitTypes, entry);
         }
         // Visibility-only mode keeps collision data intact, but hiding a
         // catalog-defined footprint/pathing doodad would still create an

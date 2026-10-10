@@ -44,12 +44,16 @@ command line. It always writes a new `.SC2Map` unless you explicitly use
 `--overwrite` for the output path.
 
 For each selected Region, the copy removes supported doodads and simple units
-with no direct ID/name references in scripts or triggers. One Galaxy function
+with no ID/name or concrete unit-type references in scripts or GUI triggers. One Galaxy function
 per Region, such as `Create_Map_1()` for a Region named `Map_1`, recreates both
 without batch functions; `Clear_Map_1()` removes the generated objects. Call them from
 your map triggers when the Region should appear or disappear. Unsupported or
-directly referenced placements stay static. Broad actions such as “all units
-in Region” do not count as direct references: they will see fewer units before
+referenced placements stay static. A lookup such as `UnitGroup("CommandCenter", ...)`
+keeps all command centers in native `Objects`, so a hero-spawn trigger can still
+find its anchor. Preview identifies the referencing file. Comments, unit catalog
+definitions and preload entries alone do not trigger this protection. Broad
+actions such as “all units in Region” without a concrete type do not count as
+direct references: they will see fewer units before
 `Create` and after `Clear`.
 
 ```powershell
