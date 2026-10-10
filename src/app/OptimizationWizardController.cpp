@@ -156,6 +156,7 @@ void OptimizationWizardController::applyPlan()
     int reviewOnlyCleanupSkipped = 0;
     int automaticFollowUpCleanupChanges = 0;
     int serviceSkippedRecommendations = 0;
+    bool skipSelectedRenames = false;
 
     const bool protectExternalConsumers = window->m_result.externalConsumersUnknown;
     const auto reloadWorkingAnalysis = [window, protectExternalConsumers](const QString &rootFolder, AnalysisResult *analysis, QString *errorMessage)
@@ -399,6 +400,11 @@ void OptimizationWizardController::applyPlan()
             warnings << message;
         }
     };
+    const auto recordUnavailableRenames = [&](const QStringList &messages)
+    {
+        notes << QStringLiteral("Rename To Standard was skipped: no selected items remained eligible after reference safety checks.");
+        recordServiceMessages(messages);
+    };
     const auto preflightSelectedRenames = [&](const AnalysisResult &analysis, QString *errorMessage)
     {
         if (selection.rename.isEmpty())
@@ -410,6 +416,11 @@ void OptimizationWizardController::applyPlan()
             return true;
 
         const RenamePreviewReport preview = window->m_referenceRenamer.preview(analysis, plan);
+        if (preview.noApplicableItems) {
+            skipSelectedRenames = true;
+            recordUnavailableRenames(preview.warnings);
+            return true;
+        }
         if (preview.valid)
             return true;
 
@@ -611,7 +622,7 @@ void OptimizationWizardController::applyPlan()
                 }
             }
 
-            if (failure.isEmpty() && !selection.rename.isEmpty())
+            if (failure.isEmpty() && !selection.rename.isEmpty() && !skipSelectedRenames)
             {
                 updateApplyProgress(55, QStringLiteral("Applying rename changes"), QStringLiteral("Building one safe batch rename plan"));
                 QStringList renamePlanNotes;
@@ -625,7 +636,11 @@ void OptimizationWizardController::applyPlan()
                     const RenameApplyResult result = window->m_referenceRenamer.apply(
                         current, combinedRenamePlan, workspace.path(), window->m_whitelistIds,
                         makeRenameProgress(56, 8));
-                    if (!result.success)
+                    if (result.noApplicableItems)
+                    {
+                        recordUnavailableRenames(result.warnings);
+                    }
+                    else if (!result.success)
                     {
                         failure = result.error;
                     }
@@ -913,7 +928,7 @@ void OptimizationWizardController::applyPlan()
             }
         }
 
-        if (failure.isEmpty() && !selection.rename.isEmpty())
+        if (failure.isEmpty() && !selection.rename.isEmpty() && !skipSelectedRenames)
         {
             updateApplyProgress(60, QStringLiteral("Applying rename changes"), QStringLiteral("Building one safe batch rename plan"));
             QStringList renamePlanNotes;
@@ -927,7 +942,11 @@ void OptimizationWizardController::applyPlan()
                 const RenameApplyResult result = window->m_referenceRenamer.apply(
                     current, combinedRenamePlan, window->m_rootFolder, window->m_whitelistIds,
                     makeRenameProgress(61, 17));
-                if (!result.success)
+                if (result.noApplicableItems)
+                {
+                    recordUnavailableRenames(result.warnings);
+                }
+                else if (!result.success)
                 {
                     failure = result.error;
                 }

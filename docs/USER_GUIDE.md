@@ -19,6 +19,11 @@ catalog XML files.
 6. Apply changes with backup enabled.
 7. Open the result in StarCraft II Editor and test the affected maps.
 
+In the Optimization Wizard, if reference safety checks exclude every selected
+rename item, the rename step is skipped and its reasons appear in the summary.
+The other selected steps can continue. Invalid rename results and file errors
+still stop the batch before it saves the affected files.
+
 ## Decoration and unused objects
 
 In the GUI, open **Map Performance**, search for map Regions by name or ID,

@@ -416,6 +416,7 @@ private slots:
     void objectsUnclassifiedTokenBlocksRename();
     void referenceRenameRewritesDeclaredAlertLink();
     void referenceRenameBlocksBinaryReferences();
+    void referenceRenameDistinguishesSkippedStepFromFailure();
     void referenceRenameDoesNotRewriteFilterFields();
     void referenceRenameDoesNotRewriteUntypedEnumValues();
     void referenceRenameDoesNotRewriteParentFields();
@@ -3951,6 +3952,7 @@ void CoreTests::referenceRenameBlocksBinaryReferences()
 
     const RenamePreviewReport preview = ReferenceRenamer().preview(analysis, plan);
     QVERIFY(!preview.valid);
+    QVERIFY(preview.noApplicableItems);
     const QString previewNotes = (preview.warnings + preview.conflicts).join(QStringLiteral(" "));
     QVERIFY(previewNotes.contains(QStringLiteral("non-rewritable strong references")));
     QVERIFY(previewNotes.contains(QStringLiteral("binary-unconfirmed")));
@@ -3958,11 +3960,82 @@ void CoreTests::referenceRenameBlocksBinaryReferences()
 
     const RenameApplyResult applied = ReferenceRenamer().apply(analysis, plan, dir.path(), {});
     QVERIFY(!applied.success);
+    QVERIFY(applied.noApplicableItems);
     QVERIFY(applied.warnings.join(QStringLiteral(" ")).contains(QStringLiteral("Model.m3")));
 
     QFile unchanged(xmlPath);
     QVERIFY(unchanged.open(QIODevice::ReadOnly));
     QCOMPARE(unchanged.readAll(), originalXml);
+}
+
+void CoreTests::referenceRenameDistinguishesSkippedStepFromFailure()
+{
+    QTemporaryDir dir;
+    const QString path = QDir(dir.path()).absoluteFilePath(QStringLiteral("Units.xml"));
+    const QString binaryPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("Protected.m3"));
+    const QByteArray original = QByteArrayLiteral("<Catalog><CUnit id=\"ProtectedUnit\"/><CUnit id=\"FreeUnit\"/></Catalog>");
+    QVERIFY(writeTextFile(path, original));
+    QByteArray binary;
+    binary.append('\0');
+    binary.append("ProtectedUnit");
+    binary.append('\0');
+    QVERIFY(writeTextFile(binaryPath, binary));
+    FolderAnalyzer analyzer;
+    AnalysisResult analysis;
+    QString error;
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+    const auto itemFor = [&](const QString &id) {
+        RenamePlanItem item;
+        for (int i = 0; i < analysis.nodes.size(); ++i)
+            if (analysis.nodes[i].elementName == QStringLiteral("CUnit") && analysis.nodes[i].id == id)
+                item.nodeIndex = i;
+        item.oldId = id;
+        item.newId = id + QStringLiteral("Renamed");
+        item.selected = true;
+        return item;
+    };
+    RenamePlan safe;
+    safe.valid = true;
+    safe.items << itemFor(QStringLiteral("FreeUnit"));
+    QVERIFY(safe.items[0].nodeIndex >= 0);
+    ReferenceRenamer renamer;
+    RenamePlan invalid = safe;
+    invalid.valid = false;
+    invalid.conflicts << QStringLiteral("Conflicting target ID.");
+    QVERIFY(!renamer.preview(analysis, invalid).noApplicableItems);
+    const auto invalidApply = renamer.apply(analysis, invalid, dir.path(), {});
+    QVERIFY(!invalidApply.success);
+    QVERIFY(!invalidApply.noApplicableItems);
+
+    // A missing source is a hard failure, even if the wizard is allowed to
+    // continue after a step whose entire selection was filtered out.
+    QVERIFY(QFile::remove(path));
+    const auto missing = renamer.preview(analysis, safe);
+    QVERIFY(!missing.valid);
+    QVERIFY(!missing.noApplicableItems);
+    const auto missingApply = renamer.apply(analysis, safe, dir.path(), {});
+    QVERIFY(!missingApply.success);
+    QVERIFY(!missingApply.noApplicableItems);
+    QVERIFY(writeTextFile(path, original));
+    QVERIFY2(analyzer.analyzeFolder(dir.path(), {}, &analysis, &error), qPrintable(error));
+
+    RenamePlan mixed;
+    mixed.valid = true;
+    mixed.items << itemFor(QStringLiteral("ProtectedUnit")) << itemFor(QStringLiteral("FreeUnit"));
+    const auto preview = renamer.preview(analysis, mixed);
+    QVERIFY2(preview.valid, qPrintable(preview.conflicts.join(QStringLiteral("\n"))));
+    QVERIFY(!preview.noApplicableItems);
+    QCOMPARE(preview.identitiesRenamed, 1);
+    const auto applied = renamer.apply(analysis, mixed, dir.path(), {});
+    QVERIFY2(applied.success, qPrintable(applied.error));
+    QVERIFY(!applied.noApplicableItems);
+    QCOMPARE(applied.identitiesRenamed, 1);
+    QFile output(path);
+    QVERIFY(output.open(QIODevice::ReadOnly));
+    const QByteArray bytes = output.readAll();
+    QVERIFY(bytes.contains("id=\"ProtectedUnit\""));
+    QVERIFY(!bytes.contains("ProtectedUnitRenamed"));
+    QVERIFY(bytes.contains("id=\"FreeUnitRenamed\""));
 }
 
 void CoreTests::referenceRenameDoesNotRewriteFilterFields()

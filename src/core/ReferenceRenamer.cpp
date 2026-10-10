@@ -898,8 +898,11 @@ QString buildReport(const AnalysisResult &analysis, const RenamePlan &plan, cons
 bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QString, QByteArray> *staged,
              RewriteResult *totals, QStringList *files, QStringList *warnings, QString *error,
              bool collectChanges, const ReferenceRenamer::ProgressCallback &progress,
-             QHash<QString, QString> *appliedRenames = nullptr)
+             QHash<QString, QString> *appliedRenames = nullptr,
+             bool *noApplicableItems = nullptr)
 {
+    if (noApplicableItems)
+        *noApplicableItems = false;
     QHash<QString, QVector<PendingRename>> pendingByFile;
     QStringList unsafeIds;
     QStringList blockedReferenceIds;
@@ -995,6 +998,8 @@ bool prepare(const AnalysisResult &analysis, const RenamePlan &plan, QHash<QStri
                               + (blockedReferenceIds.size() > 12 ? QStringLiteral("; ...") : QString()));
     }
     if (pendingByFile.isEmpty()) {
+        if (noApplicableItems)
+            *noApplicableItems = true;
         *error = QStringLiteral("No selected rename items are available.");
         return false;
     }
@@ -1261,10 +1266,10 @@ RenamePreviewReport ReferenceRenamer::preview(const AnalysisResult &analysis, co
     QStringList prepareWarnings;
     QString error;
     if (plan.valid && !prepare(analysis, plan, &staged, &rewriteResult, &result.filesChanged,
-                               &prepareWarnings, &error, true, {}, &appliedRenames)) {
+                               &prepareWarnings, &error, true, {}, &appliedRenames, &result.noApplicableItems)) {
         const QString suffix = QFileInfo(analysis.rootFolder).suffix().toLower();
         const bool archive = suffix.startsWith(QStringLiteral("sc2"));
-        if (!archive) {
+        if (!archive || result.noApplicableItems) {
             result.conflicts << error;
         } else {
             // Archive extraction is ephemeral; provide a serialized-node planning
@@ -1325,7 +1330,7 @@ RenameApplyResult ReferenceRenamer::apply(const AnalysisResult &analysis, const 
     QStringList warnings;
     QHash<QString, QString> appliedRenames;
     if (!prepare(analysis, plan, &staged, &rewriteResult, &absoluteFiles,
-                 &warnings, &result.error, false, progress, &appliedRenames)) {
+                 &warnings, &result.error, false, progress, &appliedRenames, &result.noApplicableItems)) {
         result.warnings = warnings;
         return result;
     }

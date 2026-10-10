@@ -9,6 +9,9 @@
 struct RenamePreviewReport
 {
     bool valid = false;
+    // All requested items were filtered out before any files were staged.
+    // A batch may skip this step; standalone Rename still remains disabled.
+    bool noApplicableItems = false;
     RenamePlan plan;
     QStringList filesChanged;
     QStringList referenceChanges;
@@ -22,6 +25,7 @@ struct RenamePreviewReport
 struct RenameApplyResult
 {
     bool success = false;
+    bool noApplicableItems = false;
     QString backupFolder;
     QStringList changedFiles;
     QHash<QString, QString> appliedRenames;
