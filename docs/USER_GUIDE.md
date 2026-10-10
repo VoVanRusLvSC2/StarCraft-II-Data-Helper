@@ -33,6 +33,18 @@ which placements can be converted and which stay static. **Create
 Galaxy-Converted Map Copy** writes a separate `.SC2Map` with the generated
 Galaxy file and keeps the source map unchanged.
 
+**Create GUI action and Region preset** optionally adds an editable Action
+Definition. Set its display name (default **Create Map Environment From Galaxy**)
+and the preset name (default **Galaxy Map Region**). Preset values use the selected
+Region names; a native GUI **Switch** calls that Region's Galaxy Create function
+in each case. Existing single-statement Create calls become GUI action calls.
+The runtime script is imported, and a missing GUI/script include is added.
+Includes use the extensionless Galaxy path. CLI: `--gui-action`,
+`--gui-action-name <name>` and `--gui-preset-name <name>`.
+Galaxy-based placement restoration keeps the GUI action and connects it to the
+restored runtime stubs. Optional exact-backup rollback also restores the original
+Triggers and localized trigger strings; it refuses to overwrite later GUI edits.
+
 **Include restore backup files (JSON/XML)** is off by default and remembered
 between sessions. Enable it for a separate exact rollback backup. The normal
 **Rebuild Placements from Galaxy** operation reads placement statements and

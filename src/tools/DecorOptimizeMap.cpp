@@ -534,6 +534,7 @@ struct CliOptions
     bool restore = false;
     bool galaxyOnly = false;
     bool writeRestoreSidecars = false;
+    sc2dh::decor::DecorGuiActionOptions guiAction;
     QString sourcePath;
     QString outputPath;
     QString zonesPath;
@@ -569,6 +570,9 @@ QString usageText()
         "  --restore                  Rebuild native placements from executable SC2DataHelper Galaxy (no JSON backup).\n"
         "  --galaxy-only              Export .galaxy and support XML files; do not write a map or GUI Triggers.\n"
         "  --restore-sidecars         Include optional JSON rollback backup and import XML (off by default).\n"
+        "  --gui-action               Add a GUI Action Definition, Region preset and Switch cases.\n"
+        "  --gui-action-name <name>    Display name (enables GUI action generation).\n"
+        "  --gui-preset-name <name>    Preset display name (enables GUI action generation).\n"
         "  --visibility-only            Keep Objects unchanged; add hide/restore actor visibility API (requires --zones).\n"
         "  --padding <tiles>           Non-negative auto-grid padding. Default: 0.\n"
         "  --prefix <name>             Name used by Create_<name>_<RegionId>(). Default: Game_area.\n"
@@ -642,13 +646,16 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
 
         if (name == QStringLiteral("--overwrite") || name == QStringLiteral("--visibility-only")
             || name == QStringLiteral("--region-names") || name == QStringLiteral("--restore-sidecars")
-            || name == QStringLiteral("--map-regions") || name == QStringLiteral("--restore") || name == QStringLiteral("--galaxy-only")) {
+            || name == QStringLiteral("--map-regions") || name == QStringLiteral("--restore") || name == QStringLiteral("--galaxy-only")
+            || name == QStringLiteral("--gui-action")) {
             if (equals >= 0) {
                 if (error)
                     *error = QStringLiteral("%1 does not accept a value.").arg(name);
                 return false;
             }
-            if (name == QStringLiteral("--overwrite"))
+            if (name == QStringLiteral("--gui-action"))
+                options->guiAction.enabled = true;
+            else if (name == QStringLiteral("--overwrite"))
                 options->overwrite = true;
             else if (name == QStringLiteral("--region-names"))
                 options->useRegionNames = true;
@@ -662,6 +669,10 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
                 options->writeRestoreSidecars = true;
             else
                 options->visibilityOnly = true;
+        } else if (name == QStringLiteral("--gui-action-name") || name == QStringLiteral("--gui-preset-name")) {
+            options->guiAction.enabled = true;
+            QString *target = name == QStringLiteral("--gui-action-name") ? &options->guiAction.actionName : &options->guiAction.presetName;
+            if (!consumeOptionValue(args, &i, suppliedValue, target, error)) return false;
         } else if (name == QStringLiteral("--zones")) {
             if (!consumeOptionValue(args, &i, suppliedValue, &options->zonesPath, error))
                 return false;
@@ -764,6 +775,10 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
     }
     options->sourcePath = positional.at(0);
     options->outputPath = positional.at(1);
+    if (options->guiAction.enabled && (options->restore || options->visibilityOnly || options->galaxyOnly)) {
+        if (error) *error = QStringLiteral("GUI action generation requires a recreated map copy, not restore, visibility-only or Galaxy-only export.");
+        return false;
+    }
     if (options->galaxyOnly && (options->overwrite || !options->outputPath.endsWith(QStringLiteral(".galaxy"), Qt::CaseInsensitive))) {
         if (error) *error = QStringLiteral("--galaxy-only requires a new .galaxy output and cannot use --overwrite.");
         return false;
@@ -879,6 +894,7 @@ int main(int argc, char *argv[])
             QStringLiteral("Static-only: doodad type explicitly kept by user."));
     request.overwriteExisting = cli.overwrite;
     request.writeRestoreSidecars = cli.writeRestoreSidecars;
+    request.guiAction = cli.guiAction;
     request.dryRun = cli.galaxyOnly;
 
     const DecorOptimizedMapResult result = DecorationMapCopyService().createOptimizedCopy(request);

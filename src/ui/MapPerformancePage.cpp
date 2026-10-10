@@ -1156,6 +1156,30 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
         QSettings().setValue(QStringLiteral("decor/writeRestoreSidecars"), enabled);
     });
     form->addRow(m_restoreSidecars);
+    m_createGuiAction = new QCheckBox(tr("Create GUI action and Region preset"), decorGroup);
+    m_createGuiAction->setObjectName(QStringLiteral("decorCreateGuiAction"));
+    m_createGuiAction->setChecked(QSettings().value(QStringLiteral("decor/createGuiAction"), false).toBool());
+    m_createGuiAction->setToolTip(tr("Create an editable Action Definition with a Region preset and Switch cases calling the Galaxy functions. Add the Galaxy connection when missing."));
+    m_guiActionName = new QLineEdit(QSettings().value(QStringLiteral("decor/guiActionName"), QStringLiteral("Create Map Environment From Galaxy")).toString(), decorGroup);
+    m_guiPresetName = new QLineEdit(QSettings().value(QStringLiteral("decor/guiPresetName"), QStringLiteral("Galaxy Map Region")).toString(), decorGroup);
+    m_guiActionName->setObjectName(QStringLiteral("decorGuiActionName"));
+    m_guiPresetName->setObjectName(QStringLiteral("decorGuiPresetName"));
+    m_guiActionName->setEnabled(m_createGuiAction->isChecked());
+    m_guiPresetName->setEnabled(m_createGuiAction->isChecked());
+    form->addRow(m_createGuiAction);
+    form->addRow(tr("GUI action name"), m_guiActionName);
+    form->addRow(tr("Region preset name"), m_guiPresetName);
+    connect(m_createGuiAction, &QCheckBox::toggled, this, [this](bool enabled) {
+        QSettings().setValue(QStringLiteral("decor/createGuiAction"), enabled);
+        m_guiActionName->setEnabled(enabled);
+        m_guiPresetName->setEnabled(enabled);
+    });
+    connect(m_guiActionName, &QLineEdit::editingFinished, this, [this] {
+        QSettings().setValue(QStringLiteral("decor/guiActionName"), m_guiActionName->text());
+    });
+    connect(m_guiPresetName, &QLineEdit::editingFinished, this, [this] {
+        QSettings().setValue(QStringLiteral("decor/guiPresetName"), m_guiPresetName->text());
+    });
     decorControls->addLayout(form, 1);
 
     auto *buttonLayout = new QVBoxLayout();
@@ -1267,6 +1291,9 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
         m_galaxyPreview->setPlainText(tr("Generation settings changed. Press Preview to rebuild the exact removal list and Galaxy code."));
     };
     connect(m_prefixEdit, &QLineEdit::textChanged, this, invalidatePreview);
+    connect(m_createGuiAction, &QCheckBox::toggled, this, invalidatePreview);
+    connect(m_guiActionName, &QLineEdit::textChanged, this, invalidatePreview);
+    connect(m_guiPresetName, &QLineEdit::textChanged, this, invalidatePreview);
     updateOptimizationScope();
 
     auto *decorScroll = new QScrollArea(contentSplitter);
@@ -2330,8 +2357,19 @@ void MapPerformancePage::updateDecorPreview()
         summary += QStringLiteral(" Archive creation re-scans scripts/triggers and can keep more doodads static.");
         m_decorSummaryLabel->setText(summary);
         m_galaxyPreview->setPlainText(decorationConversionPreviewText(m_recreatePreview, m_decorZones, options));
+        if (m_createGuiAction->isChecked()) {
+            QString guiPreview = QStringLiteral("\n\nGUI Action Definition: %1\nRegion preset: %2\nSwitch cases:\n")
+                                     .arg(m_guiActionName->text().trimmed(), m_guiPresetName->text().trimmed());
+            for (const auto &zone : plan.zones)
+                guiPreview += QStringLiteral("  %1 -> Create_%2();\n").arg(zone.zoneName,
+                    sc2dh::decor::galaxyRegionFunctionStem(plan, zone, options));
+            guiPreview += tr("The Galaxy file is imported and its GUI/script connection is added when missing.");
+            m_galaxyPreview->appendPlainText(guiPreview);
+        }
         m_createCopyButton->setEnabled(!sourceArchivePath().isEmpty()
                                        && m_recreatePreview.valid
+                                       && (!m_createGuiAction->isChecked() || (!m_guiActionName->text().trimmed().isEmpty()
+                                                                            && !m_guiPresetName->text().trimmed().isEmpty()))
                                        && (!m_recreatePreview.removedDoodadIndices.isEmpty()
                                            || !m_recreatePreview.removedUnitIndices.isEmpty()));
 }
@@ -2406,6 +2444,9 @@ void MapPerformancePage::createDecorOptimizedMapCopy()
     request.mode = sc2dh::decor::DecorationOptimizationMode::RecreateActors;
     request.overwriteExisting = overwrite;
     request.writeRestoreSidecars = m_restoreSidecars->isChecked();
+    request.guiAction.enabled = m_createGuiAction->isChecked();
+    request.guiAction.actionName = m_guiActionName->text().trimmed();
+    request.guiAction.presetName = m_guiPresetName->text().trimmed();
     const int selectedCount = m_recreatePreview.plan.doodads.size() + m_recreatePreview.plan.units.size();
     const int skippedCount = m_recreatePreview.plan.unassignedDoodads.size()
         + m_recreatePreview.plan.unassignedUnits.size();

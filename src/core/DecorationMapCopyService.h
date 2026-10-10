@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/DecorationStreamingPlanner.h"
+#include "core/DecorationGuiActionBuilder.h"
 
 #include <QString>
 
@@ -22,6 +23,7 @@ struct DecorOptimizedMapRequest
     // Optional exact-backup JSON and external import XML. Default exports
     // keep compact identity/catalog bookkeeping in Galaxy for script import.
     bool writeRestoreSidecars = false;
+    DecorGuiActionOptions guiAction;
     // Build the exact archive-aware safety plan, but do not create or mutate
     // any output file. Diagnostic runners use this to report the same plan
     // that an apply operation would execute.

@@ -99,6 +99,9 @@ private:
     QLineEdit *m_regionSearch = nullptr;
     QCheckBox *m_showSelectedOnly = nullptr;
     QCheckBox *m_restoreSidecars = nullptr;
+    QCheckBox *m_createGuiAction = nullptr;
+    QLineEdit *m_guiActionName = nullptr;
+    QLineEdit *m_guiPresetName = nullptr;
     QLineEdit *m_prefixEdit = nullptr;
     QStandardItemModel *m_doodadModel = nullptr;
     QTableView *m_doodadTable = nullptr;

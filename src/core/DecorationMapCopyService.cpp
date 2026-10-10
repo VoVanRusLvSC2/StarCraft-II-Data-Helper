@@ -1144,6 +1144,69 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
         }
     }
 
+    if (request.guiAction.enabled) {
+        if (request.mode != DecorationOptimizationMode::RecreateActors) {
+            result.error = QStringLiteral("GUI create action requires Galaxy recreation mode.");
+            return result;
+        }
+        QByteArray triggers;
+        if (archiveContainsEntry(archive, QStringLiteral("Triggers"))
+            && !archive.readEntry(QStringLiteral("Triggers"), &triggers, &error)) {
+            result.error = error;
+            return result;
+        }
+        const auto gui = buildDecorGuiAction(triggers, result.patch.replacementEntries.value(request.mapScriptEntry),
+                                             request.runtimeEntry, result.patch.artifacts.plan,
+                                             request.galaxyOptions, request.guiAction);
+        if (!gui.valid) { result.error = gui.error; return result; }
+        result.patch.replacementEntries.insert(QStringLiteral("Triggers"), gui.triggers);
+        result.patch.replacementEntries.insert(request.mapScriptEntry, gui.mapScript);
+        QStringList locales;
+        for (const QString &entry : archive.allEntries()) {
+            const QString normalized = normalizedEntry(entry).toLower();
+            if (normalized.endsWith(QStringLiteral("/localizeddata/triggerstrings.txt"))) locales << entry;
+        }
+        if (locales.isEmpty()) locales << QStringLiteral("enUS.SC2Data/LocalizedData/TriggerStrings.txt");
+        QStringList keys = gui.triggerStrings.keys();
+        std::sort(keys.begin(), keys.end());
+        QJsonObject guiRollback;
+        const auto rememberGuiEntry = [&](const QString &entry, const QByteArray &replacement) {
+            const bool existed = archiveContainsEntry(archive, entry);
+            QByteArray original;
+            if (existed && !archive.readEntry(entry, &original, &error)) return false;
+            guiRollback.insert(entry, QJsonObject{
+                {QStringLiteral("existed"), existed},
+                {QStringLiteral("original"), QString::fromLatin1(compressedBase64(original))},
+                {QStringLiteral("originalSha256"), QString::fromLatin1(sha256Hex(original))},
+                {QStringLiteral("generatedSha256"), QString::fromLatin1(sha256Hex(replacement))}});
+            return true;
+        };
+        if (request.writeRestoreSidecars && !rememberGuiEntry(QStringLiteral("Triggers"), gui.triggers)) {
+            result.error = error; return result;
+        }
+        for (const QString &entry : locales) {
+            QByteArray strings;
+            if (archiveContainsEntry(archive, entry) && !archive.readEntry(entry, &strings, &error)) {
+                result.error = error; return result;
+            }
+            if (!strings.isEmpty() && !strings.endsWith('\n')) strings += '\n';
+            for (const QString &key : keys)
+                strings += key.toUtf8() + '=' + gui.triggerStrings.value(key).toUtf8() + '\n';
+            result.patch.replacementEntries.insert(entry, strings);
+            if (request.writeRestoreSidecars && !rememberGuiEntry(entry, strings)) {
+                result.error = error; return result;
+            }
+        }
+        if (request.writeRestoreSidecars) {
+            auto manifest = QJsonDocument::fromJson(result.patch.replacementEntries.value(DecorRestoreManifestEntry)).object();
+            manifest.insert(QStringLiteral("guiRollback"), guiRollback);
+            manifest.insert(QStringLiteral("optimizedMapScriptSha256"), QString::fromLatin1(sha256Hex(gui.mapScript)));
+            result.patch.replacementEntries.insert(DecorRestoreManifestEntry, QJsonDocument(manifest).toJson(QJsonDocument::Compact));
+        }
+        result.warnings << QStringLiteral("GUI action '%1' with Region preset '%2' was added; %3 existing Custom Script call(s) became GUI actions.")
+                               .arg(request.guiAction.actionName, request.guiAction.presetName).arg(gui.convertedCalls);
+    }
+
     if (request.mode == DecorationOptimizationMode::VisibilityOnly) {
         result.visibilityControlledDoodads = result.patch.visibilityArtifacts.controlledDoodadIndices.size();
     } else {
@@ -1622,6 +1685,33 @@ DecorRestoreMapResult DecorationMapCopyService::restoreOptimizedCopy(const Decor
     QHash<QString, QByteArray> replacements{{objectsEntry, originalObjects},
                                                    {mapScriptEntry, originalMapScript}};
     QStringList removals{runtimeEntry, DecorRestoreManifestEntry};
+    const auto guiRollback = manifest.value(QStringLiteral("guiRollback")).toObject();
+    for (auto it = guiRollback.begin(); it != guiRollback.end(); ++it) {
+        const QString normalized = normalizedEntry(it.key()).toLower();
+        if (normalized != QStringLiteral("triggers")
+            && !normalized.endsWith(QStringLiteral("/localizeddata/triggerstrings.txt"))) {
+            discardStaging(); result.error = QStringLiteral("Invalid GUI rollback entry."); return result;
+        }
+        const auto record = it.value().toObject();
+        QByteArray generated;
+        if (!source.readEntry(it.key(), &generated, &error)
+            || sha256Hex(generated) != record.value(QStringLiteral("generatedSha256")).toString().toLatin1()) {
+            discardStaging(); result.error = QStringLiteral("GUI trigger data changed after export; exact rollback refused."); return result;
+        }
+        const QByteArray compressed = QByteArray::fromBase64(record.value(QStringLiteral("original")).toString().toLatin1());
+        if (compressed.size() < 4
+            || (quint32(uchar(compressed[0])) << 24 | quint32(uchar(compressed[1])) << 16
+                | quint32(uchar(compressed[2])) << 8 | quint32(uchar(compressed[3]))) > 64 * 1024 * 1024) {
+            discardStaging(); result.error = QStringLiteral("Invalid GUI rollback payload."); return result;
+        }
+        const QByteArray original = qUncompress(compressed);
+        if (sha256Hex(original) != record.value(QStringLiteral("originalSha256")).toString().toLatin1()) {
+            discardStaging(); result.error = QStringLiteral("GUI rollback checksum mismatch."); return result;
+        }
+        if (record.value(QStringLiteral("existed")).toBool()) replacements.insert(it.key(), original);
+        else if (original.isEmpty()) removals << it.key();
+        else { discardStaging(); result.error = QStringLiteral("Invalid absent GUI entry rollback."); return result; }
+    }
     if (archiveContainsEntry(source, DecorImportEntry)) removals << DecorImportEntry;
     if (!actorCatalogEntry.isEmpty()) {
         if (originalActorCatalogExisted) replacements.insert(actorCatalogEntry, originalActorCatalog);
@@ -1664,6 +1754,14 @@ DecorRestoreMapResult DecorationMapCopyService::restoreOptimizedCopy(const Decor
         }
     }
     DecorOptimizedMapResult analysis;
+    for (auto it = guiRollback.begin(); it != guiRollback.end(); ++it) {
+        QByteArray verified;
+        const bool exists = verification.readEntry(it.key(), &verified, nullptr);
+        if ((replacements.contains(it.key()) && (!exists || verified != replacements.value(it.key())))
+            || (removals.contains(it.key()) && exists)) {
+            discardStaging(); result.error = QStringLiteral("GUI rollback verification failed."); return result;
+        }
+    }
     if (!verifyArchiveWithFolderAnalysis(verification, &analysis, &error)) {
         discardStaging();
         result.error = QStringLiteral("Restored map failed full analysis: %1").arg(error);

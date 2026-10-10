@@ -387,6 +387,8 @@ private slots:
     void decorationStreamingPreservesNullableTintAndTerrainObjects();
     void decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads();
     void decorationMapCopyKeepsTriggerReferencedUnitTypes();
+    void decorationGuiActionBuildsEditableSwitchAndIncludes();
+    void decorationGuiActionMapCopyAndRestore();
     void decorationStreamingKeepsExternallyReferencedDoodadsStatic();
     void decorationStreamingSupportsManualAssignmentOverrides();
     void decorationStreamingSupportsSparseZoneIds();
@@ -7611,6 +7613,163 @@ void CoreTests::decorationMapCopyKeepsTriggerReferencedUnitTypes()
         QVERIFY(archive.readEntry(QStringLiteral("Objects"), &kept, &error));
         QCOMPARE(kept.count("UnitType=\"CommandCenter\""), 2);
         QCOMPARE(kept.count("UnitType=\"Marine\""), 1);
+    }
+#endif
+}
+
+void CoreTests::decorationGuiActionBuildsEditableSwitchAndIncludes()
+{
+    using namespace sc2dh::decor;
+    DecorationStreamingPlan plan;
+    plan.zones = {{35, {}, {}, QStringLiteral("Map_1_Doodads")},
+                  {36, {}, {}, QStringLiteral("Map_2_Doodads")},
+                  {8, {}, {}, QStringLiteral("Map_3")}};
+    GalaxyGenerationOptions options;
+    options.useRegionNames = true;
+    options.publicFunctionNames = {{35, QStringLiteral("Map_1")}, {36, QStringLiteral("Map_2")}, {8, QStringLiteral("Map_3")}};
+    const QByteArray triggers = QByteArrayLiteral(
+        "<TriggerData><Root><Item Type=\"CustomScript\" Id=\"A001\"/><Item Type=\"Trigger\" Id=\"A002\"/></Root>"
+        "<Element Type=\"CustomScript\" Id=\"A001\"><ScriptCode>include \"scripts/sc2dh_decor_opt.galaxy\"</ScriptCode></Element>"
+        "<Element Type=\"Trigger\" Id=\"A002\"><Action Type=\"FunctionCall\" Id=\"A003\"/><Action Type=\"FunctionCall\" Id=\"A004\"/></Element>"
+        "<Element Type=\"FunctionCall\" Id=\"A003\"><FunctionDef Type=\"FunctionDef\" Library=\"Ntve\" Id=\"00000123\"/><ScriptCode>Create_Map_1();</ScriptCode></Element>"
+        "<Element Type=\"FunctionCall\" Id=\"A004\"><FunctionDef Type=\"FunctionDef\" Library=\"Ntve\" Id=\"00000123\"/><SubFunctionType Type=\"SubFuncType\" Library=\"Ntve\" Id=\"363CE97C\"/><ScriptCode>Create_Map_2();</ScriptCode></Element>"
+        "</TriggerData>");
+    const QByteArray script = QByteArrayLiteral(
+        "include \"TriggerLibs/NativeLib\"\ninclude \"scripts/sc2dh_decor_opt.galaxy\"\n"
+        "void Create_Map_1();\n// Create_Map_2();\n"
+        "void InitMap() { Create_Map_1(); Create_Map_3(); string example = \"Create_Map_2();\"; }\n");
+    DecorGuiActionOptions gui;
+    gui.enabled = true;
+    gui.actionName = QStringLiteral("My map loader");
+    gui.presetName = QStringLiteral("My areas");
+    const auto result = buildDecorGuiAction(triggers, script, QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), plan, options, gui);
+    QVERIFY2(result.valid, qPrintable(result.error));
+    QCOMPARE(result.convertedCalls, 2);
+    QCOMPARE(result.mapScript.count("include \"scripts/sc2dh_decor_opt\""), 1);
+    QVERIFY(!result.mapScript.contains("include \"scripts/sc2dh_decor_opt.galaxy\""));
+    QVERIFY(result.mapScript.contains("void Create_Map_1();")); // Forward declarations are not rewritten as action calls.
+    QVERIFY(result.mapScript.contains("// Create_Map_2();"));
+    QVERIFY(result.mapScript.contains("\"Create_Map_2();\""));
+    pugi::xml_document doc;
+    QVERIFY(doc.load_buffer(result.triggers.constData(), size_t(result.triggers.size())));
+    auto root = doc.child("TriggerData");
+    QSet<QString> ids;
+    pugi::xml_node function, preset, switchCall;
+    int cases = 0, customIncludes = 0;
+    for (auto e : root.children("Element")) {
+        const QString id = QString::fromUtf8(e.attribute("Id").value());
+        QVERIFY2(!ids.contains(id), qPrintable(id));
+        ids.insert(id);
+        const QString type = QString::fromUtf8(e.attribute("Type").value());
+        if (type == QStringLiteral("Preset")) preset = e;
+        if (type == QStringLiteral("FunctionDef")) function = e;
+        if (type == QStringLiteral("CustomScript")) ++customIncludes;
+        const QString nativeId = QString::fromUtf8(e.child("FunctionDef").attribute("Id").value());
+        if (nativeId == QStringLiteral("91C49196")) switchCall = e;
+        if (nativeId == QStringLiteral("3A1227AB")) ++cases;
+        if (id == QStringLiteral("A004")) {
+            QVERIFY(!e.child("ScriptCode"));
+            QCOMPARE(QString::fromUtf8(e.child("SubFunctionType").attribute("Id").value()), QStringLiteral("363CE97C"));
+        }
+    }
+    QVERIFY(function.child("FlagAction"));
+    QVERIFY(preset.child("PresetInteger"));
+    QCOMPARE(int(std::distance(preset.children("Item").begin(), preset.children("Item").end())), 3);
+    QVERIFY(switchCall);
+    QCOMPARE(cases, 3);
+    QCOMPARE(customIncludes, 1);
+    QVERIFY(result.triggerStrings.values().contains(QStringLiteral("My map loader")));
+    QVERIFY(result.triggerStrings.values().contains(QStringLiteral("My areas")));
+    for (const auto &zone : plan.zones) QVERIFY(result.triggerStrings.values().contains(zone.zoneName));
+    // Every local reference resolves to exactly one generated or preserved element.
+    QVector<pugi::xml_node> pending{root};
+    while (!pending.isEmpty()) {
+        const auto e = pending.takeLast();
+        if (e.attribute("Id") && !e.attribute("Library") && QString::fromUtf8(e.name()) != QStringLiteral("Element"))
+            QVERIFY(ids.contains(QString::fromUtf8(e.attribute("Id").value())));
+        for (auto child : e.children()) if (child.type() == pugi::node_element) pending << child;
+    }
+    const auto missing = buildDecorGuiAction({}, QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\nvoid InitMap() {}"),
+                                           QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), plan, options, gui);
+    QVERIFY2(missing.valid, qPrintable(missing.error));
+    QVERIFY(missing.triggers.contains("include &quot;scripts/sc2dh_decor_opt&quot;")
+            || missing.triggers.contains("include \"scripts/sc2dh_decor_opt\""));
+    QCOMPARE(missing.mapScript.count("include \"scripts/sc2dh_decor_opt\""), 1);
+    const auto onlyGalaxy = buildDecorGuiAction({}, script, QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), plan, options, gui);
+    QVERIFY2(onlyGalaxy.valid, qPrintable(onlyGalaxy.error));
+    QVERIFY(onlyGalaxy.triggers.contains("scripts/sc2dh_decor_opt"));
+    QCOMPARE(onlyGalaxy.mapScript.count("include \"scripts/sc2dh_decor_opt\""), 1);
+    QVERIFY(!buildDecorGuiAction(QByteArrayLiteral("<broken>"), script, QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), plan, options, gui).valid);
+    QVERIFY(!buildDecorGuiAction(result.triggers, result.mapScript, QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), plan, options, gui).valid);
+}
+
+void CoreTests::decorationGuiActionMapCopyAndRestore()
+{
+#ifndef SC2DH_USE_STORMLIB
+    QSKIP("StormLib archive writer is unavailable.");
+#else
+    using namespace sc2dh::decor;
+    const QByteArray objects = QByteArrayLiteral("<PlacedObjects><ObjectDoodad Id=\"101\" Type=\"FreeTree\" Position=\"10,10,0\"/></PlacedObjects>");
+    const QByteArray triggers = QByteArrayLiteral("<TriggerData><Root><Item Type=\"FunctionCall\" Id=\"A001\"/></Root><Element Type=\"FunctionCall\" Id=\"A001\"><FunctionDef Type=\"FunctionDef\" Library=\"Ntve\" Id=\"00000123\"/><ScriptCode>Create_Map_1();</ScriptCode></Element></TriggerData>");
+    const QByteArray mapScript = QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\nvoid InitMap() { Create_Map_1(); }");
+    const QByteArray strings = QByteArrayLiteral("Existing/Name=Keep me\n");
+    for (bool backup : {false, true}) {
+        QTemporaryDir dir;
+        const QString source = QDir(dir.path()).filePath(QStringLiteral("Source.SC2Map"));
+        const QString output = QDir(dir.path()).filePath(QStringLiteral("Gui.SC2Map"));
+        QString error;
+        QVERIFY2(createTestMpqArchive(source, {{QStringLiteral("Objects"), objects}, {QStringLiteral("MapScript.galaxy"), mapScript},
+            {QStringLiteral("Triggers"), triggers}, {QStringLiteral("enUS.SC2Data/LocalizedData/TriggerStrings.txt"), strings},
+            {QStringLiteral("ruRU.SC2Data/LocalizedData/TriggerStrings.txt"), strings}}, &error), qPrintable(error));
+        DecorOptimizedMapRequest request;
+        request.sourceArchivePath = source;
+        request.outputArchivePath = output;
+        request.zones = {{35, QStringLiteral("Map_1_Doodads"), 0, 0, 50, 50}, {8, QStringLiteral("Map_3"), 0, 0, 60, 60}};
+        request.galaxyOptions.useRegionNames = true;
+        request.galaxyOptions.publicFunctionNames = {{35, QStringLiteral("Map_1")}, {8, QStringLiteral("Map_3")}};
+        request.galaxyOptions.entireMapEntryZoneId = 8;
+        request.guiAction.enabled = true;
+        request.writeRestoreSidecars = backup;
+        DecorationMapCopyService service;
+        const auto result = service.createOptimizedCopy(request);
+        QVERIFY2(result.success, qPrintable(result.error));
+        QVERIFY(result.sourceUnchanged);
+        Sc2Archive archive;
+        QVERIFY(archive.load(output, &error));
+        QByteArray guiTriggers, guiScript, runtime, localized;
+        QVERIFY(archive.readEntry(QStringLiteral("Triggers"), &guiTriggers, &error));
+        QVERIFY(archive.readEntry(QStringLiteral("MapScript.galaxy"), &guiScript, &error));
+        QVERIFY(archive.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error));
+        QVERIFY(runtime.contains("void Create_Map_1()"));
+        QVERIFY(runtime.contains("void Create_Map_3()"));
+        QVERIFY(guiScript.contains("gf_SC2DH_MapEnvironment_"));
+        for (const QString &locale : {QStringLiteral("enUS"), QStringLiteral("ruRU")}) {
+            QVERIFY(archive.readEntry(locale + QStringLiteral(".SC2Data/LocalizedData/TriggerStrings.txt"), &localized, &error));
+            QVERIFY(localized.startsWith(strings));
+            QVERIFY(localized.contains("Create Map Environment From Galaxy"));
+            QVERIFY(localized.contains("Galaxy Map Region"));
+            QVERIFY(localized.contains("Map_1_Doodads"));
+        }
+        const QString restored = QDir(dir.path()).filePath(QStringLiteral("Restored.SC2Map"));
+        const auto restore = service.restoreGalaxyCopy({output, restored});
+        QVERIFY2(restore.success, qPrintable(restore.error));
+        QCOMPARE(restore.restoredDoodads, 1);
+        QVERIFY(archive.load(restored, &error));
+        QByteArray actual;
+        QVERIFY(archive.readEntry(QStringLiteral("Triggers"), &actual, &error));
+        QCOMPARE(actual, guiTriggers); // Editable GUI actions still call the restored runtime stubs.
+        if (backup) {
+            const QString exact = QDir(dir.path()).filePath(QStringLiteral("Exact.SC2Map"));
+            const auto rollback = service.restoreOptimizedCopy({output, exact});
+            QVERIFY2(rollback.success, qPrintable(rollback.error));
+            QVERIFY(archive.load(exact, &error));
+            QVERIFY(archive.readEntry(QStringLiteral("Triggers"), &actual, &error));
+            QCOMPARE(actual, triggers);
+            QVERIFY(archive.readEntry(QStringLiteral("enUS.SC2Data/LocalizedData/TriggerStrings.txt"), &actual, &error));
+            QCOMPARE(actual, strings);
+            QVERIFY(archive.readEntry(QStringLiteral("MapScript.galaxy"), &actual, &error));
+            QCOMPARE(actual, mapScript);
+        }
     }
 #endif
 }

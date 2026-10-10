@@ -137,6 +137,7 @@ target_sources(SC2DataHelper PRIVATE
     src/core/MapPreviewData.cpp
     src/core/DecorationMapCopyService.h
     src/core/DecorationMapCopyService.cpp
+    src/core/DecorationGuiActionBuilder.cpp
     src/core/XmlCleanupUtils.h
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.h
@@ -347,6 +348,7 @@ add_executable(SC2DataHelperTests
     src/core/MapRegionRepository.cpp
     src/core/MapPreviewData.cpp
     src/core/DecorationMapCopyService.cpp
+    src/core/DecorationGuiActionBuilder.cpp
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogEnumRepair.cpp
@@ -570,6 +572,7 @@ add_executable(SC2DecorOptimizeMap
     src/core/DecorationStreamingPlanner.cpp
     src/core/MapRegionRepository.cpp
     src/core/DecorationMapCopyService.cpp
+    src/core/DecorationGuiActionBuilder.cpp
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
@@ -615,6 +618,7 @@ add_executable(SC2Beta2RealMapValidation
     src/core/DecorationStreamingPlanner.cpp
     src/core/MapRegionRepository.cpp
     src/core/DecorationMapCopyService.cpp
+    src/core/DecorationGuiActionBuilder.cpp
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
@@ -675,6 +679,7 @@ add_executable(SC2CatalogAnalysisProbe
     src/core/DecorationStreamingPlanner.cpp
     src/core/MapRegionRepository.cpp
     src/core/DecorationMapCopyService.cpp
+    src/core/DecorationGuiActionBuilder.cpp
     src/core/XmlCleanupUtils.cpp
     src/core/SemanticDuplicateAnalyzer.cpp
     src/core/CatalogLinkSchema.cpp
