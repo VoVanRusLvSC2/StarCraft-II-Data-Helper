@@ -660,51 +660,6 @@ void scanXmlForStaticOnlyDoodadTypes(sc2dh::decor::DecorationSafetyContext *cont
     }
 }
 
-QSet<int> actorRegionTypeArguments(const QVector<sc2dh::galaxy::Token> &tokens)
-{
-    // These stock helpers send to the Doodad actor alias with ScopeContains
-    // <original actor ID>. They do not enumerate placed ObjectDoodad records.
-    // Export keeps both the original ID and its inherited alias, so these
-    // group commands can still address recreated actors. Unknown helpers and
-    // individual placement references remain protected.
-    const QHash<QString, QPair<int, int>> helpers = {
-        {QStringLiteral("libNtve_gf_PlayAnimationOnDoodadsInRegion"), {1, 6}},
-        {QStringLiteral("libNtve_gf_ShowHideDoodadsInRegion"), {2, 3}},
-        {QStringLiteral("libNtve_gf_KillDoodadsInRegion"), {1, 2}},
-        {QStringLiteral("libVCMI_gf_SendActorMessageToDoodadsInRegion"), {1, 3}}
-    };
-    QSet<int> result;
-    for (int i = 0; i + 1 < tokens.size(); ++i) {
-        const auto helper = helpers.constFind(tokens[i].raw);
-        if (helper == helpers.cend() || tokens[i + 1].raw != QStringLiteral("("))
-            continue;
-        QVector<QPair<int, int>> arguments;
-        int depth = 0, first = i + 2, end = first;
-        for (; end < tokens.size(); ++end) {
-            if (tokens[end].literal)
-                continue;
-            const QString raw = tokens[end].raw;
-            if (raw == QStringLiteral(")") && depth == 0) {
-                arguments.append({first, end});
-                break;
-            }
-            if (raw == QStringLiteral("(") || raw == QStringLiteral("[")) ++depth;
-            if (raw == QStringLiteral(")") || raw == QStringLiteral("]")) --depth;
-            if (raw == QStringLiteral(",") && depth == 0) {
-                arguments.append({first, end});
-                first = end + 1;
-            }
-        }
-        if (end == tokens.size() || arguments.size() != helper.value().second
-            || (end + 1 < tokens.size() && tokens[end + 1].raw == QStringLiteral("{")))
-            continue;
-        const auto range = arguments.at(helper.value().first);
-        if (range.second == range.first + 1 && tokens[range.first].literal)
-            result.insert(range.first);
-    }
-    return result;
-}
-
 void addUnitTypeReference(sc2dh::decor::DecorationSafetyContext *context,
                           const QString &key, const QString &entry)
 {
@@ -720,24 +675,47 @@ void protectAllUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
         addUnitTypeReference(context, type, entry);
 }
 
-void scanGalaxyUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
-                         const QVector<sc2dh::galaxy::Token> &tokens,
-                         const QSet<QString> &types, const QString &entry)
+void addDoodadTypeReference(sc2dh::decor::DecorationSafetyContext *context,
+                            const QString &type, const QString &entry)
 {
-    // Even a lookup in a helper or an assignment to a variable needs the
-    // original units to exist before the region's Create function is called.
-    for (const auto &token : tokens) {
-        const QString key = token.value.toCaseFolded();
-        if (token.literal && types.contains(key))
-            addUnitTypeReference(context, key, entry);
+    context->staticOnlyReasonByDoodadType.insert(type,
+        QStringLiteral("Static-only: doodad type referenced by trigger/script in %1.").arg(entry));
+}
+
+void protectAllPlacementTypes(sc2dh::decor::DecorationSafetyContext *context,
+                              const QSet<QString> &doodads, const QSet<QString> &units,
+                              const QString &entry)
+{
+    protectAllUnitTypes(context, units, entry);
+    for (const QString &type : doodads) addDoodadTypeReference(context, type, entry);
+}
+
+void scanGalaxyPlacementTypes(sc2dh::decor::DecorationSafetyContext *context,
+                         const QVector<sc2dh::galaxy::Token> &tokens,
+                         const QSet<QString> &doodads, const QSet<QString> &units,
+                         const QString &entry)
+{
+    // Only placements without concrete script/type references are exported.
+    // The lexer excludes comments; adjacent literal concatenations are resolved.
+    for (int i = 0; i < tokens.size(); ++i) {
+        if (!tokens[i].literal) continue;
+        QString key = tokens[i].value.toCaseFolded();
+        if (units.contains(key)) addUnitTypeReference(context, key, entry);
+        if (doodads.contains(key)) addDoodadTypeReference(context, key, entry);
+        for (int j = i + 1; j + 1 < tokens.size()
+             && tokens[j].raw == QStringLiteral("+") && tokens[j + 1].literal; j += 2) {
+            key += tokens[j + 1].value.toCaseFolded();
+            if (units.contains(key)) addUnitTypeReference(context, key, entry);
+            if (doodads.contains(key)) addDoodadTypeReference(context, key, entry);
+        }
     }
 }
 
-void scanTriggerUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
-                          const QString &text, const QSet<QString> &types,
+void scanTriggerPlacementTypes(sc2dh::decor::DecorationSafetyContext *context,
+                          const QString &text, const QSet<QString> &doodads, const QSet<QString> &units,
                           const QString &entry)
 {
-    if (types.isEmpty())
+    if (doodads.isEmpty() && units.isEmpty())
         return;
     const QString fileName = QFileInfo(entry).fileName().toLower();
     const bool triggerFile = fileName == QStringLiteral("triggers")
@@ -750,7 +728,7 @@ void scanTriggerUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
     if (!triggerFile && !triggerRoot)
         return; // Catalog definitions, preload lists and localized text are not trigger uses.
     if (!valid) {
-        protectAllUnitTypes(context, types, entry);
+        protectAllPlacementTypes(context, doodads, units, entry);
         return;
     }
     QVector<pugi::xml_node> pending{document.document_element()};
@@ -764,13 +742,13 @@ void scanTriggerUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
         if (name == QStringLiteral("Value") || name == QStringLiteral("ScriptCode")) {
             const QString value = QString::fromUtf8(node.text().get()).trimmed();
             const QString key = value.toCaseFolded();
-            if (types.contains(key))
-                addUnitTypeReference(context, key, entry);
+            if (units.contains(key)) addUnitTypeReference(context, key, entry);
+            if (doodads.contains(key)) addDoodadTypeReference(context, key, entry);
             bool complete = true;
             const auto tokens = sc2dh::galaxy::lex(value, &complete);
-            scanGalaxyUnitTypes(context, tokens, types, entry);
+            scanGalaxyPlacementTypes(context, tokens, doodads, units, entry);
             if (!complete && name == QStringLiteral("ScriptCode"))
-                protectAllUnitTypes(context, types, entry);
+                protectAllPlacementTypes(context, doodads, units, entry);
         }
         for (auto child : node.children())
             if (child.type() == pugi::node_element)
@@ -865,23 +843,12 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
         }
         scanTextForDoodadKeys(&context, entry, text, tokenKeys, phraseMatcher);
         if (entry.endsWith(QStringLiteral(".galaxy"), Qt::CaseInsensitive)) {
-            // Protect unknown uses of type IDs. Stock ActorRegionSend helpers
-            // work with recreated original-ID doodad actors; they do not need
-            // native placement records. Lex to exclude comments and classify
-            // only the exact type argument of those verified helpers.
+            // Keep every concrete doodad/unit type mentioned in executable
+            // Galaxy, including stock actor helpers. Generic region operations
+            // without an explicit type do not reference individual placements.
             bool complete = true;
             const auto tokens = sc2dh::galaxy::lex(text, &complete);
-            scanGalaxyUnitTypes(&context, tokens, unitTypes, entry);
-            const auto compatibleArguments = actorRegionTypeArguments(tokens);
-            for (int i = 0; i < tokens.size(); ++i) {
-                const auto &token = tokens[i];
-                if (!token.literal || compatibleArguments.contains(i))
-                    continue;
-                const QString key = token.value.toCaseFolded();
-                if (doodadTypes.contains(key))
-                    context.staticOnlyReasonByDoodadType.insert(key,
-                        QStringLiteral("Static-only: doodad type referenced by an unknown Galaxy operation in %1.").arg(entry));
-            }
+            scanGalaxyPlacementTypes(&context, tokens, doodadTypes, unitTypes, entry);
             if (!complete) {
                 protectAllUnitTypes(&context, unitTypes, entry);
                 for (const QString &key : doodadTypes)
@@ -889,7 +856,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
                         QStringLiteral("Static-only: incomplete Galaxy safety scan in %1.").arg(entry));
             }
         } else {
-            scanTriggerUnitTypes(&context, text, unitTypes, entry);
+            scanTriggerPlacementTypes(&context, text, doodadTypes, unitTypes, entry);
         }
         // Visibility-only mode keeps collision data intact, but hiding a
         // catalog-defined footprint/pathing doodad would still create an

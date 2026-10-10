@@ -35,7 +35,8 @@ Galaxy file and keeps the source map unchanged.
 
 **Create GUI action and Region preset** optionally adds an editable Action
 Definition. Set its display name (default **Create Map Environment From Galaxy**)
-and the preset name (default **Galaxy Map Region**). Preset values use the selected
+and the preset name (default **Galaxy Map Region**). The generated folder is placed
+at the top of the GUI trigger tree. Preset values use the selected
 Region names; a native GUI **Switch** calls that Region's Galaxy Create function
 in each case. Existing single-statement Create calls become GUI action calls.
 The runtime script is imported, and a missing GUI/script include is added.
@@ -61,7 +62,7 @@ command line. It always writes a new `.SC2Map` unless you explicitly use
 `--overwrite` for the output path.
 
 For each selected Region, the copy removes supported doodads and simple units
-with no ID/name or concrete unit-type references in scripts or GUI triggers. One Galaxy function
+with no ID/name or concrete doodad/unit-type references in scripts or GUI triggers. One Galaxy function
 per Region, such as `Create_Map_1()` for a Region named `Map_1`, recreates both
 without batch functions; `Clear_Map_1()` removes the generated objects. Call them from
 your map triggers when the Region should appear or disappear. Unsupported or

@@ -7497,7 +7497,7 @@ void CoreTests::decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads()
     request.zones = {{1, QStringLiteral("Map"), 0, 0, 50, 50}};
     const auto result = sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
     QVERIFY2(result.success, qPrintable(result.error));
-    QCOMPARE(result.removedDoodads, 5);
+    QCOMPARE(result.removedDoodads, 4);
     QCOMPARE(result.removedUnits, 1); // Marine is queried by type; the bridge-shaped unit remains eligible.
     Sc2Archive archive;
     QVERIFY2(archive.load(output, &error), qPrintable(error));
@@ -7505,15 +7505,15 @@ void CoreTests::decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads()
     QByteArray runtime;
     QVERIFY(archive.readEntry(QStringLiteral("Objects"), &kept, &error));
     QVERIFY(archive.readEntry(QStringLiteral("scripts/sc2dh_decor_opt.galaxy"), &runtime, &error));
-    for (const char *type : {"CustomSurface", "CinematicWalls", "Marine"}) {
+    for (const char *type : {"CustomSurface", "CinematicWalls", "Marine", "ActorRegionWall"}) {
         QVERIFY(kept.contains(type));
         QVERIFY(!runtime.contains(type));
     }
     QVERIFY(!kept.contains("FreeTree"));
     QVERIFY(runtime.contains("FreeTree"));
     QVERIFY(runtime.contains("SpacePlatform_Lantern_White"));
-    QVERIFY(!kept.contains("ActorRegionWall"));
-    QVERIFY(runtime.contains("ActorRegionWall"));
+    QVERIFY(kept.contains("ActorRegionWall"));
+    QVERIFY(!runtime.contains("\"ActorRegionWall\""));
     QVERIFY(runtime.contains("DecorOpt_SetTransform(a, transform);"));
     for (const char *type : {"IceCliff", "Aiur_City_Platform", "ProtossBridge"}) {
         QVERIFY(!kept.contains(type));
@@ -7531,7 +7531,7 @@ void CoreTests::decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads()
     request.outputArchivePath = QDir(dir.path()).filePath(QStringLiteral("SurfaceVisibility.SC2Map"));
     const auto visibility = sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
     QVERIFY2(visibility.success, qPrintable(visibility.error));
-    QCOMPARE(visibility.visibilityControlledDoodads, 5);
+    QCOMPARE(visibility.visibilityControlledDoodads, 4);
     QVERIFY(!QFileInfo::exists(request.outputArchivePath));
 #endif
 }
@@ -7546,21 +7546,27 @@ void CoreTests::decorationMapCopyKeepsTriggerReferencedUnitTypes()
         "<ObjectUnit Id=\"601\" UnitType=\"CommandCenter\" Player=\"1\" Position=\"10,10,0\"/>"
         "<ObjectUnit Id=\"602\" UnitType=\"CommandCenter\" Player=\"6\" Position=\"20,20,0\"/>"
         "<ObjectUnit Id=\"603\" UnitType=\"Marine\" Player=\"10\" Position=\"30,30,0\"/>"
+        "<ObjectDoodad Id=\"604\" Type=\"FreeTree\" Position=\"35,35,0\"/>"
+        "<ObjectDoodad Id=\"605\" Type=\"ReferencedDecor\" Position=\"40,40,0\"/>"
         "</PlacedObjects>");
     const QVector<QPair<QString, QByteArray>> references = {
         {QStringLiteral("scripts/spawn.galaxy"), QByteArrayLiteral(
             "// UnitGroup(\"Marine\", 1, RegionEntireMap(), null, 0);\n"
             "/* const string example = \"Marine\"; */\n"
             "void SpawnHero() { unit cc = UnitGroupUnit(UnitGroup(\"CommandCenter\", 1, RegionEntireMap(), null, 0), 1);"
-            " UnitCreate(1, \"Hero\", 0, 1, UnitGetPosition(cc), 0); Lookup(\"MarineOther\"); }")},
+            " UnitCreate(1, \"Hero\", 0, 1, UnitGetPosition(cc), 0); Lookup(\"MarineOther\");"
+            " FindType(\"Command\" + \"Center\"); HideDecor(\"ReferencedDecor\"); }\n"
+            "// Lookup(\"FreeTree\");")},
         {QStringLiteral("Triggers"), QByteArrayLiteral(
             "<TriggerData><Element Type=\"Param\" Id=\"CCType\"><Value>CommandCenter</Value>"
             "<ValueType Type=\"gamelink\"/><ValueGameType Type=\"Unit\"/></Element>"
-            "<!-- <Value>Marine</Value> --><Element Type=\"Comment\"><Value>Marine</Value></Element></TriggerData>")},
+            "<Element Type=\"Param\" Id=\"DecorType\"><Value>ReferencedDecor</Value><ValueGameType Type=\"Actor\"/></Element>"
+            "<!-- <Value>Marine</Value><Value>FreeTree</Value> --><Element Type=\"Comment\"><Value>Marine</Value><Value>FreeTree</Value></Element></TriggerData>")},
         {QStringLiteral("TriggerLibs/Spawn.SC2Lib"), QByteArrayLiteral(
             "<TriggerData><Library Id=\"Spawn\"><Element Type=\"FunctionDef\">"
             "<ScriptCode><![CDATA[// Lookup(\"Marine\");\n"
-            "FindSpawnAnchor(\"CommandCenter\");]]></ScriptCode></Element></Library></TriggerData>")}
+            "FindSpawnAnchor(\"CommandCenter\"); HideDecor(\"Referenced\" + \"Decor\");"
+            "// Lookup(\"FreeTree\");\n]]></ScriptCode></Element></Library></TriggerData>")}
     };
     for (const auto &reference : references) {
         QTemporaryDir dir;
@@ -7587,9 +7593,12 @@ void CoreTests::decorationMapCopyKeepsTriggerReferencedUnitTypes()
         QCOMPARE(files.size(), 1);
         QCOMPARE(QString(files.first()).replace(QLatin1Char('\\'), QLatin1Char('/')), reference.first);
         QVERIFY(!safety.referenceFilesByUnitType.contains(QStringLiteral("marine")));
+        QVERIFY(safety.staticOnlyReasonByDoodadType.contains(QStringLiteral("referenceddecor")));
+        QVERIFY(!safety.staticOnlyReasonByDoodadType.contains(QStringLiteral("freetree")));
         const auto result = service.createOptimizedCopy(request);
         QVERIFY2(result.success, qPrintable(result.error));
         QCOMPARE(result.removedUnits, 1);
+        QCOMPARE(result.removedDoodads, 1);
         QCOMPARE(result.patch.artifacts.plan.staticOnlyUnits.size(), 2);
         for (int index : result.patch.artifacts.plan.staticOnlyUnits) {
             const auto &unit = result.patch.artifacts.plan.units[index];
@@ -7605,10 +7614,15 @@ void CoreTests::decorationMapCopyKeepsTriggerReferencedUnitTypes()
         QVERIFY(!kept.contains("UnitType=\"Marine\""));
         QVERIFY(!runtime.contains("\"CommandCenter\""));
         QVERIFY(runtime.contains("\"Marine\""));
+        QVERIFY(kept.contains("Type=\"ReferencedDecor\""));
+        QVERIFY(!runtime.contains("\"ReferencedDecor\""));
+        QVERIFY(!kept.contains("Type=\"FreeTree\""));
+        QVERIFY(runtime.contains("\"FreeTree\""));
         const QString restored = QDir(dir.path()).filePath(QStringLiteral("Restored.SC2Map"));
         const auto restore = service.restoreGalaxyCopy({output, restored});
         QVERIFY2(restore.success, qPrintable(restore.error));
         QCOMPARE(restore.restoredUnits, 1);
+        QCOMPARE(restore.restoredDoodads, 1);
         QVERIFY(archive.load(restored, &error));
         QVERIFY(archive.readEntry(QStringLiteral("Objects"), &kept, &error));
         QCOMPARE(kept.count("UnitType=\"CommandCenter\""), 2);
@@ -7653,6 +7667,8 @@ void CoreTests::decorationGuiActionBuildsEditableSwitchAndIncludes()
     pugi::xml_document doc;
     QVERIFY(doc.load_buffer(result.triggers.constData(), size_t(result.triggers.size())));
     auto root = doc.child("TriggerData");
+    const auto firstItem = root.child("Root").child("Item");
+    QCOMPARE(QString::fromUtf8(firstItem.attribute("Type").value()), QStringLiteral("Category"));
     QSet<QString> ids;
     pugi::xml_node function, preset, switchCall;
     int cases = 0, customIncludes = 0;

@@ -62,11 +62,10 @@ are treated as surfaces. Ordinary cliffs, platforms, roads and ground-cover
 doodads remain eligible for conversion; visual appearance is not a surface
 classification. Local catalog footprint dependencies are checked separately. Terrain
 archive components are preserved. Direct placement references in triggers/scripts
-keep the referenced decor or unit in the map. Stock animation, visibility and
-destruction commands for a doodad type/Region use ActorRegionSend, which can
-address recreated actors with their original catalog ID and Doodad alias. Those
-group commands do not exclude every placement of the type. Unknown uses of a
-doodad-type string in executable Galaxy conservatively keep that type native.
+keep the referenced decor or unit in the map. Any concrete doodad or unit type
+used in GUI triggers or Galaxy keeps all placements of that type native,
+including stock animation, visibility and destruction commands for that type.
+Only placements without these references can be converted.
 Galaxy comments do not count as type references. Computed type names/custom
 enumeration wrappers require manual **Keep in map** exclusions. A concrete unit
 type used in GUI triggers or Galaxy keeps every placed unit of that type in

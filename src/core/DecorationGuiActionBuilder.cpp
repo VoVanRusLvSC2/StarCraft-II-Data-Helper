@@ -125,7 +125,9 @@ DecorGuiActionArtifacts buildDecorGuiAction(const QByteArray &triggers,
     auto items = root.child("Root");
     if (!items) items = root.prepend_child("Root");
     auto category = element("Category", categoryId);
-    reference(items, "Item", "Category", categoryId);
+    auto categoryItem = items.prepend_child("Item");
+    categoryItem.append_attribute("Type") = "Category";
+    categoryItem.append_attribute("Id") = categoryId.toUtf8().constData();
     reference(category, "Item", "Preset", presetId);
     reference(category, "Item", "FunctionDef", functionId);
     auto preset = element("Preset", presetId);
@@ -227,8 +229,9 @@ DecorGuiActionArtifacts buildDecorGuiAction(const QByteArray &triggers,
         const auto found = callIndices.constFind(sourceCode.trimmed());
         if (found == callIndices.cend()) continue;
         node.remove_child("ScriptCode");
-        node.remove_child("FunctionDef");
-        reference(node, "FunctionDef", "FunctionDef", functionId);
+        // Keep the original field order and parent/loop references intact.
+        node.child("FunctionDef").attribute("Id").set_value(functionId.toUtf8().constData());
+        node.child("FunctionDef").remove_attribute("Library");
         const QString argumentId = nextId();
         reference(node, "Parameter", "Param", argumentId);
         presetArgument(argumentId, found.value());
@@ -238,7 +241,7 @@ DecorGuiActionArtifacts buildDecorGuiAction(const QByteArray &triggers,
         const QString includeId = nextId();
         auto include = element("CustomScript", includeId);
         text(include, "ScriptCode", QStringLiteral("include \"%1\"\n").arg(includePath));
-        auto item = items.prepend_child("Item");
+        auto item = items.insert_child_after("Item", categoryItem);
         item.append_attribute("Type") = "CustomScript";
         item.append_attribute("Id") = includeId.toUtf8().constData();
         result.triggerStrings.insert(QStringLiteral("CustomScript/Name/%1").arg(includeId), QStringLiteral("Galaxy map environment include"));
