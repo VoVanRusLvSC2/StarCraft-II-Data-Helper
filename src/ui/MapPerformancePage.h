@@ -103,6 +103,8 @@ private:
     QLineEdit *m_guiActionName = nullptr;
     QLineEdit *m_guiPresetName = nullptr;
     QCheckBox *m_keepReferencedTypes = nullptr;
+    QCheckBox *m_keepAiTemplates = nullptr;
+    QCheckBox *m_keepAiBuildings = nullptr;
     QLineEdit *m_keepUnitTypes = nullptr;
     QLineEdit *m_prefixEdit = nullptr;
     QStandardItemModel *m_doodadModel = nullptr;

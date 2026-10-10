@@ -56,6 +56,19 @@ actors' zero-based variant indices into the map's native `Preload.xml` so their
 models are requested before actor creation. Restoration restores that file too.
 Standalone `--galaxy-only` exports include `.ActorData.xml` and `.Preload.xml`;
 import these at `Base.SC2Data/GameData/ActorData.xml` and `Preload.xml` respectively.
+When variants are exported, import `.ModelData.xml` at
+`Base.SC2Data/GameData/ModelData.xml` too. It enables variant preloading and
+prevents the engine from silently substituting variant zero for the saved index.
+All original model catalog data is restored byte-for-byte during reversal.
+
+**Keep initially hidden units and AI templates** is on by default. UnitHidden
+and UnitNoCreate placements stay native so the AI retains its base templates.
+Disabling it (CLI `--convert-ai-templates`) is experimental and requires checking
+the map's AI behavior; matching placement properties alone is insufficient.
+**Keep AI buildings in native placement** also defaults to on. It preserves
+structures belonging to Computer/Hostile slots from MapInfo, including local
+unit types inheriting the Structure attribute. Ordinary combat units remain
+eligible for conversion. CLI `--convert-ai-buildings` disables this protection.
 
 The installed `SC2DecorOptimizeMap.exe` offers the same conversion from a
 command line. It always writes a new `.SC2Map` unless you explicitly use

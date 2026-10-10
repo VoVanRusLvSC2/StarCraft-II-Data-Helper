@@ -4,12 +4,14 @@
 #include "core/FolderAnalyzer.h"
 #include "core/GalaxyReferenceSpans.h"
 #include "core/Sc2Archive.h"
+#include "core/UnitStructureDefaults.h"
 
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -26,6 +28,7 @@ namespace
 
 const QString DecorRestoreManifestEntry = QStringLiteral("sc2dh/decor_restore_v1.json");
 const QString DecorActorCatalogEntry = QStringLiteral("Base.SC2Data/GameData/ActorData.xml");
+const QString DecorModelCatalogEntry = QStringLiteral("Base.SC2Data/GameData/ModelData.xml");
 const QString DecorImportEntry = QStringLiteral("sc2dh/decor_import.xml");
 
 QByteArray sha256Hex(const QByteArray &bytes)
@@ -45,10 +48,12 @@ QByteArray restoredBytes(const QJsonObject &manifest, const QString &field)
 
 bool restorePreloadPatch(const Sc2Archive &source, QString galaxy,
                          QHash<QString, QByteArray> *replacements, QStringList *removals,
-                         QString *error)
+                         QString *error,
+                         const QString &entry = QStringLiteral("Preload.xml"),
+                         const QString &kind = QStringLiteral("preload"), const char *rootName = "Preload")
 {
     const auto fail = [&](const QString &message) { if (error) *error = message; return false; };
-    const QRegularExpression record(QStringLiteral("^// SC2DH preload rollback ([01]) ([a-f0-9]{64})$"), QRegularExpression::MultilineOption);
+    const QRegularExpression record(QStringLiteral("^// SC2DH %1 rollback ([01]) ([a-f0-9]{64})$").arg(kind), QRegularExpression::MultilineOption);
     if (!record.match(galaxy).hasMatch()) {
         QByteArray metadata;
         if (source.readEntry(DecorImportEntry, &metadata, nullptr)) {
@@ -61,11 +66,11 @@ bool restorePreloadPatch(const Sc2Archive &source, QString galaxy,
     const auto match = record.match(galaxy);
     if (!match.hasMatch()) return true; // Exports before native variant preload support.
     QByteArray current;
-    if (!source.readEntry(QStringLiteral("Preload.xml"), &current, error)
+    if (!source.readEntry(entry, &current, error)
         || sha256Hex(current) != match.captured(2).toLatin1())
-        return fail(QStringLiteral("Preload.xml changed after Galaxy export; no copy created."));
+        return fail(QStringLiteral("%1 changed after Galaxy export; no copy created.").arg(entry));
     QByteArray encoded;
-    const QRegularExpression part(QStringLiteral("^// SC2DH preload data ([A-Za-z0-9+/=]+)$"), QRegularExpression::MultilineOption);
+    const QRegularExpression part(QStringLiteral("^// SC2DH %1 data ([A-Za-z0-9+/=]+)$").arg(kind), QRegularExpression::MultilineOption);
     auto matches = part.globalMatch(galaxy);
     while (matches.hasNext()) encoded += matches.next().captured(1).toLatin1();
     const QByteArray compressed = QByteArray::fromBase64(encoded);
@@ -77,21 +82,20 @@ bool restorePreloadPatch(const Sc2Archive &source, QString galaxy,
     if (original.size() != size) return fail(QStringLiteral("Invalid Galaxy preload cleanup data."));
     if (match.captured(1) == QStringLiteral("1")) {
         pugi::xml_document doc;
-        if (!doc.load_buffer(original.constData(), size_t(original.size())) || !doc.child("Preload"))
+        if (!doc.load_buffer(original.constData(), size_t(original.size())) || !doc.child(rootName))
             return fail(QStringLiteral("Invalid original Preload.xml."));
-        replacements->insert(QStringLiteral("Preload.xml"), original);
+        replacements->insert(entry, original);
     } else {
         if (!original.isEmpty()) return fail(QStringLiteral("Invalid absent-preload cleanup data."));
-        *removals << QStringLiteral("Preload.xml");
+        *removals << entry;
     }
     return true;
 }
 
 bool verifyPreloadPatch(const Sc2Archive &archive, const QHash<QString, QByteArray> &replacements,
-                        const QStringList &removals)
+                        const QStringList &removals, const QString &entry = QStringLiteral("Preload.xml"))
 {
     QByteArray actual;
-    const QString entry = QStringLiteral("Preload.xml");
     if (replacements.contains(entry)) return archive.readEntry(entry, &actual, nullptr) && actual == replacements.value(entry);
     if (removals.contains(entry)) return !archive.readEntry(entry, &actual, nullptr);
     return true;
@@ -741,6 +745,85 @@ void scanTriggerPlacementTypes(sc2dh::decor::DecorationSafetyContext *context,
     }
 }
 
+QSet<int> mapInfoAiSlots(const QByteArray &bytes, bool *valid)
+{
+    // Versioned MapInfo headers have changed. The player table retains the
+    // pid/controller/color/race/start/AI/decal record layout documented by
+    // sc2reader. Accept one unambiguous complete table beginning with Neutral.
+    *valid = false;
+    if (bytes.size() < 32 || bytes.size() > 4 * 1024 * 1024 || bytes.left(4) != "IpaM") return {};
+    const auto u32 = [&](qsizetype p) {
+        return quint32(quint8(bytes[p])) | (quint32(quint8(bytes[p+1])) << 8)
+            | (quint32(quint8(bytes[p+2])) << 16) | (quint32(quint8(bytes[p+3])) << 24);
+    };
+    int bestCount = 0; QSet<int> best;
+    for (qsizetype offset = 16; offset + 4 < bytes.size(); ++offset) {
+        const auto count = u32(offset);
+        if (count < 2 || count > 16) continue;
+        qsizetype p = offset + 4;
+        QSet<int> pids, ai; bool ok = true;
+        const auto string = [&]() -> QByteArray {
+            const auto end = bytes.indexOf('\0', p);
+            if (end < p || end-p > 1024) { ok = false; return {}; }
+            const auto result = bytes.mid(p, end-p); p = end+1; return result;
+        };
+        for (quint32 i = 0; i < count && ok; ++i) {
+            if (p+9 > bytes.size()) { ok = false; break; }
+            const int pid = quint8(bytes[p++]); const auto control = u32(p); p += 4;
+            const auto color = u32(p); p += 4;
+            const auto race = string();
+            if (pid > 15 || pids.contains(pid) || control > 4 || (color > 15 && color != 0xffffffff)
+                || (i == 0 && (pid != 0 || control != 3))
+                || (!race.isEmpty() && race != "Terr" && race != "Prot" && race != "Zerg" && race != "RAND" && race != "Random")) { ok = false; break; }
+            pids.insert(pid);
+            if (p+12 > bytes.size()) { ok = false; break; }
+            p += 12; string();
+            if (control == 2 || control == 4) ai.insert(pid);
+        }
+        if (!ok) continue;
+        if (int(count) > bestCount) { bestCount = int(count); best = ai; *valid = true; }
+        else if (int(count) == bestCount && ai != best) *valid = false;
+    }
+    return best;
+}
+
+void addAiBuildingSafety(const Sc2Archive &archive, sc2dh::decor::DecorationSafetyContext *context, QStringList *warnings)
+{
+    if (!context->keepAiBuildings) return;
+    QByteArray mapInfo;
+    if (archive.readEntry(QStringLiteral("MapInfo"), &mapInfo, nullptr)) {
+        bool valid = false;
+        context->aiPlayerSlots.unite(mapInfoAiSlots(mapInfo, &valid));
+        if (!valid) {
+            for (int player = 0; player < 16; ++player) context->aiPlayerSlots.insert(player);
+            if (warnings) *warnings << QStringLiteral("Player controls could not be decoded; keeping all recognized buildings native.");
+        }
+    }
+    QHash<QString, QString> parents; QHash<QString, bool> flags;
+    for (const auto &type : sc2BuiltinStructureTypes()) flags.insert(type, true);
+    for (const auto &entry : archive.allEntries()) {
+        if (!entry.endsWith(QStringLiteral(".xml"), Qt::CaseInsensitive)
+            || !normalizedEntry(entry).contains(QStringLiteral("/GameData/"), Qt::CaseInsensitive)) continue;
+        QByteArray data; pugi::xml_document doc;
+        if (!archive.readEntry(entry, &data, nullptr) || !doc.load_buffer(data.constData(), size_t(data.size()))) continue;
+        for (auto unit : doc.child("Catalog").children("CUnit")) {
+            const QString type = QString::fromUtf8(unit.attribute("id").value()).toCaseFolded();
+            if (type.isEmpty()) continue;
+            if (unit.attribute("parent")) parents.insert(type, QString::fromUtf8(unit.attribute("parent").value()).toCaseFolded());
+            for (auto field : unit.children("Attributes"))
+                if (QString::fromUtf8(field.attribute("index").value()) == QStringLiteral("Structure")) flags.insert(type, field.attribute("value").as_bool());
+        }
+    }
+    QSet<QString> all;
+    for (auto i = flags.cbegin(); i != flags.cend(); ++i) all.insert(i.key());
+    for (auto i = parents.cbegin(); i != parents.cend(); ++i) all.insert(i.key());
+    for (const auto &type : all) {
+        QString current = type; QSet<QString> seen;
+        while (!flags.contains(current) && parents.contains(current) && !seen.contains(current)) { seen.insert(current); current = parents[current]; }
+        if (flags.value(current, false)) context->structureUnitTypes.insert(type);
+    }
+}
+
 sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive &archive,
                                                                 const QByteArray &objectsBytes,
                                                                 const sc2dh::decor::DecorOptimizedMapRequest &request,
@@ -748,6 +831,7 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
                                                                 QString *error)
 {
     sc2dh::decor::DecorationSafetyContext context = request.safetyContext;
+    addAiBuildingSafety(archive, &context, warnings);
     sc2dh::decor::DecorationStreamingPlanner planner;
     const QVector<sc2dh::decor::DoodadPlacement> doodads = planner.parseObjects(objectsBytes);
     const QVector<sc2dh::decor::UnitPlacement> units = planner.parseUnits(objectsBytes);
@@ -1019,6 +1103,40 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
             const QByteArray encodedCatalog = compressedBase64(originalActorCatalog);
             for (qsizetype i = 0; i < encodedCatalog.size(); i += 200)
                 galaxy += QByteArray("// SC2DH catalog data ") + encodedCatalog.mid(i, 200) + '\n';
+            result.patch.replacementEntries.insert(request.runtimeEntry, galaxy);
+        }
+        QByteArray modelActorCatalog = originalActorCatalog;
+        if (modelActorCatalog.isEmpty()) archive.readEntry(DecorActorCatalogEntry, &modelActorCatalog, nullptr);
+        QByteArray originalModelCatalog, runtimeModelCatalog;
+        const bool modelCatalogExisted = archiveContainsEntry(archive, DecorModelCatalogEntry);
+        if (modelCatalogExisted && !archive.readEntry(DecorModelCatalogEntry, &originalModelCatalog, &error)) {
+            result.error = error; return result;
+        }
+        QStringList modelIds;
+        if (!planner.generateRuntimeModelCatalog(result.patch.artifacts.plan, modelActorCatalog, originalModelCatalog,
+                                                &runtimeModelCatalog, &modelIds, &error)) {
+            result.error = error; return result;
+        }
+        if (!modelIds.isEmpty()) {
+            result.patch.replacementEntries.insert(DecorModelCatalogEntry, runtimeModelCatalog);
+            QString preloadFunction = QStringLiteral("void DecorOpt_PreloadVariants() {\n");
+            for (const auto &model : modelIds) {
+                QByteArray literal = QJsonDocument(QJsonArray{model}).toJson(QJsonDocument::Compact);
+                literal = literal.mid(1, literal.size()-2);
+                preloadFunction += QStringLiteral("    PreloadObject(c_gameCatalogModel, %1, false);\n").arg(QString::fromUtf8(literal));
+            }
+            preloadFunction += QStringLiteral("}\n\n");
+            QString runtime = QString::fromUtf8(galaxy);
+            const QString init = QStringLiteral("void DecorOpt_Init() {\n");
+            const auto initIndex = runtime.indexOf(init);
+            if (initIndex < 0) { result.error = QStringLiteral("Runtime initialization is missing."); return result; }
+            runtime.insert(initIndex + init.size(), QStringLiteral("    DecorOpt_PreloadVariants();\n"));
+            runtime.insert(initIndex, preloadFunction);
+            galaxy = runtime.toUtf8();
+            galaxy += QByteArray("// SC2DH models rollback ") + (modelCatalogExisted ? "1 " : "0 ") + sha256Hex(runtimeModelCatalog) + '\n';
+            const QByteArray encodedModels = compressedBase64(originalModelCatalog);
+            for (qsizetype i = 0; i < encodedModels.size(); i += 200)
+                galaxy += QByteArray("// SC2DH models data ") + encodedModels.mid(i, 200) + '\n';
             result.patch.replacementEntries.insert(request.runtimeEntry, galaxy);
         }
         if (!result.patch.artifacts.removedDoodadIndices.isEmpty()
@@ -1478,7 +1596,8 @@ DecorRestoreMapResult DecorationMapCopyService::restoreGalaxyCopy(const DecorRes
         if (removeCatalog) removals << DecorActorCatalogEntry;
         else replacements.insert(DecorActorCatalogEntry, actorCatalog);
     }
-    if (!restorePreloadPatch(source, importGalaxy, &replacements, &removals, &error)) {
+    if (!restorePreloadPatch(source, importGalaxy, &replacements, &removals, &error)
+        || !restorePreloadPatch(source, importGalaxy, &replacements, &removals, &error, DecorModelCatalogEntry, QStringLiteral("models"), "Catalog")) {
         discardStaging(); result.error = error; return result;
     }
     if (!source.saveCopy(stagingPath, replacements,
@@ -1495,6 +1614,7 @@ DecorRestoreMapResult DecorationMapCopyService::restoreGalaxyCopy(const DecorRes
         || !verification.readEntry(runtimeEntry, &verifiedRuntime, &error)
         || verifiedObjects != originalObjects || verifiedRuntime != staticRuntime
         || !verifyPreloadPatch(verification, replacements, removals)
+        || !verifyPreloadPatch(verification, replacements, removals, DecorModelCatalogEntry)
         || archiveContainsEntry(verification, DecorRestoreManifestEntry)) {
         discardStaging();
         result.error = QStringLiteral("Galaxy import failed staged archive verification: %1").arg(error);
@@ -1675,7 +1795,8 @@ DecorRestoreMapResult DecorationMapCopyService::restoreOptimizedCopy(const Decor
     }
     QByteArray runtimeForPreload;
     if (!source.readEntry(runtimeEntry, &runtimeForPreload, &error)
-        || !restorePreloadPatch(source, QString::fromUtf8(runtimeForPreload), &replacements, &removals, &error)) {
+        || !restorePreloadPatch(source, QString::fromUtf8(runtimeForPreload), &replacements, &removals, &error)
+        || !restorePreloadPatch(source, QString::fromUtf8(runtimeForPreload), &replacements, &removals, &error, DecorModelCatalogEntry, QStringLiteral("models"), "Catalog")) {
         discardStaging(); result.error = error; return result;
     }
     if (!source.saveCopy(stagingPath, replacements,
@@ -1692,6 +1813,7 @@ DecorRestoreMapResult DecorationMapCopyService::restoreOptimizedCopy(const Decor
         || !verification.readEntry(mapScriptEntry, &verifiedScript, &error)
         || verifiedObjects != originalObjects || verifiedScript != originalMapScript
         || !verifyPreloadPatch(verification, replacements, removals)
+        || !verifyPreloadPatch(verification, replacements, removals, DecorModelCatalogEntry)
         || archiveContainsEntry(verification, runtimeEntry)
         || archiveContainsEntry(verification, DecorRestoreManifestEntry)) {
         discardStaging();

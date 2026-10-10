@@ -1093,6 +1093,15 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
         plan.warnings.removeAll(QStringLiteral("PlacedObjects XML contains no parseable ObjectDoodad elements."));
     for (int index = 0; index < plan.units.size(); ++index) {
         UnitPlacement &unit = plan.units[index];
+        if (safetyContext.keepAiTemplates && (unit.stateFlags & 3) != 0) {
+            unit.dynamicCandidate = false;
+            unit.staticOnlyReason = QStringLiteral("Initially hidden unit or AI placement template stays native.");
+        }
+        if (safetyContext.keepAiBuildings && safetyContext.aiPlayerSlots.contains(unit.player)
+            && safetyContext.structureUnitTypes.contains(unit.type.toCaseFolded())) {
+            unit.dynamicCandidate = false;
+            unit.staticOnlyReason = QStringLiteral("AI-owned building stays in native placement.");
+        }
         if (safetyContext.excludedUnitTypeKeys.contains(unit.type.trimmed().toCaseFolded())) {
             unit.dynamicCandidate = false;
             unit.staticOnlyReason = QStringLiteral("Unit type excluded by user.");
@@ -1374,6 +1383,71 @@ bool DecorationStreamingPlanner::generateRuntimeActorCatalog(const DecorationStr
         void write(const void *data, size_t size) override { bytes.append(static_cast<const char *>(data), qsizetype(size)); }
     } writer;
     document.save(writer, "    ", pugi::format_default, pugi::encoding_utf8);
+    *catalog = writer.bytes;
+    return true;
+}
+
+bool DecorationStreamingPlanner::generateRuntimeModelCatalog(const DecorationStreamingPlan &plan,
+                                                              const QByteArray &actorCatalog,
+                                                              const QByteArray &originalCatalog,
+                                                              QByteArray *catalog, QStringList *modelIds,
+                                                              QString *errorMessage) const
+{
+    const auto fail = [&](const QString &message) { if (errorMessage) *errorMessage = message; return false; };
+    if (!catalog || !modelIds) return fail(QStringLiteral("Missing runtime model catalog output."));
+    pugi::xml_document actors, models;
+    if (!actorCatalog.isEmpty() && !actors.load_buffer(actorCatalog.constData(), size_t(actorCatalog.size())))
+        return fail(QStringLiteral("Invalid original actor catalog."));
+    auto root = models.append_child("Catalog");
+    if (!originalCatalog.isEmpty()) {
+        if (!models.load_buffer(originalCatalog.constData(), size_t(originalCatalog.size()), pugi::parse_full)
+            || !(root = models.child("Catalog"))) return fail(QStringLiteral("Invalid original model catalog."));
+    }
+    QSet<QString> types;
+    for (const auto &zone : plan.zones) {
+        for (int index : zone.doodadIndices) {
+            const auto &doodad = plan.doodads[index];
+            if (doodad.variation.toInt() > 0) types.insert(doodad.type);
+        }
+        for (int index : zone.unitIndices) {
+            const auto &unit = plan.units[index];
+            if (unit.variation > 0 && (unit.stateFlags & 1) == 0) types.insert(unit.type);
+        }
+    }
+    QSet<QString> links;
+    for (const auto &type : types) {
+        QString link = type, parent = type;
+        QSet<QString> visited;
+        while (!parent.isEmpty() && !visited.contains(parent)) {
+            visited.insert(parent);
+            auto actor = actors.child("Catalog").find_child_by_attribute("id", parent.toUtf8().constData());
+            if (!actor) break;
+            if (actor.child("Model")) { link = QString::fromUtf8(actor.child("Model").attribute("value").value()); break; }
+            parent = QString::fromUtf8(actor.attribute("parent").value());
+        }
+        link.replace(QStringLiteral("##id##"), type).replace(QStringLiteral("##unitName##"), type);
+        if (!link.isEmpty() && !link.contains(QStringLiteral("##"))) links.insert(link);
+    }
+    *modelIds = links.values(); modelIds->sort();
+    if (modelIds->isEmpty()) { *catalog = originalCatalog; return true; }
+    for (const auto &link : *modelIds) {
+        auto model = root.find_child_by_attribute("id", link.toUtf8().constData());
+        if (!model) { model = root.append_child("CModel"); model.append_attribute("id") = link.toUtf8().constData(); }
+        // Engine's VariationFallback (bit 25) replaces a requested variant with
+        // zero if its asset is not ready. Preload variants before construction,
+        // and never silently substitute a different model for a saved index.
+        for (const auto &flag : {qMakePair("VariationPreload", "1"), qMakePair("VariationFallback", "0")}) {
+            auto field = model.find_child_by_attribute("Flags", "index", flag.first);
+            if (!field) { field = model.append_child("Flags"); field.append_attribute("index") = flag.first; }
+            if (!field.attribute("value")) field.append_attribute("value");
+            field.attribute("value") = flag.second;
+        }
+    }
+    struct Writer : pugi::xml_writer {
+        QByteArray bytes;
+        void write(const void *data, size_t size) override { bytes.append(static_cast<const char *>(data), qsizetype(size)); }
+    } writer;
+    models.save(writer, "    ", pugi::format_default, pugi::encoding_utf8);
     *catalog = writer.bytes;
     return true;
 }

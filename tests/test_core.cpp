@@ -383,6 +383,8 @@ private slots:
     void decorationStreamingPreservesExactAngleLiterals();
     void decorationStreamingInitializesPlacementBeforeDoodad();
     void decorationMapCopyPreloadsNativeVariants();
+    void decorationModelsPreventVariantFallbackAndRestoreExactly();
+    void decorationAiBuildingsFollowControllersAndStructureInheritance();
     void decorationStreamingRegionEntryRestoresVisibility();
     void decorationStreamingPreservesNullableTintAndTerrainObjects();
     void decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads();
@@ -7096,15 +7098,15 @@ void CoreTests::decorationStreamingUsesRegionNamesAndPreservesForcedPlacement()
     const auto artifacts = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(
         objects, zones, sc2dh::decor::DecorationSafetyContext{}, options);
     QVERIFY2(artifacts.valid, qPrintable(artifacts.warnings.join(QStringLiteral("; "))));
-    QCOMPARE(artifacts.removedUnitIndices.size(), 4);
-    QCOMPARE(artifacts.plan.zones.at(2).unitIndices.size(), 2);
+    QCOMPARE(artifacts.removedUnitIndices.size(), 3);
+    QCOMPARE(artifacts.plan.zones.at(2).unitIndices.size(), 1);
     QCOMPARE(artifacts.plan.zones.at(1).unitIndices.size(), 1);
     QCOMPARE(artifacts.plan.zones.at(0).unitIndices.size(), 1);
     QCOMPARE(artifacts.plan.units.at(artifacts.plan.zones.at(2).unitIndices.first()).id,
              QStringLiteral("101"));
     QVERIFY(artifacts.plan.units.at(0).forcePlacement);
-    QVERIFY(artifacts.plan.units.at(3).dynamicCandidate);
-    QVERIFY(!QString::fromUtf8(artifacts.optimizedObjectsBytes).contains(QStringLiteral("Id=\"104\"")));
+    QVERIFY(!artifacts.plan.units.at(3).dynamicCandidate);
+    QVERIFY(QString::fromUtf8(artifacts.optimizedObjectsBytes).contains(QStringLiteral("Id=\"104\"")));
     const QString galaxy = artifacts.galaxySource;
     QVERIFY(galaxy.contains(QStringLiteral("void Create_Map_1()")));
     QVERIFY(galaxy.contains(QStringLiteral("void Create_Map_2()")));
@@ -7826,6 +7828,7 @@ void CoreTests::decorationStreamingExtendedUnitsAndWholeMapFallback()
         "</PlacedObjects>");
     DecorationSafetyContext safety;
     safety.excludedUnitTypeKeys.insert(QStringLiteral("commandcenter"));
+    safety.keepAiTemplates = false; // Exercise the opt-in template serialization path.
     safety.referenceFilesByDoodadKey.insert(QStringLiteral("15"), {QStringLiteral("MapScript.galaxy")});
     safety.referenceFilesByDoodadKey.insert(QStringLiteral("2"), {QStringLiteral("Triggers")});
     safety.referenceFilesByUnitType.insert(QStringLiteral("marine"), {QStringLiteral("MapScript.galaxy")});
@@ -7883,6 +7886,126 @@ void CoreTests::decorationStreamingExtendedUnitsAndWholeMapFallback()
     QCOMPARE(protectedTypes.removedUnitIndices.size(), 3);
 }
 
+void CoreTests::decorationAiBuildingsFollowControllersAndStructureInheritance()
+{
+#ifndef SC2DH_USE_STORMLIB
+    QSKIP("StormLib archive writer is unavailable.");
+#else
+    using namespace sc2dh::decor;
+    QTemporaryDir dir;
+    const auto path = [&](const QString &name) { return QDir(dir.path()).filePath(name); };
+    QByteArray info("IpaM");
+    const auto u32 = [&](quint32 value) { for (int i=0; i<4; ++i) info += char((value >> (i*8)) & 255); };
+    u32(39); info += QByteArray(24, '\0'); u32(3);
+    for (const auto &player : {qMakePair(0, 3), qMakePair(1, 1), qMakePair(6, 2)}) {
+        info += char(player.first); u32(player.second); u32(0xffffffff);
+        info += '\0'; u32(0); u32(0); u32(0); info += '\0';
+    }
+    info += QByteArray(16, '\0');
+    const QByteArray objects = QByteArrayLiteral(
+        "<PlacedObjects><ObjectUnit Id=\"91341001\" UnitType=\"Barracks\" Player=\"6\" Position=\"5,5,0\"/>"
+        "<ObjectUnit Id=\"91341002\" UnitType=\"Barracks\" Player=\"1\" Position=\"6,5,0\"/>"
+        "<ObjectUnit Id=\"91341003\" UnitType=\"CustomDepot\" Player=\"6\" Position=\"7,5,0\"/>"
+        "<ObjectUnit Id=\"91341004\" UnitType=\"Marine\" Player=\"6\" Position=\"8,5,0\"/>"
+        "<ObjectUnit Id=\"91341005\" UnitType=\"Mobile\" Player=\"6\" Position=\"9,5,0\"/></PlacedObjects>");
+    QString error;
+    QVERIFY(createTestMpqArchive(path(QStringLiteral("Source.SC2Map")), {
+        {QStringLiteral("Objects"), objects}, {QStringLiteral("MapInfo"), info},
+        {QStringLiteral("MapScript.galaxy"), QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\nvoid InitMap() {}\n")},
+        {QStringLiteral("Base.SC2Data/GameData/UnitData.xml"), QByteArrayLiteral("<Catalog><CUnit id=\"CustomDepot\" parent=\"SupplyDepot\"/><CUnit id=\"Mobile\"><Attributes index=\"Structure\" value=\"0\"/></CUnit></Catalog>")}}, &error));
+    DecorOptimizedMapRequest request;
+    request.sourceArchivePath = path(QStringLiteral("Source.SC2Map"));
+    request.outputArchivePath = path(QStringLiteral("Runtime.SC2Map"));
+    request.zones = {{1, QStringLiteral("Area"), 0, 0, 20, 20}};
+    const auto safety = DecorationMapCopyService().inspectSafety(request, &error);
+    QCOMPARE(safety.aiPlayerSlots, (QSet<int>{6}));
+    QVERIFY(safety.structureUnitTypes.contains(QStringLiteral("customdepot")));
+    QVERIFY(!safety.structureUnitTypes.contains(QStringLiteral("mobile")));
+    const auto result = DecorationMapCopyService().createOptimizedCopy(request);
+    QVERIFY2(result.success, qPrintable(result.error));
+    QCOMPARE(result.removedUnits, 3);
+    Sc2Archive archive; QByteArray actual;
+    QVERIFY(archive.load(request.outputArchivePath, &error));
+    QVERIFY(archive.readEntry(QStringLiteral("Objects"), &actual, &error));
+    QVERIFY(actual.contains("91341001")); QVERIFY(actual.contains("91341003"));
+    QVERIFY(!actual.contains("91341002")); QVERIFY(!actual.contains("91341004")); QVERIFY(!actual.contains("91341005"));
+#endif
+}
+
+void CoreTests::decorationModelsPreventVariantFallbackAndRestoreExactly()
+{
+#ifndef SC2DH_USE_STORMLIB
+    QSKIP("StormLib archive writer is unavailable.");
+#else
+    using namespace sc2dh::decor;
+    const QByteArray objects = QByteArrayLiteral(
+        "<PlacedObjects><ObjectDoodad Id=\"144850110\" Type=\"Aiur_Temple_GiantWalls_Long\" Position=\"10,10,0\" Variation=\"6\"/>"
+        "<ObjectDoodad Id=\"972109307\" Type=\"Aiur_City_Platform\" Position=\"11,10,0\" Variation=\"1\"/>"
+        "<ObjectDoodad Id=\"833600001\" Type=\"AliasDecor\" Position=\"12,10,0\" Variation=\"2\"/>"
+        "<ObjectUnit Id=\"833600002\" UnitType=\"Factory\" Player=\"6\" Position=\"13,10,0\"><Flag Index=\"UnitNoCreate\" Value=\"1\"/><Flag Index=\"UnitHidden\" Value=\"1\"/></ObjectUnit></PlacedObjects>");
+    const QByteArray actors = QByteArrayLiteral("<Catalog><CActorDoodad id=\"AliasDecor\"><Model value=\"SharedModel\"/></CActorDoodad></Catalog>");
+    const QByteArray models = QByteArrayLiteral("<Catalog><!-- retain --><CModel id=\"SharedModel\"><Model value=\"Assets/Custom.m3\"/><VariationCount value=\"3\"/><Flags index=\"VariationFallback\" value=\"1\"/><Flags index=\"VariationPreload\" value=\"0\"/></CModel><CModel id=\"Unrelated\"><Flags index=\"VariationFallback\" value=\"1\"/></CModel></Catalog>");
+    for (bool existing : {false, true}) for (bool sidecars : {false, true}) {
+        QTemporaryDir dir;
+        const auto path = [&](const QString &name) { return QDir(dir.path()).filePath(name); };
+        const QString modelEntry = QStringLiteral("Base.SC2Data/GameData/ModelData.xml");
+        QHash<QString, QByteArray> entries{{QStringLiteral("Objects"), objects},
+            {QStringLiteral("MapScript.galaxy"), QByteArrayLiteral("include \"TriggerLibs/NativeLib\"\nvoid InitMap() {}\n")},
+            {QStringLiteral("Base.SC2Data/GameData/ActorData.xml"), actors}};
+        if (existing) entries.insert(modelEntry, models);
+        QString error;
+        QVERIFY2(createTestMpqArchive(path(QStringLiteral("Source.SC2Map")), entries, &error), qPrintable(error));
+        DecorOptimizedMapRequest request;
+        request.sourceArchivePath = path(QStringLiteral("Source.SC2Map"));
+        request.outputArchivePath = path(QStringLiteral("Runtime.SC2Map"));
+        request.zones = {{1, QStringLiteral("Area"), 0, 0, 20, 20}};
+        request.writeRestoreSidecars = sidecars;
+        DecorationMapCopyService service;
+        const auto result = service.createOptimizedCopy(request);
+        QVERIFY2(result.success, qPrintable(result.error));
+        QCOMPARE(result.removedDoodads, 3);
+        QCOMPARE(result.removedUnits, 0); // AI base template is native.
+        Sc2Archive archive;
+        QVERIFY(archive.load(request.outputArchivePath, &error));
+        QByteArray data, runtime, remaining;
+        QVERIFY(archive.readEntry(modelEntry, &data, &error));
+        QVERIFY(archive.readEntry(request.runtimeEntry, &runtime, &error));
+        QVERIFY(archive.readEntry(QStringLiteral("Objects"), &remaining, &error));
+        QVERIFY(remaining.contains("UnitNoCreate"));
+        pugi::xml_document doc;
+        QVERIFY(doc.load_buffer(data.constData(), size_t(data.size())));
+        for (const auto &id : {"Aiur_Temple_GiantWalls_Long", "Aiur_City_Platform", "SharedModel"}) {
+            auto model = doc.child("Catalog").find_child_by_attribute("CModel", "id", id);
+            QVERIFY(model);
+            QCOMPARE(model.find_child_by_attribute("Flags", "index", "VariationPreload").attribute("value").as_int(), 1);
+            QCOMPARE(model.find_child_by_attribute("Flags", "index", "VariationFallback").attribute("value").as_int(), 0);
+            QVERIFY(runtime.contains(QByteArray("PreloadObject(c_gameCatalogModel, \"") + id + "\", false)"));
+        }
+        QVERIFY(!doc.child("Catalog").find_child_by_attribute("id", "AliasDecor"));
+        if (existing) {
+            QCOMPARE(doc.child("Catalog").find_child_by_attribute("id", "SharedModel").child("Model").attribute("value").as_string(), "Assets/Custom.m3");
+            QCOMPARE(doc.child("Catalog").find_child_by_attribute("id", "Unrelated").child("Flags").attribute("value").as_int(), 1);
+        }
+        const QString restoredPath = path(QStringLiteral("Restored.SC2Map"));
+        const auto restored = sidecars ? service.restoreOptimizedCopy({request.outputArchivePath, restoredPath})
+                                      : service.restoreGalaxyCopy({request.outputArchivePath, restoredPath});
+        QVERIFY2(restored.success, qPrintable(restored.error));
+        QVERIFY(archive.load(restoredPath, &error));
+        if (existing) { QVERIFY(archive.readEntry(modelEntry, &data, &error)); QCOMPARE(data, models); }
+        else QVERIFY(!archive.readEntry(modelEntry, &data, nullptr));
+        // Later model edits must never be overwritten during restoration.
+        QVERIFY(archive.load(request.outputArchivePath, &error));
+        QVERIFY(archive.readEntry(modelEntry, &data, &error));
+        data += "<!-- edited -->";
+        const auto tampered = path(QStringLiteral("Edited.SC2Map"));
+        QVERIFY(archive.saveCopy(tampered, {{modelEntry, data}}, {}, &error));
+        const auto rejected = service.restoreGalaxyCopy({tampered, path(QStringLiteral("Rejected.SC2Map"))});
+        QVERIFY(!rejected.success);
+        QVERIFY(rejected.error.contains(QStringLiteral("ModelData.xml")));
+    }
+#endif
+}
+
 void CoreTests::decorationExtendedUnitRuntimeMatchesPublicApi()
 {
     QFile apiFile(QFINDTESTDATA("fixtures/decor_unit_runtime_api.galaxy"));
@@ -7901,9 +8024,11 @@ void CoreTests::decorationExtendedUnitRuntimeMatchesPublicApi()
         api.insert(d.captured(2), signature);
     }
     QCOMPARE(api.size(), 19);
+    sc2dh::decor::DecorationSafetyContext runtimeSafety;
+    runtimeSafety.keepAiTemplates = false;
     const auto generated = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(
         QByteArrayLiteral("<PlacedObjects><ObjectUnit Id=\"1\" UnitType=\"Marine\" Player=\"6\" Position=\"5,5,0\" Scale=\"2,2,2\" Variation=\"1\"><Flag Index=\"UnitHidden\" Value=\"1\"/></ObjectUnit></PlacedObjects>"),
-        {{1, QStringLiteral("Area"), 0, 0, 20, 20}});
+        {{1, QStringLiteral("Area"), 0, 0, 20, 20}}, runtimeSafety);
     QVERIFY(generated.valid);
     const QString &galaxy = generated.galaxySource;
     const QRegularExpression localDeclaration(QStringLiteral(R"(\b(int|void|bool|actor)\s+(DecorOpt_\w+)\s*\(([^)]*)\)\s*\{)"));

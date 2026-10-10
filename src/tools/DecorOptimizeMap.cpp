@@ -535,6 +535,8 @@ struct CliOptions
     bool galaxyOnly = false;
     bool writeRestoreSidecars = false;
     bool keepReferencedTypes = false;
+    bool keepAiTemplates = true;
+    bool keepAiBuildings = true;
     sc2dh::decor::DecorGuiActionOptions guiAction;
     QString sourcePath;
     QString outputPath;
@@ -573,6 +575,8 @@ QString usageText()
         "  --restore-sidecars         Include optional JSON rollback backup and import XML (off by default).\n"
         "  --gui-action               Add a GUI Action Definition, Region preset and Switch cases.\n"
         "  --keep-referenced-types    Optional broad type protection. Default: protect direct ID/name links only.\n"
+        "  --convert-ai-templates     Experimental: also move initially hidden and UnitNoCreate placements (kept by default).\n"
+        "  --convert-ai-buildings     Also move Computer/Hostile buildings (kept by default).\n"
         "  --gui-action-name <name>    Display name (enables GUI action generation).\n"
         "  --gui-preset-name <name>    Preset display name (enables GUI action generation).\n"
         "  --visibility-only            Keep Objects unchanged; add hide/restore actor visibility API (requires --zones).\n"
@@ -649,13 +653,17 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
         if (name == QStringLiteral("--overwrite") || name == QStringLiteral("--visibility-only")
             || name == QStringLiteral("--region-names") || name == QStringLiteral("--restore-sidecars")
             || name == QStringLiteral("--map-regions") || name == QStringLiteral("--restore") || name == QStringLiteral("--galaxy-only")
-            || name == QStringLiteral("--gui-action") || name == QStringLiteral("--keep-referenced-types")) {
+            || name == QStringLiteral("--gui-action") || name == QStringLiteral("--keep-referenced-types") || name == QStringLiteral("--convert-ai-templates") || name == QStringLiteral("--convert-ai-buildings")) {
             if (equals >= 0) {
                 if (error)
                     *error = QStringLiteral("%1 does not accept a value.").arg(name);
                 return false;
             }
-            if (name == QStringLiteral("--keep-referenced-types"))
+            if (name == QStringLiteral("--convert-ai-buildings"))
+                options->keepAiBuildings = false;
+            else if (name == QStringLiteral("--convert-ai-templates"))
+                options->keepAiTemplates = false;
+            else if (name == QStringLiteral("--keep-referenced-types"))
                 options->keepReferencedTypes = true;
             else if (name == QStringLiteral("--gui-action"))
                 options->guiAction.enabled = true;
@@ -900,6 +908,8 @@ int main(int argc, char *argv[])
     request.writeRestoreSidecars = cli.writeRestoreSidecars;
     request.guiAction = cli.guiAction;
     request.safetyContext.keepReferencedTypes = cli.keepReferencedTypes;
+    request.safetyContext.keepAiTemplates = cli.keepAiTemplates;
+    request.safetyContext.keepAiBuildings = cli.keepAiBuildings;
     request.dryRun = cli.galaxyOnly;
 
     const DecorOptimizedMapResult result = DecorationMapCopyService().createOptimizedCopy(request);
@@ -914,6 +924,8 @@ int main(int argc, char *argv[])
                 exports.insert(base + QStringLiteral(".ActorData.xml"), it.value());
             if (entry.compare(QStringLiteral("Preload.xml"), Qt::CaseInsensitive) == 0)
                 exports.insert(base + QStringLiteral(".Preload.xml"), it.value());
+            if (entry.compare(QStringLiteral("Base.SC2Data/GameData/ModelData.xml"), Qt::CaseInsensitive) == 0)
+                exports.insert(base + QStringLiteral(".ModelData.xml"), it.value());
             if (entry.compare(QStringLiteral("sc2dh/decor_import.xml"), Qt::CaseInsensitive) == 0)
                 exports.insert(base + QStringLiteral(".import.xml"), it.value());
             if (entry.compare(QStringLiteral("sc2dh/decor_restore_v1.json"), Qt::CaseInsensitive) == 0)

@@ -132,6 +132,10 @@ struct DecorationSafetyContext
     QHash<QString, QStringList> referenceFilesByUnitType;
     QHash<QString, QStringList> referenceFilesByDoodadType;
     bool keepReferencedTypes = false;
+    bool keepAiTemplates = true;
+    bool keepAiBuildings = true;
+    QSet<int> aiPlayerSlots;
+    QSet<QString> structureUnitTypes;
     QSet<QString> excludedUnitKeys;
     QSet<QString> excludedUnitTypeKeys;
 };
@@ -230,6 +234,11 @@ public:
                                 const QByteArray &originalPreload,
                                 QByteArray *preload,
                                 QString *errorMessage = nullptr) const;
+    bool generateRuntimeModelCatalog(const DecorationStreamingPlan &plan,
+                                     const QByteArray &actorCatalog,
+                                     const QByteArray &originalCatalog,
+                                     QByteArray *catalog, QStringList *modelIds,
+                                     QString *errorMessage = nullptr) const;
     bool restoreObjectsFromGalaxy(const QByteArray &objects, const QString &galaxy,
                                   QByteArray *restored, int *doodads, int *units,
                                   QString *error = nullptr) const;
