@@ -1148,6 +1148,20 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     form->setContentsMargins(0, 0, 0, 0);
     form->setSpacing(6);
     form->addRow(tr("Fallback function prefix"), m_prefixEdit);
+    m_keepReferencedTypes = new QCheckBox(tr("Keep all types mentioned in triggers/scripts"), decorGroup);
+    m_keepReferencedTypes->setChecked(QSettings().value(QStringLiteral("decor/keepReferencedTypes"), false).toBool());
+    m_keepReferencedTypes->setToolTip(tr("Off: type names and group loops do not prevent conversion. Direct placement ID/name links still keep the original object."));
+    m_keepUnitTypes = new QLineEdit(QSettings().value(QStringLiteral("decor/keepUnitTypes"), QStringLiteral("CommandCenter")).toString(), decorGroup);
+    m_keepUnitTypes->setObjectName(QStringLiteral("decorKeepUnitTypes"));
+    m_keepUnitTypes->setToolTip(tr("Comma-separated exact unit type IDs to keep. Use Choose units to keep for individual placements."));
+    form->addRow(m_keepReferencedTypes);
+    form->addRow(tr("Unit types to keep"), m_keepUnitTypes);
+    connect(m_keepReferencedTypes, &QCheckBox::toggled, this, [](bool checked) {
+        QSettings().setValue(QStringLiteral("decor/keepReferencedTypes"), checked);
+    });
+    connect(m_keepUnitTypes, &QLineEdit::editingFinished, this, [this] {
+        QSettings().setValue(QStringLiteral("decor/keepUnitTypes"), m_keepUnitTypes->text());
+    });
     m_restoreSidecars = new QCheckBox(tr("Include restore backup files (JSON/XML)"), decorGroup);
     m_restoreSidecars->setObjectName(QStringLiteral("decorRestoreSidecars"));
     m_restoreSidecars->setToolTip(tr("Optional exact rollback backup. Rebuild placements from Galaxy works without these files. Runtime actor data is always preserved."));
@@ -1294,6 +1308,8 @@ MapPerformancePage::MapPerformancePage(QWidget *parent)
     connect(m_createGuiAction, &QCheckBox::toggled, this, invalidatePreview);
     connect(m_guiActionName, &QLineEdit::textChanged, this, invalidatePreview);
     connect(m_guiPresetName, &QLineEdit::textChanged, this, invalidatePreview);
+    connect(m_keepReferencedTypes, &QCheckBox::toggled, this, invalidatePreview);
+    connect(m_keepUnitTypes, &QLineEdit::textChanged, this, invalidatePreview);
     updateOptimizationScope();
 
     auto *decorScroll = new QScrollArea(contentSplitter);
@@ -1960,6 +1976,9 @@ void MapPerformancePage::toggleRegionFromMap(int regionIndex)
 sc2dh::decor::DecorationSafetyContext MapPerformancePage::decorationSafetyContextFromDoodadTable() const
 {
     sc2dh::decor::DecorationSafetyContext context = m_archiveSafetyContext;
+    context.keepReferencedTypes = m_keepReferencedTypes->isChecked();
+    for (const auto &type : m_keepUnitTypes->text().split(QRegularExpression(QStringLiteral("[,;\\s]+")), Qt::SkipEmptyParts))
+        context.excludedUnitTypeKeys.insert(type.trimmed().toCaseFolded());
     if (!m_doodadModel)
         return context;
 

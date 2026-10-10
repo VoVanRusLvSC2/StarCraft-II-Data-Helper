@@ -55,21 +55,20 @@ placed object's world position, rotation, scale, and tint. Editor-only
 HeightOffset and ForcePlacement flags do not by themselves exclude decor.
 Nullable tint (`NULL HDR`) is retained as a native nullable color; it is never
 replaced with explicit white. This matters for weather emitters and lights with
-large HDR multipliers. Terrain surface objects remain in Objects: runtime visual
-actors cannot restore native terrain/pathing or doodad-enumeration membership.
-Only actual `TerrainObject*` types and local catalog terrain-object membership
-are treated as surfaces. Ordinary cliffs, platforms, roads and ground-cover
+large HDR multipliers. Native terrain archive components stay unchanged.
+An ObjectDoodad with a TerrainObject-style actor name or editor category is still
+a placed visual actor; that name/category alone does not block conversion.
+Ordinary cliffs, platforms, roads and ground-cover
 doodads remain eligible for conversion; visual appearance is not a surface
 classification. Local catalog footprint dependencies are checked separately. Terrain
 archive components are preserved. Direct placement references in triggers/scripts
-keep the referenced decor or unit in the map. Any concrete doodad or unit type
-used in GUI triggers or Galaxy keeps all placements of that type native,
-including stock animation, visibility and destruction commands for that type.
-Only placements without these references can be converted.
+keep the referenced decor or unit in the map. Type names, spawn calls and group
+loops do not block conversion by default. Broad type protection is optional:
+**Keep all types mentioned in triggers/scripts** or CLI `--keep-referenced-types`.
 Galaxy comments do not count as type references. Computed type names/custom
-enumeration wrappers require manual **Keep in map** exclusions. A concrete unit
-type used in GUI triggers or Galaxy keeps every placed unit of that type in
-`Objects`, including type-based group lookups used to find a hero's spawn anchor.
+enumeration wrappers require manual **Keep in map** exclusions. **Unit types to
+keep** explicitly preserves a whole type; the GUI default is `CommandCenter`.
+The individual-unit chooser supports manual keep selections.
 An unfiltered query for all units does not automatically exclude every type.
 CLI `--keep-doodad-id` and `--keep-doodad-type` offer repeatable explicit exclusions
 when a whole cinematic area should stay native.

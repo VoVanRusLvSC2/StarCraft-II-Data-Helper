@@ -622,41 +622,26 @@ void scanXmlForStaticOnlyDoodadTypes(sc2dh::decor::DecorationSafetyContext *cont
     if (!context || doodadTypes.isEmpty())
         return;
 
-    const QString folded = text.toCaseFolded();
-    for (const QString &typeKey : doodadTypes) {
-        if (context->staticOnlyReasonByDoodadType.contains(typeKey))
-            continue;
-
-        const QString idNeedle = QStringLiteral("id=\"%1\"").arg(typeKey);
-        int idIndex = folded.indexOf(idNeedle);
-        if (idIndex < 0) {
-            const QString idNeedleApostrophe = QStringLiteral("id='%1'").arg(typeKey);
-            idIndex = folded.indexOf(idNeedleApostrophe);
+    pugi::xml_document document;
+    const QByteArray bytes = text.toUtf8();
+    if (!document.load_buffer(bytes.constData(), size_t(bytes.size()))) return;
+    for (auto record : document.document_element().children()) {
+        const QString type = QString::fromUtf8(record.attribute("id").value()).toCaseFolded();
+        if (!doodadTypes.contains(type)) continue;
+        bool physical = QString::fromUtf8(record.name()).startsWith(QStringLiteral("CTerrainObject"));
+        QVector<pugi::xml_node> pending;
+        for (auto child : record.children()) pending << child;
+        while (!pending.isEmpty()) {
+            const auto field = pending.takeLast();
+            const QString name = QString::fromUtf8(field.name()).toCaseFolded();
+            const QString value = QString::fromUtf8(field.attribute("value").value()).trimmed().toCaseFolded();
+            if ((name == QStringLiteral("footprint") || name == QStringLiteral("pathingfootprint")
+                 || name == QStringLiteral("terrainobject")) && !value.isEmpty()
+                && value != QStringLiteral("none") && value != QStringLiteral("0")) physical = true;
+            for (auto child : field.children()) pending << child;
         }
-        if (idIndex < 0)
-            continue;
-
-        const qsizetype blockStart = std::max<qsizetype>(0, folded.lastIndexOf(QLatin1Char('<'), idIndex));
-        int blockEnd = folded.indexOf(QStringLiteral("</"), idIndex);
-        if (blockEnd < 0)
-            blockEnd = int(std::min<qsizetype>(folded.size(), qsizetype(idIndex) + 3000));
-        else
-            blockEnd = int(std::min<qsizetype>(folded.size(), qsizetype(blockEnd) + 300));
-        const QString block = folded.mid(blockStart, blockEnd - blockStart);
-        const bool surface = block.contains(QStringLiteral("doodadtype:terrainobject"))
-            || block.startsWith(QStringLiteral("<cterrainobject"))
-            || block.contains(QStringLiteral("<terrainobject "));
-        if (!surface && !block.contains(QStringLiteral("footprint"))
-            && !block.contains(QStringLiteral("pathing"))
-            && !block.contains(QStringLiteral("blocker"))
-            && !block.contains(QStringLiteral("destruct"))) {
-            continue;
-        }
-
-        context->staticOnlyReasonByDoodadType.insert(
-            typeKey,
-            QStringLiteral("Static-only: terrain surface or pathing/gameplay catalog dependency in %1.")
-                .arg(entryName));
+        if (physical) context->staticOnlyReasonByDoodadType.insert(type,
+            QStringLiteral("Static-only: native footprint/terrain registration in %1.").arg(entryName));
     }
 }
 
@@ -678,8 +663,8 @@ void protectAllUnitTypes(sc2dh::decor::DecorationSafetyContext *context,
 void addDoodadTypeReference(sc2dh::decor::DecorationSafetyContext *context,
                             const QString &type, const QString &entry)
 {
-    context->staticOnlyReasonByDoodadType.insert(type,
-        QStringLiteral("Static-only: doodad type referenced by trigger/script in %1.").arg(entry));
+    auto &files = context->referenceFilesByDoodadType[type];
+    if (!files.contains(entry)) files << entry;
 }
 
 void protectAllPlacementTypes(sc2dh::decor::DecorationSafetyContext *context,
@@ -790,6 +775,8 @@ sc2dh::decor::DecorationSafetyContext buildArchiveSafetyContext(const Sc2Archive
             if (!unit.type.trimmed().isEmpty())
                 unitTypes.insert(unit.type.trimmed().toCaseFolded());
             for (const QString &value : {unit.id, unit.name}) {
+                if (value == unit.name && value != unit.id && QRegularExpression(QStringLiteral("^[0-9]+$")).match(value).hasMatch())
+                    continue; // An editor label such as "0" is not a reference to every zero in the archive.
                 const QString key = value.trimmed().toCaseFolded();
                 if (key.isEmpty())
                     continue;
@@ -1034,7 +1021,9 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
                 galaxy += QByteArray("// SC2DH catalog data ") + encodedCatalog.mid(i, 200) + '\n';
             result.patch.replacementEntries.insert(request.runtimeEntry, galaxy);
         }
-        if (!result.patch.artifacts.removedDoodadIndices.isEmpty()) {
+        if (!result.patch.artifacts.removedDoodadIndices.isEmpty()
+            || std::any_of(result.patch.artifacts.removedUnitIndices.cbegin(), result.patch.artifacts.removedUnitIndices.cend(),
+                [&](int i) { return result.patch.artifacts.plan.units[i].variation >= 0; })) {
             const QString preloadEntry = QStringLiteral("Preload.xml");
             const bool existed = archiveContainsEntry(archive, preloadEntry);
             QByteArray originalPreload, runtimePreload;

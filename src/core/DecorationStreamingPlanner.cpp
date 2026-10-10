@@ -188,17 +188,11 @@ bool hasUnsupportedPlacementFlags(const QHash<QString, QString> &flags)
         if (it.value() != QStringLiteral("1")
             || (it.key() != QStringLiteral("HeightAbsolute")
                 && it.key() != QStringLiteral("HeightOffset")
+                && it.key() != QStringLiteral("NoDoodadFootprint")
                 && it.key() != QStringLiteral("ForcePlacement")))
             return true;
     }
     return false;
-}
-
-bool isTerrainObjectType(const QString &type)
-{
-    // Actual terrain objects only. Cliffs, roads and platforms can be ordinary
-    // doodads: their visual role does not give them terrain-object membership.
-    return type.startsWith(QStringLiteral("TerrainObject"), Qt::CaseInsensitive);
 }
 
 void finalizeDoodadSafety(sc2dh::decor::DoodadPlacement *doodad)
@@ -216,14 +210,6 @@ void finalizeDoodadSafety(sc2dh::decor::DoodadPlacement *doodad)
                || !fitsGalaxyFixed(doodad->scaleZ)
                || std::abs(doodad->z) > double(std::numeric_limits<float>::max())) {
         doodad->staticOnlyReason = QStringLiteral("Static-only: transform exceeds runtime numeric range.");
-    } else if (isTerrainObjectType(doodad->type)) {
-        // A visual actor is not a native terrain object or registered doodad.
-        // Do not infer equivalence from a successful XML/manifest round trip.
-        doodad->staticOnlyReason = QStringLiteral("Static-only: terrain object stays in Objects.");
-    } else if (containsAny(doodad->type + QLatin1Char(' ') + doodad->name + QLatin1Char(' ') + doodad->flags,
-                           {QStringLiteral("pathing"), QStringLiteral("blocker"),
-                            QStringLiteral("footprint"), QStringLiteral("destruct")})) {
-        doodad->staticOnlyReason = QStringLiteral("Static-only: pathing/gameplay dependency.");
     } else if (!doodad->otherAttributes.isEmpty() || doodad->hasUnsupportedChildren) {
         doodad->staticOnlyReason = QStringLiteral("Static-only: placement has fields the runtime recreation serializer cannot preserve.");
     } else if (!isOptionalIntegerInRange(doodad->variation, 254)) {
@@ -422,6 +408,8 @@ QStringList externalReferenceFiles(const sc2dh::decor::DoodadPlacement &doodad,
     QStringList files;
     for (const QString &key : doodadKeys(doodad))
         files += context.referenceFilesByDoodadKey.value(key);
+    if (context.keepReferencedTypes)
+        files += context.referenceFilesByDoodadType.value(safetyKey(doodad.type));
     files.removeAll(QString());
     files.removeDuplicates();
     std::sort(files.begin(), files.end(), [](const QString &left, const QString &right) {
@@ -756,32 +744,36 @@ QVector<UnitPlacement> DecorationStreamingPlanner::parseUnits(const QByteArray &
     const auto finalize = [](UnitPlacement *unit, const QString &position, const QString &rotation,
                              const QString &scale, const QString &player, bool hasExtraFields) {
         const QVector<double> coordinates = numbersFrom(position);
-        const QVector<double> scales = scale.isEmpty() ? QVector<double>{1.0, 1.0, 1.0} : numbersFrom(scale);
+        QVector<double> scales = scale.isEmpty() ? QVector<double>{1.0, 1.0, 1.0} : numbersFrom(scale);
+        if (scales.size() == 1) scales = QVector<double>{scales[0], scales[0], scales[0]};
         const QVector<double> rotations = rotation.isEmpty() ? QVector<double>{0.0} : numbersFrom(rotation);
         bool playerOk = false;
         unit->player = player.toInt(&playerOk);
+        if (player.isEmpty()) { unit->player = 0; playerOk = true; }
         if (coordinates.size() >= 2) {
             unit->x = coordinates.at(0);
             unit->y = coordinates.at(1);
+            unit->z = coordinates.size() == 3 ? coordinates.at(2) : 0.0;
         }
         if (unit->type.isEmpty())
             unit->staticOnlyReason = QStringLiteral("Missing unit type.");
         else if (coordinates.size() < 2 || coordinates.size() > 3
                  || !fitsGalaxyFixed(coordinates.at(0)) || !fitsGalaxyFixed(coordinates.at(1)) ||
-                 (coordinates.size() == 3 && coordinates.at(2) != 0.0))
+                 (coordinates.size() == 3 && !fitsGalaxyFixed(coordinates.at(2))))
             unit->staticOnlyReason = QStringLiteral("Unit position cannot be recreated exactly.");
         else if (!playerOk || unit->player < 0 || unit->player > 15)
             unit->staticOnlyReason = QStringLiteral("Unit owner is missing or invalid.");
         else if (rotations.size() != 1 || !fitsGalaxyFixed(rotations.front() * 180.0 / 3.14159265358979323846))
             unit->staticOnlyReason = QStringLiteral("Unit facing cannot be recreated exactly.");
-        else if (scales.size() != 3 || scales.at(0) != 1.0 || scales.at(1) != 1.0 || scales.at(2) != 1.0)
-            unit->staticOnlyReason = QStringLiteral("Scaled units are kept in Objects.");
+        else if (scales.size() != 3 || std::any_of(scales.cbegin(), scales.cend(), [](double v) { return v <= 0 || !fitsGalaxyFixed(v * 100.0); }))
+            unit->staticOnlyReason = QStringLiteral("Unit scale cannot be recreated exactly.");
         else if (hasExtraFields)
             unit->staticOnlyReason = QStringLiteral("Unit has placement fields or children that cannot be recreated.");
         else {
             unit->x = coordinates.at(0);
             unit->y = coordinates.at(1);
             unit->rotation = rotations.front();
+            unit->scaleX = scales[0]; unit->scaleY = scales[1]; unit->scaleZ = scales[2];
             unit->dynamicCandidate = true;
         }
     };
@@ -817,7 +809,24 @@ QVector<UnitPlacement> DecorationStreamingPlanner::parseUnits(const QByteArray &
                                       QStringLiteral("UnitType"), QStringLiteral("Position"),
                                       QStringLiteral("Rotation"), QStringLiteral("Scale"),
                                       QStringLiteral("Player")};
-            bool extra = false;
+            QSet<QString> supported = known;
+            supported.insert(QStringLiteral("Variation"));
+            supported.insert(QStringLiteral("Resources"));
+            unit.attributePresence = (node.attribute("Player") ? 1 : 0)
+                | (node.attribute("Scale") ? 2 : 0) | (node.attribute("Variation") ? 4 : 0)
+                | (node.attribute("Resources") ? 8 : 0);
+            bool optionalOk = true;
+            if (node.attribute("Variation")) {
+                unit.variation = attribute("Variation").toInt(&optionalOk);
+                optionalOk = optionalOk && unit.variation >= 0 && unit.variation <= 254;
+            }
+            if (node.attribute("Resources")) {
+                bool ok = false; unit.resources = attribute("Resources").toInt(&ok);
+                optionalOk = optionalOk && ok && unit.resources >= 0;
+            }
+            bool extra = !optionalOk || !validNumericTuple(attribute("Position"), {2,3})
+                || (node.attribute("Rotation") && !validNumericTuple(attribute("Rotation"), {1}))
+                || (node.attribute("Scale") && !validNumericTuple(attribute("Scale"), {1,3}));
             for (pugi::xml_node child : node.children()) {
                 if (child.type() != pugi::node_element)
                     continue;
@@ -826,20 +835,48 @@ QVector<UnitPlacement> DecorationStreamingPlanner::parseUnits(const QByteArray &
                     && QString::fromUtf8(child.attribute("Value").value()) == QStringLiteral("1")
                     && std::distance(child.attributes_begin(), child.attributes_end()) == 2
                     && !child.first_child();
+                const QString index = QString::fromUtf8(child.attribute("Index").value());
+                const bool stateFlag = QString::fromUtf8(child.name()) == QStringLiteral("Flag")
+                    && QString::fromUtf8(child.attribute("Value").value()) == QStringLiteral("1")
+                    && std::distance(child.attributes_begin(), child.attributes_end()) == 2 && !child.first_child();
                 if (forcePlacementFlag)
                     unit.forcePlacement = true;
+                else if (stateFlag && index == QStringLiteral("UnitNoCreate")) unit.stateFlags |= 1;
+                else if (stateFlag && index == QStringLiteral("UnitHidden")) unit.stateFlags |= 2;
+                else if (stateFlag && index == QStringLiteral("HeightOffset")) unit.stateFlags |= 4;
+                else if (stateFlag && index == QStringLiteral("DeferModelLoad")) unit.stateFlags |= 8;
+                else if (QString::fromUtf8(child.name()) == QStringLiteral("AIFlag")
+                         && index == QStringLiteral("IsUseable") && QString::fromUtf8(child.attribute("Value").value()) == QStringLiteral("0")
+                         && std::distance(child.attributes_begin(), child.attributes_end()) == 2 && !child.first_child()) unit.stateFlags |= 16;
+                else if (QString::fromUtf8(child.name()) == QStringLiteral("Texture")
+                         && QString::fromUtf8(child.attribute("TexSlot").value()) == QStringLiteral("main")
+                         && QString::fromUtf8(child.attribute("TexLink").value()).isEmpty()
+                         && unit.textureProps.isEmpty() && !child.first_child()
+                         && std::distance(child.attributes_begin(), child.attributes_end()) == 3
+                         && QRegularExpression(QStringLiteral("^[A-Za-z0-9_,]+$")).match(QString::fromUtf8(child.attribute("TexProps").value())).hasMatch())
+                    unit.textureProps = QString::fromUtf8(child.attribute("TexProps").value());
                 else
                     extra = true;
             }
             QSet<QString> seenAttributes;
             for (pugi::xml_attribute item : node.attributes()) {
                 const QString key = QString::fromUtf8(item.name());
-                extra = extra || !known.contains(key) || seenAttributes.contains(key)
+                extra = extra || !supported.contains(key) || seenAttributes.contains(key)
                     || (key != QStringLiteral("Name") && QString::fromUtf8(item.value()).trimmed().isEmpty());
                 seenAttributes.insert(key);
             }
             finalize(&unit, attribute("Position"), attribute("Rotation"), attribute("Scale"),
                      attribute("Player"), extra);
+            if (node.attribute("BoostexCliffLevel"))
+                unit.staticOnlyReason = QStringLiteral("Per-placement BoostexCliffLevel cannot be recreated by the runtime unit API.");
+            if ((unit.stateFlags & (8 | 16)) != 0 && (unit.stateFlags & 1) == 0) {
+                unit.dynamicCandidate = false;
+                unit.staticOnlyReason = QStringLiteral("Active unit has deferred-model or AI placement options.");
+            }
+            unit.extendedPlacement = !node.attribute("Player") || node.attribute("Variation")
+                || node.attribute("Resources") || unit.stateFlags != 0 || unit.z != 0
+                || unit.scaleX != 1 || unit.scaleY != 1 || unit.scaleZ != 1;
+            unit.extendedPlacement = unit.extendedPlacement || !unit.textureProps.isEmpty();
             units << unit;
         }
         return units;
@@ -1068,7 +1105,8 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
             }
         }
         if (unit.dynamicCandidate) {
-            unit.safetyReferenceFiles = safetyContext.referenceFilesByUnitType.value(unit.type.trimmed().toCaseFolded());
+            unit.safetyReferenceFiles = safetyContext.keepReferencedTypes
+                ? safetyContext.referenceFilesByUnitType.value(unit.type.trimmed().toCaseFolded()) : QStringList{};
             if (!unit.safetyReferenceFiles.isEmpty()) {
                 unit.safetyReferenceFiles.removeDuplicates();
                 std::sort(unit.safetyReferenceFiles.begin(), unit.safetyReferenceFiles.end());
@@ -1184,12 +1222,10 @@ DecorationVisibilityPlan DecorationStreamingPlanner::buildVisibilityPlan(
             staticReason = QStringLiteral("Static-only: missing or invalid positive doodad ID for actor visibility control.");
         } else if (doodadIdCounts.value(doodadId) != 1) {
             staticReason = QStringLiteral("Static-only: duplicate doodad ID cannot be controlled independently.");
-        } else if (isTerrainObjectType(doodad.type)) {
-            staticReason = QStringLiteral("Static-only: terrain surfaces remain under native map control.");
-        } else if (containsAny(doodad.type + QLatin1Char(' ') + doodad.name + QLatin1Char(' ') + doodad.flags,
-                               {QStringLiteral("pathing"), QStringLiteral("blocker"),
-                                QStringLiteral("footprint"), QStringLiteral("destruct")})) {
-            staticReason = QStringLiteral("Static-only: pathing/gameplay dependency.");
+        } else if (doodad.type.startsWith(QStringLiteral("TerrainObject"), Qt::CaseInsensitive)
+                   || containsAny(doodad.type + QLatin1Char(' ') + doodad.name + QLatin1Char(' ') + doodad.flags,
+                                  {QStringLiteral("pathing"), QStringLiteral("blocker"), QStringLiteral("footprint"), QStringLiteral("destruct")})) {
+            staticReason = QStringLiteral("Static-only: native physical objects stay visible in visibility-only mode.");
         } else if (doodad.userExcluded) {
             staticReason = QStringLiteral("Static-only: excluded by user.");
         } else {
@@ -1365,6 +1401,11 @@ bool DecorationStreamingPlanner::generateRuntimePreload(const DecorationStreamin
             // Objects and Preload.xml both use native zero-based indices.
             variations[doodad.type].insert(doodad.variation.isEmpty() ? 0 : doodad.variation.toInt());
         }
+        for (int index : zone.unitIndices) {
+            const auto &unit = plan.units[index];
+            if (unit.variation >= 0 && (unit.stateFlags & 1) == 0)
+                variations[unit.type].insert(unit.variation);
+        }
     }
     if (variations.isEmpty()) { *preload = originalPreload; return true; }
     for (auto it = variations.cbegin(); it != variations.cend(); ++it) {
@@ -1429,6 +1470,7 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("point[%1] DecorOpt_Positions;\n").arg(exportedDoodads + 1);
     out += QStringLiteral("int[%1] DecorOpt_ActorCount;\n").arg(maxZoneId + 1);
     out += QStringLiteral("unit[%1] DecorOpt_Units;\n").arg(exportedUnits + 1);
+    out += QStringLiteral("bool[%1] DecorOpt_UnitInitiallyHidden;\n").arg(exportedUnits + 1);
     out += QStringLiteral("int[%1] DecorOpt_UnitCount;\n").arg(maxZoneId + 1);
     out += QStringLiteral("bool[%1] DecorOpt_Loaded;\n\n").arg(maxZoneId + 1);
 
@@ -1475,7 +1517,7 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("    while (zoneId <= DecorOpt_ZoneCount) {\n        i = 0;\n");
     out += QStringLiteral("        while (i < DecorOpt_UnitCount[zoneId]) {\n");
     out += QStringLiteral("            u = DecorOpt_Units[DecorOpt_UnitOffset(zoneId) + i];\n");
-    out += QStringLiteral("            if (u != null) { libNtve_gf_ShowHideUnit(u, true); libNtve_gf_PauseUnit(u, false); }\n");
+    out += QStringLiteral("            if (u != null) { libNtve_gf_ShowHideUnit(u, !DecorOpt_UnitInitiallyHidden[DecorOpt_UnitOffset(zoneId) + i]); libNtve_gf_PauseUnit(u, false); }\n");
     out += QStringLiteral("            i += 1;\n        }\n        zoneId += 1;\n    }\n}\n\n");
     out += QStringLiteral("void DecorOpt_ClearZone(int zoneId) {\n");
     out += QStringLiteral("    int i;\n");
@@ -1493,6 +1535,7 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("    while (i < DecorOpt_UnitCount[zoneId]) {\n");
     out += QStringLiteral("        UnitRemove(DecorOpt_Units[DecorOpt_UnitOffset(zoneId) + i]);\n");
     out += QStringLiteral("        DecorOpt_Units[DecorOpt_UnitOffset(zoneId) + i] = null;\n");
+    out += QStringLiteral("        DecorOpt_UnitInitiallyHidden[DecorOpt_UnitOffset(zoneId) + i] = false;\n");
     out += QStringLiteral("        i += 1;\n");
     out += QStringLiteral("    }\n");
     out += QStringLiteral("    DecorOpt_UnitCount[zoneId] = 0;\n");
@@ -1609,8 +1652,31 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("    UnitCreate(1, unitType, createFlags | c_unitCreateIgnorePlacement, player, Point(x, y), StringToFixed(StringWord(orientation, 1)));\n");
     out += QStringLiteral("    u = UnitLastCreated();\n    if (u == null) { return; }\n");
     out += QStringLiteral("    DecorOpt_Units[DecorOpt_UnitOffset(zoneId) + DecorOpt_UnitCount[zoneId]] = u;\n");
+    out += QStringLiteral("    DecorOpt_UnitInitiallyHidden[DecorOpt_UnitOffset(zoneId) + DecorOpt_UnitCount[zoneId]] = false;\n");
     out += QStringLiteral("    DecorOpt_UnitCount[zoneId] += 1;\n");
     out += QStringLiteral("}\n\n");
+
+    out += QStringLiteral("void DecorOpt_CreateUnitV2(int zoneId, string unitType, int createFlags, int player, fixed x, fixed y, string properties) {\n");
+    out += QStringLiteral("    unit u; actor a; string model; int states; int variation; int resources;\n");
+    out += QStringLiteral("    states = StringToInt(StringWord(properties, 9));\n");
+    out += QStringLiteral("    if ((states & 1) != 0) { return; }\n");
+    out += QStringLiteral("    UnitCreate(1, unitType, createFlags | c_unitCreateIgnorePlacement, player, Point(x, y), StringToFixed(StringWord(properties, 1)));\n");
+    out += QStringLiteral("    u = UnitLastCreated(); if (u == null) { return; }\n");
+    out += QStringLiteral("    if ((states & 4) != 0 || StringToFixed(StringWord(properties, 3)) != 0.0) { UnitSetHeight(u, StringToFixed(StringWord(properties, 3)), 0.0); }\n");
+    out += QStringLiteral("    UnitSetScale(u, 100.0 * StringToFixed(StringWord(properties, 4)), 100.0 * StringToFixed(StringWord(properties, 5)), 100.0 * StringToFixed(StringWord(properties, 6)));\n");
+    out += QStringLiteral("    resources = StringToInt(StringWord(properties, 8)); if (resources >= 0) { UnitSetPropertyInt(u, c_unitPropResources, resources); }\n");
+    out += QStringLiteral("    variation = StringToInt(StringWord(properties, 7));\n");
+    out += QStringLiteral("    if (variation >= 0 && CatalogEntryIsValid(c_gameCatalogActor, unitType)) {\n");
+    out += QStringLiteral("        model = CatalogFieldValueGet(c_gameCatalogActor, unitType, player, \"Model\");\n");
+    out += QStringLiteral("        if (StringFind(model, \"##id##\", true) > 0) { model = StringReplace(model, unitType, StringFind(model, \"##id##\", true), StringFind(model, \"##id##\", true) + 5); }\n");
+    out += QStringLiteral("        if (StringFind(model, \"##unitName##\", true) > 0) { model = StringReplace(model, unitType, StringFind(model, \"##unitName##\", true), StringFind(model, \"##unitName##\", true) + 11); }\n");
+    out += QStringLiteral("        a = ActorFromScope(ActorScopeFromUnit(u), \"::Main\");\n");
+    out += QStringLiteral("        if (a != null && model != \"\" && CatalogEntryIsValid(c_gameCatalogModel, model)) { ActorSend(a, libNtve_gf_ModelSwap(model, variation)); }\n");
+    out += QStringLiteral("    }\n");
+    out += QStringLiteral("    if (StringWord(properties, 11) != \"-\") { a = ActorFromScope(ActorScopeFromUnit(u), \"::Main\"); if (a != null) { ActorSend(a, libNtve_gf_TextureGroupApply(StringWord(properties, 11))); } }\n");
+    out += QStringLiteral("    if ((states & 2) != 0) { UnitShow(u, false); }\n");
+    out += QStringLiteral("    DecorOpt_UnitInitiallyHidden[DecorOpt_UnitOffset(zoneId) + DecorOpt_UnitCount[zoneId]] = (states & 2) != 0;\n");
+    out += QStringLiteral("    DecorOpt_Units[DecorOpt_UnitOffset(zoneId) + DecorOpt_UnitCount[zoneId]] = u; DecorOpt_UnitCount[zoneId] += 1;\n}\n\n");
 
     QByteArray identities;
     const auto appendActorCreation = [&](QString *source, int zoneId, const DoodadPlacement &doodad) {
@@ -1675,14 +1741,22 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
                 beginHelper();
             const UnitPlacement &unit = plan.units.at(unitIndex);
             identities += placementIdentity(unit.rawSource, "ObjectUnit", unit.id, unit.name).toLatin1() + '\n';
-            out += QStringLiteral("    DecorOpt_CreateUnit(%1, %2, %3, %4, %5, %6, %7);\n")
+            const QString unitProperties = unit.extendedPlacement
+                ? QStringLiteral("%1 %2 %3 %4 %5 %6 %7 %8 %9 %10 %11")
+                    .arg(fixed(unit.rotation * 180.0 / 3.14159265358979323846), sourceAngles(unit.rawSource, {{"Rotation", unit.rotation}}),
+                         fixed(unit.z), fixed(unit.scaleX), fixed(unit.scaleY), fixed(unit.scaleZ))
+                    .arg(unit.variation).arg(unit.resources).arg(unit.stateFlags).arg(unit.attributePresence)
+                    .arg(unit.textureProps.isEmpty() ? QStringLiteral("-") : unit.textureProps)
+                : fixed(unit.rotation * 180.0 / 3.14159265358979323846) + QLatin1Char(' ')
+                    + sourceAngles(unit.rawSource, {{"Rotation", unit.rotation}});
+            out += QStringLiteral("    %8(%1, %2, %3, %4, %5, %6, %7);\n")
                        .arg(zone.zoneId)
                        .arg(galaxyString(unit.type))
                        .arg(unit.forcePlacement ? QStringLiteral("c_unitCreateIgnorePlacement") : QStringLiteral("0"))
                        .arg(unit.player)
                        .arg(fixed(unit.x)).arg(fixed(unit.y))
-                       .arg(galaxyString(fixed(unit.rotation * 180.0 / 3.14159265358979323846)
-                            + QLatin1Char(' ') + sourceAngles(unit.rawSource, {{"Rotation", unit.rotation}})));
+                       .arg(galaxyString(unitProperties))
+                       .arg(unit.extendedPlacement ? QStringLiteral("DecorOpt_CreateUnitV2") : QStringLiteral("DecorOpt_CreateUnit"));
             finishPlacement();
         }
         if (placementsInHelper != 0) {
@@ -1899,6 +1973,7 @@ bool DecorationStreamingPlanner::restoreObjectsFromGalaxy(const QByteArray &obje
     const QRegularExpression tintNull(QStringLiteral(R"re(^ActorSend\(a, "SetTintColor \{NULL ([^ ]+)\} \{0\.0\}"\);$)re"));
     const QRegularExpression tintNullLegacy(QStringLiteral(R"re(^ActorSend\(a, "SetTintColor NULL ([^ ]+) 0\.0"\);$)re"));
     const QRegularExpression tintColor(QStringLiteral(R"re(^ActorSend\(a, libNtve_gf_SetTintColor\(Color\((.*)\), ([^,]+), 0\.0\)\);$)re"));
+    const QRegularExpression unitV2Call(QStringLiteral(R"re(^DecorOpt_CreateUnitV2\((\d+), "((?:\\.|[^"\\])*)", (0|c_unitCreateIgnorePlacement), ([^,]+), ([^,]+), ([^,]+), "([^"\\]+)"\);$)re"));
     for (const QString &rawLine : galaxy.split(QLatin1Char('\n'))) {
         const QString line = rawLine.trimmed();
         if (line.startsWith(QStringLiteral("void DecorOpt_CreatePart_"))) {
@@ -1918,7 +1993,8 @@ bool DecorationStreamingPlanner::restoreObjectsFromGalaxy(const QByteArray &obje
             continue;
         }
         if (line.startsWith(QStringLiteral("//"))) continue;
-        if (compactIdentities && (line.startsWith(QStringLiteral("a = DecorOpt_CreateActor(")) || line.startsWith(QStringLiteral("DecorOpt_CreateUnit(")))) {
+        if (compactIdentities && (line.startsWith(QStringLiteral("a = DecorOpt_CreateActor(")) || line.startsWith(QStringLiteral("DecorOpt_CreateUnit("))
+                                 || line.startsWith(QStringLiteral("DecorOpt_CreateUnitV2(")))) {
             if (!finish() || identityIndex >= identityList.size() || !loadIdentity(identityList.at(identityIndex++)))
                 return fail(QStringLiteral("Missing, invalid or duplicate compact placement identity."));
         }
@@ -1953,6 +2029,46 @@ bool DecorationStreamingPlanner::restoreObjectsFromGalaxy(const QByteArray &obje
             attr(pending,"Variation",QString::number(int(args[6])));
             if (args[7] >= 0) attr(pending,"TeamColor",QString::number(int(args[7])));
             created = true; ++countDoodads; continue;
+        }
+        match = unitV2Call.match(line);
+        if (match.hasMatch()) {
+            const auto words = match.captured(7).split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (created || QString::fromUtf8(pending.name()) != QStringLiteral("ObjectUnit") || words.size() != 11)
+                return fail(QStringLiteral("Invalid extended unit placement."));
+            QVector<double> xy, properties;
+            double radians = 0;
+            if (!numeric(match.captured(4) + ',' + match.captured(5) + ',' + match.captured(6), 3, &xy)
+                || !numeric(words[0] + ',' + words.mid(2,8).join(','), 9, &properties)
+                || !angleLiteral(words[1], &radians) || xy[0] < 0 || xy[0] > 15 || xy[0] != std::floor(xy[0])
+                || properties[0] != fixed(radians * 180.0 / 3.14159265358979323846).toDouble())
+                return fail(QStringLiteral("Invalid extended unit values."));
+            if (properties[5] < -1 || properties[5] > 254 || properties[6] < -1 || properties[6] > std::numeric_limits<int>::max()
+                || properties[7] < 0 || properties[7] > 31 || properties[8] < 0 || properties[8] > 15
+                || properties[2] <= 0 || properties[3] <= 0 || properties[4] <= 0)
+                return fail(QStringLiteral("Extended unit options exceed supported ranges."));
+            const int variation = int(properties[5]), resources = int(properties[6]);
+            const int states = int(properties[7]), presence = int(properties[8]);
+            if (variation < -1 || variation > 254 || resources < -1 || states < 0 || states > 31 || presence < 0 || presence > 15
+                || properties[5] != variation || properties[6] != resources || properties[7] != states || properties[8] != presence)
+                return fail(QStringLiteral("Invalid extended unit options."));
+            attr(pending, "UnitType", match.captured(2));
+            if ((presence & 1) != 0) attr(pending, "Player", QString::number(int(xy[0])));
+            else if (xy[0] != 0) return fail(QStringLiteral("An omitted player must be neutral."));
+            attr(pending, "Position", tuple(xy, 1, 2) + ',' + QString::number(properties[1], 'g', 16));
+            setAngleLiteral(pending, "Rotation", words[1]);
+            if ((presence & 2) != 0) attr(pending, "Scale", tuple(properties, 2, 3));
+            if ((presence & 4) != 0) attr(pending, "Variation", QString::number(variation));
+            if ((presence & 8) != 0) attr(pending, "Resources", QString::number(resources));
+            else pending.remove_attribute("Resources");
+            auto texture = pending.child("Texture");
+            if (words[10] != QStringLiteral("-")) {
+                if (!QRegularExpression(QStringLiteral("^[A-Za-z0-9_,]+$")).match(words[10]).hasMatch())
+                    return fail(QStringLiteral("Invalid unit texture group."));
+                if (!texture) texture = pending.append_child("Texture");
+                attr(texture, "TexSlot", QStringLiteral("main")); attr(texture, "TexLink", QString());
+                attr(texture, "TexProps", words[10]);
+            } else if (texture) pending.remove_child(texture);
+            created = true; ++countUnits; continue;
         }
         match = unitCall.match(line);
         if (match.hasMatch()) {
@@ -2503,6 +2619,16 @@ DecorationOptimizedArtifacts DecorationStreamingPlanner::createOptimizedArtifact
 {
     DecorationOptimizedArtifacts artifacts;
     artifacts.plan = buildPlan(objectsBytes, zones, safetyContext, &artifacts.warnings);
+    if (options.entireMapEntryZoneId > 0) {
+        auto fallback = std::find_if(artifacts.plan.zones.begin(), artifacts.plan.zones.end(),
+            [&](const auto &zone) { return zone.zoneId == options.entireMapEntryZoneId; });
+        if (fallback != artifacts.plan.zones.end()) {
+            fallback->doodadIndices += artifacts.plan.unassignedDoodads;
+            fallback->unitIndices += artifacts.plan.unassignedUnits;
+            artifacts.plan.unassignedDoodads.clear();
+            artifacts.plan.unassignedUnits.clear();
+        }
+    }
     const QString prefix = options.functionPrefix.isEmpty() ? QStringLiteral("Game_area") : options.functionPrefix;
     if (!isGalaxyIdentifier(prefix))
         artifacts.warnings << QStringLiteral("Decoration function prefix is not a valid Galaxy identifier: %1.").arg(prefix);

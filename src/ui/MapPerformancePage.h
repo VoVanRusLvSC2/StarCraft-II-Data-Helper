@@ -102,6 +102,8 @@ private:
     QCheckBox *m_createGuiAction = nullptr;
     QLineEdit *m_guiActionName = nullptr;
     QLineEdit *m_guiPresetName = nullptr;
+    QCheckBox *m_keepReferencedTypes = nullptr;
+    QLineEdit *m_keepUnitTypes = nullptr;
     QLineEdit *m_prefixEdit = nullptr;
     QStandardItemModel *m_doodadModel = nullptr;
     QTableView *m_doodadTable = nullptr;

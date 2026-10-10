@@ -389,6 +389,7 @@ private slots:
     void decorationMapCopyKeepsTriggerReferencedUnitTypes();
     void decorationGuiActionBuildsEditableSwitchAndIncludes();
     void decorationGuiActionMapCopyAndRestore();
+    void decorationStreamingExtendedUnitsAndWholeMapFallback();
     void decorationStreamingKeepsExternallyReferencedDoodadsStatic();
     void decorationStreamingSupportsManualAssignmentOverrides();
     void decorationStreamingSupportsSparseZoneIds();
@@ -6315,7 +6316,7 @@ void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
     const QByteArray objects = QByteArrayLiteral(
         "ObjectDoodad { Id = 1 Name = \"CrateA\" Type = \"CrateDoodad\" Position = (10, 20, 0) Rotation = 1.5707963267948966 Pitch = 0.17453292519943295 Roll = -0.3490658503988659 Scale = 1.25 }\n"
         "ObjectDoodad { Id = 2 Name = \"CrateB\" Type = \"CrateDoodad\" Position = (110, 20, 0) Scale = (1, 2, 1) }\n"
-        "ObjectDoodad { Id = 3 Name = \"PathBlock\" Type = \"PathingBlocker\" Position = (15, 25, 0) }\n"
+        "ObjectDoodad { Id = 3 Name = \"PathBlock\" Type = \"PathingBlocker\" Position = (15, 25, 0) Flags = \"Pathing\" }\n"
         "ObjectDoodad { Id = 4 Name = \"Raised\" Type = \"RaisedVisual\" Position = (20, 25, 2) }\n");
 
     sc2dh::decor::DecorationStreamingPlanner planner;
@@ -6332,7 +6333,7 @@ void CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
     QCOMPARE(plan.zones.at(1).doodadIndices.size(), 1);
     QCOMPARE(plan.staticOnlyDoodads.size(), 1);
     QVERIFY(std::any_of(plan.staticOnlyDoodads.cbegin(), plan.staticOnlyDoodads.cend(), [&plan](int index) {
-        return plan.doodads.at(index).staticOnlyReason.contains(QStringLiteral("pathing/gameplay"));
+        return plan.doodads.at(index).staticOnlyReason.contains(QStringLiteral("footprint"));
     }));
 
     sc2dh::decor::GalaxyGenerationOptions options;
@@ -6482,7 +6483,7 @@ void CoreTests::decorationStreamingRestoresExecutableGalaxy()
     int doodads=0, units=0;
     QVERIFY2(planner.restoreObjectsFromGalaxy(artifacts.optimizedObjectsBytes,artifacts.galaxySource,
                                              &restored,&doodads,&units,&error),qPrintable(error));
-    QCOMPARE(doodads,4); QCOMPARE(units,1);
+    QCOMPARE(doodads,5); QCOMPARE(units,1);
     // Older converted maps used a single, rejected SetBearings message.
     // Their script geometry must remain importable after the runtime fix.
     QString legacy = artifacts.galaxySource;
@@ -6553,7 +6554,7 @@ void CoreTests::decorationStreamingRestoresExecutableGalaxy()
     const QString output=QDir(dir.path()).filePath(QStringLiteral("Imported.SC2Map"));
     const auto result=DecorationMapCopyService().restoreGalaxyCopy({source,output});
     QVERIFY2(result.success,qPrintable(result.error));
-    QVERIFY(result.sourceUnchanged); QCOMPARE(result.restoredDoodads,4); QCOMPARE(result.restoredUnits,1);
+    QVERIFY(result.sourceUnchanged); QCOMPARE(result.restoredDoodads,5); QCOMPARE(result.restoredUnits,1);
     Sc2Archive archive; QVERIFY(archive.load(output,&error)); QByteArray objects, runtime;
     QVERIFY(archive.readEntry(QStringLiteral("Objects"),&objects,&error));
     QVERIFY(objects.contains("113,223,-30"));
@@ -6609,7 +6610,7 @@ void CoreTests::decorationStreamingRegionEntryRestoresVisibility()
     QVERIFY(namedGalaxy.contains(QStringLiteral("void Create_Map_2_Doodads() { Create_Map_2(); }")));
     QVERIFY(namedGalaxy.contains(QStringLiteral("UnitCreate(1, unitType, createFlags | c_unitCreateIgnorePlacement")));
     QVERIFY(namedGalaxy.contains(QStringLiteral("void DecorOpt_ShowAllUnits()")));
-    QVERIFY(namedGalaxy.contains(QStringLiteral("libNtve_gf_ShowHideUnit(u, true); libNtve_gf_PauseUnit(u, false);")));
+    QVERIFY(namedGalaxy.contains(QStringLiteral("libNtve_gf_ShowHideUnit(u, !DecorOpt_UnitInitiallyHidden[DecorOpt_UnitOffset(zoneId) + i]); libNtve_gf_PauseUnit(u, false);")));
     auto namedEntireMap = plan;
     namedEntireMap.zones[2].zoneName = QStringLiteral("Entire map");
     const auto reservedNameGalaxy = planner.generateGalaxy(namedEntireMap, options);
@@ -6957,7 +6958,7 @@ void CoreTests::decorationStreamingPreservesNullableTintAndTerrainObjects()
     const QVector<sc2dh::decor::DecorZone> zones{{1, QStringLiteral("Map_1"), 0, 0, 50, 50}};
     const auto artifacts = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(objects, zones);
     QVERIFY2(artifacts.valid, qPrintable(artifacts.warnings.join(QStringLiteral("; "))));
-    QCOMPARE(artifacts.removedDoodadIndices, (QVector<int>{0, 1, 2, 3, 4}));
+    QCOMPARE(artifacts.removedDoodadIndices, (QVector<int>{0, 1, 2, 3, 4, 8, 9}));
     const auto &galaxy = artifacts.galaxySource;
     for (const QString &hdr : {QStringLiteral("100.0"), QStringLiteral("10.0"),
                                QStringLiteral("0.01"), QStringLiteral("1.0")})
@@ -6965,9 +6966,9 @@ void CoreTests::decorationStreamingPreservesNullableTintAndTerrainObjects()
     QVERIFY(!galaxy.contains(QStringLiteral("SetTintColor NULL ")));
     QVERIFY(!galaxy.contains(QStringLiteral("Color(100.0, 100.0, 100.0)")));
     QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_SetTintColor(Color(100.0, 50.196078, 0.0), 1.5, 0.0)")));
-    QVERIFY(!galaxy.contains(QStringLiteral("TerrainObjectStarshipFloraPodDoodadD")));
-    QVERIFY(!galaxy.contains(QStringLiteral("TerrainObjectCollapsingIceMediumDoodad")));
-    for (int index = 5; index < artifacts.plan.doodads.size(); ++index)
+    QVERIFY(galaxy.contains(QStringLiteral("TerrainObjectStarshipFloraPodDoodadD")));
+    QVERIFY(galaxy.contains(QStringLiteral("TerrainObjectCollapsingIceMediumDoodad")));
+    for (int index = 5; index < 8; ++index)
         QVERIFY(artifacts.optimizedObjectsBytes.contains(artifacts.plan.doodads.at(index).rawSource.toUtf8()));
     QVERIFY(artifacts.roundTripVerified);
     QVERIFY(artifacts.outsideScopePreserved);
@@ -6981,7 +6982,7 @@ void CoreTests::decorationStreamingPreservesNullableTintAndTerrainObjects()
     sc2dh::decor::DecorationStreamingPlanner planner;
     QVERIFY2(planner.restoreObjectsFromGalaxy(artifacts.optimizedObjectsBytes, galaxy,
                                                &restoredCurrent, &doodads, &units, &error), qPrintable(error));
-    QCOMPARE(doodads, 5);
+    QCOMPARE(doodads, 7);
     QVERIFY2(planner.restoreObjectsFromGalaxy(artifacts.optimizedObjectsBytes, legacy,
                                                &restoredLegacy, &doodads, &units, &error), qPrintable(error));
     QCOMPARE(restoredLegacy, restoredCurrent);
@@ -6993,7 +6994,7 @@ void CoreTests::decorationStreamingBuildsOptimizedObjectsArtifacts()
         "HeaderLine\n"
         "ObjectDoodad { Id = 10 Name = \"VisualLeft\" Type = \"TreeVisual\" Position = (10, 10, 0) Scale = 1 }\n"
         "ObjectDoodad { Id = 11 Name = \"VisualRight\" Type = \"RockVisual\" Position = (110, 10, 0) Scale = 1 }\n"
-        "ObjectDoodad { Id = 12 Name = \"GameplayBlocker\" Type = \"PathingBlocker\" Position = (12, 12, 0) }\n"
+        "ObjectDoodad { Id = 12 Name = \"GameplayBlocker\" Type = \"PathingBlocker\" Position = (12, 12, 0) Flags = \"Pathing\" }\n"
         "ObjectDoodad { Id = 13 Name = \"Unassigned\" Type = \"TreeVisual\" Position = (500, 500, 0) }\n"
         "ObjectDoodad { Id = 14 Name = \"TintedVisual\" Type = \"TreeVisual\" Position = (15, 15, 0) TintColor = (255, 0, 0) }\n"
         "FooterLine\n");
@@ -7094,15 +7095,15 @@ void CoreTests::decorationStreamingUsesRegionNamesAndPreservesForcedPlacement()
     const auto artifacts = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(
         objects, zones, sc2dh::decor::DecorationSafetyContext{}, options);
     QVERIFY2(artifacts.valid, qPrintable(artifacts.warnings.join(QStringLiteral("; "))));
-    QCOMPARE(artifacts.removedUnitIndices.size(), 3);
-    QCOMPARE(artifacts.plan.zones.at(2).unitIndices.size(), 1);
+    QCOMPARE(artifacts.removedUnitIndices.size(), 4);
+    QCOMPARE(artifacts.plan.zones.at(2).unitIndices.size(), 2);
     QCOMPARE(artifacts.plan.zones.at(1).unitIndices.size(), 1);
     QCOMPARE(artifacts.plan.zones.at(0).unitIndices.size(), 1);
     QCOMPARE(artifacts.plan.units.at(artifacts.plan.zones.at(2).unitIndices.first()).id,
              QStringLiteral("101"));
     QVERIFY(artifacts.plan.units.at(0).forcePlacement);
-    QVERIFY(artifacts.plan.units.at(3).staticOnlyReason.contains(QStringLiteral("cannot be recreated")));
-    QVERIFY(QString::fromUtf8(artifacts.optimizedObjectsBytes).contains(QStringLiteral("Id=\"104\"")));
+    QVERIFY(artifacts.plan.units.at(3).dynamicCandidate);
+    QVERIFY(!QString::fromUtf8(artifacts.optimizedObjectsBytes).contains(QStringLiteral("Id=\"104\"")));
     const QString galaxy = artifacts.galaxySource;
     QVERIFY(galaxy.contains(QStringLiteral("void Create_Map_1()")));
     QVERIFY(galaxy.contains(QStringLiteral("void Create_Map_2()")));
@@ -7169,11 +7170,11 @@ void CoreTests::decorationStreamingKeepsUnrecreatedDoodadPropertiesInObjects()
     const QVector<sc2dh::decor::DecorZone> zones{{1, QStringLiteral("Area"), 0, 0, 20, 20}};
     const auto artifacts = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(objects, zones);
     QVERIFY2(artifacts.valid, qPrintable(artifacts.warnings.join(QStringLiteral("; "))));
-    QCOMPARE(artifacts.removedDoodadIndices, (QVector<int>{0, 1, 2, 3, 4}));
+    QCOMPARE(artifacts.removedDoodadIndices, (QVector<int>{0, 1, 2, 3, 4, 6}));
     const QString optimized = QString::fromUtf8(artifacts.optimizedObjectsBytes);
     for (int id = 101; id <= 105; ++id)
         QVERIFY(!optimized.contains(QStringLiteral("Id=\"%1\"").arg(id)));
-    for (int id = 106; id <= 107; ++id)
+    for (int id = 106; id <= 106; ++id)
         QVERIFY(optimized.contains(QStringLiteral("Id=\"%1\"").arg(id)));
     QVERIFY(artifacts.galaxySource.contains(QStringLiteral("DecorOpt_CreateActor(1, \"VariedVisual\", 1.0, 1.0, 1.0, 2, -1, \"11.0,10.0,0.0 ")));
     QVERIFY(artifacts.galaxySource.contains(QStringLiteral("DecorOpt_CreateActor(1, \"TeamVisual\", 1.0, 1.0, 1.0, 0, 6, \"12.0,10.0,0.0 ")));
@@ -7194,7 +7195,8 @@ void CoreTests::decorationStreamingKeepsUnrecreatedDoodadPropertiesInObjects()
     QVERIFY(galaxy.contains(QStringLiteral("ColorFromIndex(PlayerGetColorIndex(teamColor, false), c_teamColorEmissive)")));
     QVERIFY(!galaxy.contains(QStringLiteral("ColorFromIndex(teamColor,")));
     QVERIFY(artifacts.plan.doodads.at(5).staticOnlyReason.contains(QStringLiteral("malformed")));
-    QVERIFY(artifacts.plan.doodads.at(6).staticOnlyReason.contains(QStringLiteral("footprint")));
+    QVERIFY(artifacts.plan.doodads.at(6).dynamicCandidate);
+    QVERIFY(!optimized.contains(QStringLiteral("Id=\"107\"")));
 }
 
 void CoreTests::decorationStreamingRejectsLossyPlacementData()
@@ -7216,9 +7218,9 @@ void CoreTests::decorationStreamingRejectsLossyPlacementData()
     const QList<QByteArray> badUnitFields{
         "Position=\"garbage10,20,0\"", "Position=\"10,20,0junk\"",
         "Position=\"10,20,0\" Rotation=\"oops1\"", "Position=\"10,20,0\" Scale=\"1,1,1junk\"",
-        "Position=\"10,20,0\" Rotation=\"1e999\"", "Position=\"10,20,1e-3\"",
-        "Position=\"10,20,0\" Scale=\"1,1,2\"", "Position=\"10,20,0\" Rotation=\"\"",
-        "Position=\"10,20,0\" Resources=\"300\"", "Position=\"10-20\"",
+        "Position=\"10,20,0\" Rotation=\"1e999\"",
+         "Position=\"10,20,0\" Rotation=\"\"",
+         "Position=\"10-20\"",
         "Position=\"10,20,0\" Rotation=\"1e100\"", "Position=\"524288,20,0\""};
     QList<QByteArray> records;
     for (const auto &fields : badDoodadFields)
@@ -7362,7 +7364,7 @@ void CoreTests::decorationStreamingPreparesArchivePatch()
 {
     const QByteArray objects = QByteArrayLiteral(
         "ObjectDoodad { Id = 21 Name = \"VisualA\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
-        "ObjectDoodad { Id = 22 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) }\n");
+        "ObjectDoodad { Id = 22 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) Flags = \"Pathing\" }\n");
     const QByteArray mapScript = QByteArrayLiteral(
         "include \"TriggerLibs/NativeLib\"\n"
         "void InitMap() {\n"
@@ -7488,12 +7490,13 @@ void CoreTests::decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads()
             "libNtve_gf_ShowHideDoodadsInRegion(true, RegionFromId(15), \"ActorRegionWall\");\n"
             "libVCMI_gf_SendActorMessageToDoodadsInRegion(\"SetTintColor 255,255,255 1.0\", \"ActorRegionWall\", RegionFromId(15)); }\n")},
         {QStringLiteral("Base.SC2Data/GameData/ActorData.xml"), QByteArrayLiteral(
-            "<Catalog><CActorDoodad id=\"CustomSurface\"><EditorCategories value=\"DoodadType:TerrainObject\"/></CActorDoodad></Catalog>")}
+            "<Catalog><CActorDoodad id=\"CustomSurface\"><EditorCategories value=\"DoodadType:TerrainObject\"/><Footprint value=\"PhysicalSurface\"/></CActorDoodad></Catalog>")}
     }, &error), qPrintable(error));
     sc2dh::decor::DecorOptimizedMapRequest request;
     request.sourceArchivePath = source;
     request.outputArchivePath = output;
     request.writeRestoreSidecars = true;
+    request.safetyContext.keepReferencedTypes = true;
     request.zones = {{1, QStringLiteral("Map"), 0, 0, 50, 50}};
     const auto result = sc2dh::decor::DecorationMapCopyService().createOptimizedCopy(request);
     QVERIFY2(result.success, qPrintable(result.error));
@@ -7586,6 +7589,7 @@ void CoreTests::decorationMapCopyKeepsTriggerReferencedUnitTypes()
         request.sourceArchivePath = source;
         request.outputArchivePath = output;
         request.zones = {{1, QStringLiteral("Map"), 0, 0, 50, 50}};
+        request.safetyContext.keepReferencedTypes = true;
         sc2dh::decor::DecorationMapCopyService service;
         const auto safety = service.inspectSafety(request, &error);
         QVERIFY2(error.isEmpty(), qPrintable(error));
@@ -7593,8 +7597,8 @@ void CoreTests::decorationMapCopyKeepsTriggerReferencedUnitTypes()
         QCOMPARE(files.size(), 1);
         QCOMPARE(QString(files.first()).replace(QLatin1Char('\\'), QLatin1Char('/')), reference.first);
         QVERIFY(!safety.referenceFilesByUnitType.contains(QStringLiteral("marine")));
-        QVERIFY(safety.staticOnlyReasonByDoodadType.contains(QStringLiteral("referenceddecor")));
-        QVERIFY(!safety.staticOnlyReasonByDoodadType.contains(QStringLiteral("freetree")));
+        QVERIFY(safety.referenceFilesByDoodadType.contains(QStringLiteral("referenceddecor")));
+        QVERIFY(!safety.referenceFilesByDoodadType.contains(QStringLiteral("freetree")));
         const auto result = service.createOptimizedCopy(request);
         QVERIFY2(result.success, qPrintable(result.error));
         QCOMPARE(result.removedUnits, 1);
@@ -7790,6 +7794,80 @@ void CoreTests::decorationGuiActionMapCopyAndRestore()
 #endif
 }
 
+void CoreTests::decorationStreamingExtendedUnitsAndWholeMapFallback()
+{
+    using namespace sc2dh::decor;
+    const QByteArray source = QByteArrayLiteral(
+        "<PlacedObjects>"
+        "<ObjectDoodad Id=\"1\" Type=\"TerrainObjectStarshipFloraPodDoodadD\" Position=\"90,90,2\"><Flag Index=\"NoDoodadFootprint\" Value=\"1\"/></ObjectDoodad>"
+        "<ObjectDoodad Id=\"2\" Type=\"Tree\" Position=\"15,15,0\"/>"
+        "<ObjectUnit Id=\"11\" UnitType=\"Marine\" Player=\"1\" Position=\"10,10,0\" Scale=\"1.25,1.5,2\"/>"
+        "<ObjectUnit Id=\"12\" UnitType=\"PurifierMineralField\" Position=\"80,80,-0.0063\" Scale=\"1,1,1\" Variation=\"6\" Resources=\"3200\"><Flag Index=\"HeightOffset\" Value=\"1\"/></ObjectUnit>"
+        "<ObjectUnit Id=\"13\" UnitType=\"Factory\" Player=\"5\" Position=\"15,15,0\"><Flag Index=\"UnitNoCreate\" Value=\"1\"/><Flag Index=\"UnitHidden\" Value=\"1\"/><Flag Index=\"DeferModelLoad\" Value=\"1\"/><AIFlag Index=\"IsUseable\" Value=\"0\"/></ObjectUnit>"
+        "<ObjectUnit Id=\"14\" UnitType=\"CommandCenter\" Player=\"1\" Position=\"18,18,0\"/>"
+        "<ObjectUnit Id=\"15\" UnitType=\"Stalker\" Player=\"6\" Position=\"10,10,0\"/>"
+        "<ObjectUnit Id=\"16\" UnitType=\"Marine\" Player=\"1\" Position=\"11,11,0\"/>"
+        "<ObjectUnit Id=\"17\" UnitType=\"Civilian\" Player=\"11\" Position=\"12,12,0\" Variation=\"1\"><Flag Index=\"UnitHidden\" Value=\"1\"/><Texture TexSlot=\"main\" TexProps=\"male,backpack,01\" TexLink=\"\"/></ObjectUnit>"
+        "</PlacedObjects>");
+    DecorationSafetyContext safety;
+    safety.excludedUnitTypeKeys.insert(QStringLiteral("commandcenter"));
+    safety.referenceFilesByDoodadKey.insert(QStringLiteral("15"), {QStringLiteral("MapScript.galaxy")});
+    safety.referenceFilesByDoodadKey.insert(QStringLiteral("2"), {QStringLiteral("Triggers")});
+    safety.referenceFilesByUnitType.insert(QStringLiteral("marine"), {QStringLiteral("MapScript.galaxy")});
+    safety.referenceFilesByDoodadType.insert(QStringLiteral("terrainobjectstarshipflorapoddoodadd"), {QStringLiteral("MapScript.galaxy")});
+    GalaxyGenerationOptions options;
+    options.useRegionNames = true;
+    options.entireMapEntryZoneId = 8;
+    const QVector<DecorZone> zones{{1, QStringLiteral("Map_1"), 0, 0, 20, 20},
+                                  {8, QStringLiteral("Map_3"), 0, 0, 50, 50}};
+    DecorationStreamingPlanner planner;
+    const auto result = planner.createOptimizedArtifacts(source, zones, safety, options);
+    QVERIFY2(result.valid, qPrintable(result.warnings.join(QStringLiteral("\n"))));
+    QCOMPARE(result.removedDoodadIndices.size(), 1);
+    QCOMPARE(result.removedUnitIndices.size(), 5);
+    QCOMPARE(result.plan.unassignedDoodads.size(), 0);
+    QCOMPARE(result.plan.unassignedUnits.size(), 0);
+    QVERIFY(result.optimizedObjectsBytes.contains("CommandCenter"));
+    QVERIFY(result.optimizedObjectsBytes.contains("Stalker"));
+    QVERIFY(!result.optimizedObjectsBytes.contains("Marine"));
+    QVERIFY(!result.optimizedObjectsBytes.contains("PurifierMineralField"));
+    QVERIFY(result.galaxySource.contains(QStringLiteral("DecorOpt_CreateUnitV2")));
+    QVERIFY(result.galaxySource.contains(QStringLiteral("libNtve_gf_TextureGroupApply(StringWord(properties, 11))")));
+    QVERIFY(result.galaxySource.contains(QStringLiteral("!DecorOpt_UnitInitiallyHidden[")));
+    QVERIFY(result.galaxySource.contains(QStringLiteral("UnitSetHeight")));
+    QVERIFY(result.galaxySource.contains(QStringLiteral("UnitSetScale")));
+    QVERIFY(result.galaxySource.contains(QStringLiteral("UnitSetPropertyInt(u, c_unitPropResources")));
+    QByteArray preload;
+    QString error;
+    QVERIFY2(planner.generateRuntimePreload(result.plan, {}, &preload, &error), qPrintable(error));
+    QVERIFY(preload.contains("PurifierMineralField"));
+    QVERIFY(preload.contains("Variations=\"6\""));
+    QByteArray restored;
+    int doodads = 0, units = 0;
+    QVERIFY2(planner.restoreObjectsFromGalaxy(result.optimizedObjectsBytes, result.galaxySource,
+                                               &restored, &doodads, &units, &error), qPrintable(error));
+    QCOMPARE(doodads, 1);
+    QCOMPARE(units, 5);
+    pugi::xml_document doc;
+    QVERIFY(doc.load_buffer(restored.constData(), size_t(restored.size())));
+    auto mineral = doc.child("PlacedObjects").find_child_by_attribute("ObjectUnit", "Id", "12");
+    QVERIFY(!mineral.attribute("Player"));
+    QCOMPARE(mineral.attribute("Resources").as_int(), 3200);
+    QCOMPARE(mineral.attribute("Variation").as_int(), 6);
+    QVERIFY(mineral.find_child_by_attribute("Flag", "Index", "HeightOffset"));
+    auto factory = doc.child("PlacedObjects").find_child_by_attribute("ObjectUnit", "Id", "13");
+    QVERIFY(factory.find_child_by_attribute("Flag", "Index", "UnitNoCreate"));
+    QVERIFY(factory.find_child_by_attribute("AIFlag", "Index", "IsUseable"));
+    auto civilian = doc.child("PlacedObjects").find_child_by_attribute("ObjectUnit", "Id", "17");
+    QCOMPARE(QString::fromUtf8(civilian.child("Texture").attribute("TexProps").value()), QStringLiteral("male,backpack,01"));
+    QVERIFY(civilian.find_child_by_attribute("Flag", "Index", "UnitHidden"));
+    auto strict = safety;
+    strict.keepReferencedTypes = true;
+    const auto protectedTypes = planner.createOptimizedArtifacts(source, zones, strict, options);
+    QVERIFY(protectedTypes.valid);
+    QCOMPARE(protectedTypes.removedUnitIndices.size(), 3);
+}
+
 void CoreTests::decorationMapCopyPreloadsNativeVariants()
 {
 #ifndef SC2DH_USE_STORMLIB
@@ -7922,7 +8000,7 @@ void CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
     const QString outputPath = QDir(dir.path()).absoluteFilePath(QStringLiteral("DecorSource_DecorOptimized.SC2Map"));
     const QByteArray objects = QByteArrayLiteral(
         "ObjectDoodad { Id = 31 Name = \"ReferencedVisual\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
-        "ObjectDoodad { Id = 32 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) }\n"
+        "ObjectDoodad { Id = 32 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) Flags = \"Pathing\" }\n"
         "ObjectDoodad { Id = 33 Name = \"FreeVisual\" Type = \"RockVisual\" Position = (12, 12, 0) }\n"
         "ObjectDoodad { Id = 34 Name = \"ManualRight\" Type = \"CrystalVisual\" Position = (13, 12, 0) }\n"
         "ObjectDoodad { Id = 35 Name = \"KeepStatic\" Type = \"GrassVisual\" Position = (14, 12, 0) }\n"
@@ -8258,7 +8336,7 @@ void CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
     const QByteArray objects = QByteArrayLiteral(
         "ObjectDoodad { Id = 61 Name = \"LeftFree\" Type = \"TreeVisual\" Position = (10, 10, 0) }\n"
         "ObjectDoodad { Id = 62 Name = \"RightFree\" Type = \"RockVisual\" Position = (110, 10, 0) }\n"
-        "ObjectDoodad { Id = 63 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) }\n");
+        "ObjectDoodad { Id = 63 Name = \"StaticBlock\" Type = \"PathingBlocker\" Position = (11, 11, 0) Flags = \"Pathing\" }\n");
     QString error;
     QVERIFY2(createTestMpqArchive(sourcePath,
                                   {

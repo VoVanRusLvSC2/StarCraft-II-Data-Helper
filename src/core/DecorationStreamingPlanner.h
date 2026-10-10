@@ -63,6 +63,14 @@ struct UnitPlacement
     double y = 0.0;
     double rotation = 0.0;
     bool forcePlacement = false;
+    double z = 0.0;
+    double scaleX = 1.0, scaleY = 1.0, scaleZ = 1.0;
+    int variation = -1;
+    int resources = -1;
+    int stateFlags = 0;
+    int attributePresence = 0;
+    bool extendedPlacement = false;
+    QString textureProps;
     QString rawSource;
     qsizetype sourceStart = -1;
     qsizetype sourceEnd = -1;
@@ -122,6 +130,8 @@ struct DecorationSafetyContext
     QHash<QString, int> forcedZoneByDoodadKey;
     QHash<QString, QString> staticOnlyReasonByDoodadType;
     QHash<QString, QStringList> referenceFilesByUnitType;
+    QHash<QString, QStringList> referenceFilesByDoodadType;
+    bool keepReferencedTypes = false;
     QSet<QString> excludedUnitKeys;
     QSet<QString> excludedUnitTypeKeys;
 };

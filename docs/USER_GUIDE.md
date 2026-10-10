@@ -61,18 +61,25 @@ The installed `SC2DecorOptimizeMap.exe` offers the same conversion from a
 command line. It always writes a new `.SC2Map` unless you explicitly use
 `--overwrite` for the output path.
 
-For each selected Region, the copy removes supported doodads and simple units
-with no ID/name or concrete doodad/unit-type references in scripts or GUI triggers. One Galaxy function
+For each selected Region, the copy removes supported doodads and units
+with no direct placement ID/name references in scripts or GUI triggers. One Galaxy function
 per Region, such as `Create_Map_1()` for a Region named `Map_1`, recreates both
-without batch functions; `Clear_Map_1()` removes the generated objects. Call them from
+through one public entry point; `Clear_Map_1()` removes the generated objects. Call them from
 your map triggers when the Region should appear or disappear. Unsupported or
-referenced placements stay static. A lookup such as `UnitGroup("CommandCenter", ...)`
-keeps all command centers in native `Objects`, so a hero-spawn trigger can still
-find its anchor. Preview identifies the referencing file. Comments, unit catalog
-definitions and preload entries alone do not trigger this protection. Broad
+referenced placements stay static. Type lookups and loops do not automatically
+preserve all units. Set **Unit types to keep** (GUI default: `CommandCenter`) or
+choose individual placements manually. Optional **Keep all types mentioned in
+triggers/scripts** enables the broader policy. Preview identifies exclusions.
+Comments, unit catalog definitions and preload entries alone do not trigger this protection. Broad
 actions such as “all units in Region” without a concrete type do not count as
 direct references: they will see fewer units before
 `Create` and after `Clear`.
+Supported unit placement properties include scale, height, resource amounts,
+model variations and texture groups. `UnitNoCreate` templates are exported for
+restoration without being spawned at runtime. Unsupported per-instance properties
+remain native; for KSP3, two bridges have a `BoostexCliffLevel` override.
+An Entire map entry point also includes eligible placements outside the other
+selected Regions.
 
 ```powershell
 SC2DecorOptimizeMap.exe source.SC2Map optimized.SC2Map --zones zones.json --report decor-report.json

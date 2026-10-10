@@ -534,6 +534,7 @@ struct CliOptions
     bool restore = false;
     bool galaxyOnly = false;
     bool writeRestoreSidecars = false;
+    bool keepReferencedTypes = false;
     sc2dh::decor::DecorGuiActionOptions guiAction;
     QString sourcePath;
     QString outputPath;
@@ -571,6 +572,7 @@ QString usageText()
         "  --galaxy-only              Export .galaxy and support XML files; do not write a map or GUI Triggers.\n"
         "  --restore-sidecars         Include optional JSON rollback backup and import XML (off by default).\n"
         "  --gui-action               Add a GUI Action Definition, Region preset and Switch cases.\n"
+        "  --keep-referenced-types    Optional broad type protection. Default: protect direct ID/name links only.\n"
         "  --gui-action-name <name>    Display name (enables GUI action generation).\n"
         "  --gui-preset-name <name>    Preset display name (enables GUI action generation).\n"
         "  --visibility-only            Keep Objects unchanged; add hide/restore actor visibility API (requires --zones).\n"
@@ -647,13 +649,15 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
         if (name == QStringLiteral("--overwrite") || name == QStringLiteral("--visibility-only")
             || name == QStringLiteral("--region-names") || name == QStringLiteral("--restore-sidecars")
             || name == QStringLiteral("--map-regions") || name == QStringLiteral("--restore") || name == QStringLiteral("--galaxy-only")
-            || name == QStringLiteral("--gui-action")) {
+            || name == QStringLiteral("--gui-action") || name == QStringLiteral("--keep-referenced-types")) {
             if (equals >= 0) {
                 if (error)
                     *error = QStringLiteral("%1 does not accept a value.").arg(name);
                 return false;
             }
-            if (name == QStringLiteral("--gui-action"))
+            if (name == QStringLiteral("--keep-referenced-types"))
+                options->keepReferencedTypes = true;
+            else if (name == QStringLiteral("--gui-action"))
                 options->guiAction.enabled = true;
             else if (name == QStringLiteral("--overwrite"))
                 options->overwrite = true;
@@ -895,6 +899,7 @@ int main(int argc, char *argv[])
     request.overwriteExisting = cli.overwrite;
     request.writeRestoreSidecars = cli.writeRestoreSidecars;
     request.guiAction = cli.guiAction;
+    request.safetyContext.keepReferencedTypes = cli.keepReferencedTypes;
     request.dryRun = cli.galaxyOnly;
 
     const DecorOptimizedMapResult result = DecorationMapCopyService().createOptimizedCopy(request);
