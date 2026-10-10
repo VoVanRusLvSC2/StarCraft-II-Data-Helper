@@ -1,0 +1,31 @@
+// Public SC2 core TriggerLibs signatures used by the extended unit runtime.
+// Source: Blizzard core.sc2mod natives.galaxy / natives_missing.galaxy / NativeLib.galaxy.
+// Snapshot: https://github.com/Talv/sc2-gamedata/tree/6dd323a/mods/core.sc2mod/base.sc2data/TriggerLibs
+// Independent API contract; deliberately contains no UnitShow declaration.
+
+int StringToInt (string x);
+string StringWord (string s, int index);
+unitgroup UnitCreate (
+    int inCount,
+    string inUnitType,
+    int inCreateStyle,
+    int inPlayer,
+    point inPos,
+    fixed inFacing
+);
+point Point (fixed x, fixed y);
+fixed StringToFixed (string x);
+unit UnitLastCreated ();
+void UnitSetHeight (unit inUnit, fixed inHeight, fixed inDuration);
+void UnitSetScale (unit inUnit, fixed x, fixed y, fixed z);
+void UnitSetPropertyInt (unit inUnit, int inProp, int inVal);
+bool CatalogEntryIsValid (int catalog, string entry);
+string CatalogFieldValueGet (int catalog, string entry, string fieldPath, int player);
+int StringFind (string s1, string s2, bool caseSens);
+string StringReplace (string s, string replace, int start, int end);
+actor ActorFromScope (actorscope as, string name);
+actorscope ActorScopeFromUnit (unit u);
+void ActorSend (actor a, string msg);
+string libNtve_gf_ModelSwap (string lp_model, int lp_variation);
+string libNtve_gf_TextureGroupApply (string lp_textureProps);
+void libNtve_gf_ShowHideUnit (unit lp_unit, bool lp_showHide);

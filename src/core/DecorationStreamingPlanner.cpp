@@ -1667,14 +1667,14 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("    resources = StringToInt(StringWord(properties, 8)); if (resources >= 0) { UnitSetPropertyInt(u, c_unitPropResources, resources); }\n");
     out += QStringLiteral("    variation = StringToInt(StringWord(properties, 7));\n");
     out += QStringLiteral("    if (variation >= 0 && CatalogEntryIsValid(c_gameCatalogActor, unitType)) {\n");
-    out += QStringLiteral("        model = CatalogFieldValueGet(c_gameCatalogActor, unitType, player, \"Model\");\n");
+    out += QStringLiteral("        model = CatalogFieldValueGet(c_gameCatalogActor, unitType, \"Model\", player);\n");
     out += QStringLiteral("        if (StringFind(model, \"##id##\", true) > 0) { model = StringReplace(model, unitType, StringFind(model, \"##id##\", true), StringFind(model, \"##id##\", true) + 5); }\n");
     out += QStringLiteral("        if (StringFind(model, \"##unitName##\", true) > 0) { model = StringReplace(model, unitType, StringFind(model, \"##unitName##\", true), StringFind(model, \"##unitName##\", true) + 11); }\n");
     out += QStringLiteral("        a = ActorFromScope(ActorScopeFromUnit(u), \"::Main\");\n");
     out += QStringLiteral("        if (a != null && model != \"\" && CatalogEntryIsValid(c_gameCatalogModel, model)) { ActorSend(a, libNtve_gf_ModelSwap(model, variation)); }\n");
     out += QStringLiteral("    }\n");
     out += QStringLiteral("    if (StringWord(properties, 11) != \"-\") { a = ActorFromScope(ActorScopeFromUnit(u), \"::Main\"); if (a != null) { ActorSend(a, libNtve_gf_TextureGroupApply(StringWord(properties, 11))); } }\n");
-    out += QStringLiteral("    if ((states & 2) != 0) { UnitShow(u, false); }\n");
+    out += QStringLiteral("    if ((states & 2) != 0) { libNtve_gf_ShowHideUnit(u, false); }\n");
     out += QStringLiteral("    DecorOpt_UnitInitiallyHidden[DecorOpt_UnitOffset(zoneId) + DecorOpt_UnitCount[zoneId]] = (states & 2) != 0;\n");
     out += QStringLiteral("    DecorOpt_Units[DecorOpt_UnitOffset(zoneId) + DecorOpt_UnitCount[zoneId]] = u; DecorOpt_UnitCount[zoneId] += 1;\n}\n\n");
 

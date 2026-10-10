@@ -24,6 +24,12 @@ void text(pugi::xml_node parent, const char *tag, const QString &value)
 {
     parent.append_child(tag).text().set(value.toUtf8().constData());
 }
+void scriptCode(pugi::xml_node parent, const QString &value)
+{
+    // Match the opening/closing framing lines in SC2's native ScriptCode XML.
+    // Inline text appeared empty when the generated actions were imported.
+    text(parent, "ScriptCode", QStringLiteral("\n            %1\n        ").arg(value.trimmed()));
+}
 bool displayNameValid(const QString &value)
 {
     return !value.trimmed().isEmpty() && value.size() <= 256
@@ -137,6 +143,7 @@ DecorGuiActionArtifacts buildDecorGuiAction(const QByteArray &triggers,
     preset.append_child("PresetGenConstVar");
     auto function = element("FunctionDef", functionId);
     text(function, "Identifier", functionIdentifier);
+    reference(function, "Label", "Label", QStringLiteral("1C34099B"), "Ntve");
     function.append_child("FlagAction");
     reference(function, "Parameter", "ParamDef", parameterId);
     auto parameter = element("ParamDef", parameterId);
@@ -192,7 +199,7 @@ DecorGuiActionArtifacts buildDecorGuiAction(const QByteArray &triggers,
         auto script = element("FunctionCall", scriptId);
         reference(script, "FunctionDef", "FunctionDef", QStringLiteral("00000123"), "Ntve");
         reference(script, "SubFunctionType", "SubFuncType", QStringLiteral("363CE97C"), "Ntve");
-        text(script, "ScriptCode", call);
+        scriptCode(script, call);
         body += QStringLiteral("    %1if (lp_region == %2) { %3 }\n").arg(i ? QStringLiteral("else ") : QString(), QString::number(i), call);
     }
     body += QStringLiteral("}\n");
@@ -215,7 +222,10 @@ DecorGuiActionArtifacts buildDecorGuiAction(const QByteArray &triggers,
         auto code = node.child("ScriptCode");
         const QString normalized = canonicalIncludes(QString::fromUtf8(code.text().get()), includePath, &found, &complete);
         if (!complete) { result.error = QStringLiteral("Incomplete GUI Custom Script; no copy created."); return result; }
-        if (found) { code.text().set(normalized.toUtf8().constData()); guiInclude = true; }
+        if (found) {
+            code.text().set(QStringLiteral("\n            %1\n        ").arg(normalized.trimmed()).toUtf8().constData());
+            guiInclude = true;
+        }
     }
     for (auto node : originalNodes) {
         const QString type = QString::fromUtf8(node.attribute("Type").value());
@@ -240,7 +250,7 @@ DecorGuiActionArtifacts buildDecorGuiAction(const QByteArray &triggers,
     if (!guiInclude) {
         const QString includeId = nextId();
         auto include = element("CustomScript", includeId);
-        text(include, "ScriptCode", QStringLiteral("include \"%1\"\n").arg(includePath));
+        scriptCode(include, QStringLiteral("include \"%1\"").arg(includePath));
         auto item = items.insert_child_after("Item", categoryItem);
         item.append_attribute("Type") = "CustomScript";
         item.append_attribute("Id") = includeId.toUtf8().constData();

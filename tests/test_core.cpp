@@ -390,6 +390,7 @@ private slots:
     void decorationGuiActionBuildsEditableSwitchAndIncludes();
     void decorationGuiActionMapCopyAndRestore();
     void decorationStreamingExtendedUnitsAndWholeMapFallback();
+    void decorationExtendedUnitRuntimeMatchesPublicApi();
     void decorationStreamingKeepsExternallyReferencedDoodadsStatic();
     void decorationStreamingSupportsManualAssignmentOverrides();
     void decorationStreamingSupportsSparseZoneIds();
@@ -7676,6 +7677,7 @@ void CoreTests::decorationGuiActionBuildsEditableSwitchAndIncludes()
     QSet<QString> ids;
     pugi::xml_node function, preset, switchCall;
     int cases = 0, customIncludes = 0;
+    QSet<QString> editableCalls;
     for (auto e : root.children("Element")) {
         const QString id = QString::fromUtf8(e.attribute("Id").value());
         QVERIFY2(!ids.contains(id), qPrintable(id));
@@ -7687,16 +7689,29 @@ void CoreTests::decorationGuiActionBuildsEditableSwitchAndIncludes()
         const QString nativeId = QString::fromUtf8(e.child("FunctionDef").attribute("Id").value());
         if (nativeId == QStringLiteral("91C49196")) switchCall = e;
         if (nativeId == QStringLiteral("3A1227AB")) ++cases;
+        if (nativeId == QStringLiteral("00000123")) {
+            // ScriptCode follows the native multi-line XML framing contract.
+            // Keep the action body between the native opening/closing lines.
+            auto lines = QString::fromUtf8(e.child("ScriptCode").text().get()).split(QLatin1Char('\n'));
+            QVERIFY(lines.size() >= 3);
+            QVERIFY(lines.first().trimmed().isEmpty());
+            QVERIFY(lines.last().trimmed().isEmpty());
+            lines.removeFirst(); lines.removeLast();
+            editableCalls.insert(lines.join(QLatin1Char('\n')).trimmed());
+        }
         if (id == QStringLiteral("A004")) {
             QVERIFY(!e.child("ScriptCode"));
             QCOMPARE(QString::fromUtf8(e.child("SubFunctionType").attribute("Id").value()), QStringLiteral("363CE97C"));
         }
     }
     QVERIFY(function.child("FlagAction"));
+    QCOMPARE(QString::fromUtf8(function.child("Label").attribute("Library").value()), QStringLiteral("Ntve"));
+    QCOMPARE(QString::fromUtf8(function.child("Label").attribute("Id").value()), QStringLiteral("1C34099B")); // Environment
     QVERIFY(preset.child("PresetInteger"));
     QCOMPARE(int(std::distance(preset.children("Item").begin(), preset.children("Item").end())), 3);
     QVERIFY(switchCall);
     QCOMPARE(cases, 3);
+    QCOMPARE(editableCalls, (QSet<QString>{QStringLiteral("Create_Map_1();"), QStringLiteral("Create_Map_2();"), QStringLiteral("Create_Map_3();")}));
     QCOMPARE(customIncludes, 1);
     QVERIFY(result.triggerStrings.values().contains(QStringLiteral("My map loader")));
     QVERIFY(result.triggerStrings.values().contains(QStringLiteral("My areas")));
@@ -7866,6 +7881,100 @@ void CoreTests::decorationStreamingExtendedUnitsAndWholeMapFallback()
     const auto protectedTypes = planner.createOptimizedArtifacts(source, zones, strict, options);
     QVERIFY(protectedTypes.valid);
     QCOMPARE(protectedTypes.removedUnitIndices.size(), 3);
+}
+
+void CoreTests::decorationExtendedUnitRuntimeMatchesPublicApi()
+{
+    QFile apiFile(QFINDTESTDATA("fixtures/decor_unit_runtime_api.galaxy"));
+    QVERIFY(apiFile.open(QIODevice::ReadOnly));
+    struct Signature { QString result; QStringList parameters; };
+    QHash<QString, Signature> api;
+    const QRegularExpression declaration(QStringLiteral(R"((\w+)\s+(\w+)\s*\(([^)]*)\)\s*;)"));
+    auto declarations = declaration.globalMatch(QString::fromUtf8(apiFile.readAll()));
+    while (declarations.hasNext()) {
+        const auto d = declarations.next();
+        Signature signature{d.captured(1), {}};
+        for (const auto &parameter : d.captured(3).split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+            const QString value = parameter.trimmed();
+            if (!value.isEmpty()) signature.parameters << value.section(QRegularExpression(QStringLiteral("\\s+")), 0, 0);
+        }
+        api.insert(d.captured(2), signature);
+    }
+    QCOMPARE(api.size(), 19);
+    const auto generated = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(
+        QByteArrayLiteral("<PlacedObjects><ObjectUnit Id=\"1\" UnitType=\"Marine\" Player=\"6\" Position=\"5,5,0\" Scale=\"2,2,2\" Variation=\"1\"><Flag Index=\"UnitHidden\" Value=\"1\"/></ObjectUnit></PlacedObjects>"),
+        {{1, QStringLiteral("Area"), 0, 0, 20, 20}});
+    QVERIFY(generated.valid);
+    const QString &galaxy = generated.galaxySource;
+    const QRegularExpression localDeclaration(QStringLiteral(R"(\b(int|void|bool|actor)\s+(DecorOpt_\w+)\s*\(([^)]*)\)\s*\{)"));
+    auto locals = localDeclaration.globalMatch(galaxy);
+    while (locals.hasNext()) {
+        const auto d = locals.next();
+        Signature signature{d.captured(1), {}};
+        for (const auto &parameter : d.captured(3).split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+            const QString value = parameter.trimmed();
+            if (!value.isEmpty()) signature.parameters << value.section(QRegularExpression(QStringLiteral("\\s+")), 0, 0);
+        }
+        api.insert(d.captured(2), signature);
+    }
+    const auto start = galaxy.indexOf(QStringLiteral("void DecorOpt_CreateUnitV2("));
+    QVERIFY(start >= 0);
+    const auto end = galaxy.indexOf(QStringLiteral("\n}\n\n"), start);
+    QVERIFY(end > start);
+    const QString helper = galaxy.mid(start, end + 3 - start);
+    const auto validate = [&](const QString &source) {
+        QStringList errors;
+        QHash<QString, QString> variables;
+        const QRegularExpression variable(QStringLiteral(R"(\b(unit|actor|string|int|fixed|bool)\s+(\w+)\b)"));
+        auto matches = variable.globalMatch(source);
+        while (matches.hasNext()) { const auto m = matches.next(); variables.insert(m.captured(2), m.captured(1)); }
+        bool complete = true;
+        const auto tokens = sc2dh::galaxy::lex(source, &complete);
+        if (!complete) errors << QStringLiteral("Incomplete Galaxy tokens");
+        for (int i = 0; i + 1 < tokens.size(); ++i) {
+            const auto &name = tokens[i].raw;
+            if (tokens[i].literal || !QRegularExpression(QStringLiteral("^[A-Za-z_][A-Za-z0-9_]*$")).match(name).hasMatch()
+                || tokens[i+1].raw != QStringLiteral("(") || name == QStringLiteral("if")
+                || name == QStringLiteral("while") || (i > 0 && tokens[i-1].raw == QStringLiteral("void"))) continue;
+            if (!api.contains(name)) { errors << QStringLiteral("Unknown API: %1").arg(name); continue; }
+            QVector<QVector<sc2dh::galaxy::Token>> arguments;
+            int depth = 1, argumentStart = i + 2;
+            for (int j = argumentStart; j < tokens.size(); ++j) {
+                if (tokens[j].raw == QStringLiteral("(")) ++depth;
+                if (tokens[j].raw == QStringLiteral(")")) --depth;
+                if (depth == 0 || (depth == 1 && tokens[j].raw == QStringLiteral(","))) {
+                    if (j > argumentStart) arguments << tokens.mid(argumentStart, j - argumentStart);
+                    argumentStart = j + 1;
+                    if (depth == 0) break;
+                }
+            }
+            const auto signature = api.value(name);
+            if (arguments.size() != signature.parameters.size()) { errors << QStringLiteral("Arity: %1").arg(name); continue; }
+            for (int j = 0; j < arguments.size(); ++j) {
+                const auto &argument = arguments[j];
+                QString actual;
+                if (argument.size() == 1) {
+                    const auto &token = argument.front();
+                    actual = token.literal ? QStringLiteral("string") : variables.value(token.raw);
+                    if (token.raw == QStringLiteral("true") || token.raw == QStringLiteral("false")) actual = QStringLiteral("bool");
+                    if (token.raw.startsWith(QStringLiteral("c_")) || QRegularExpression(QStringLiteral("^[0-9]+$")).match(token.raw).hasMatch()) actual = QStringLiteral("int");
+                } else if (argument[1].raw == QStringLiteral("(") && api.contains(argument[0].raw)) actual = api.value(argument[0].raw).result;
+                const auto &expected = signature.parameters[j];
+                if (!actual.isEmpty() && actual != expected && !(actual == QStringLiteral("int") && expected == QStringLiteral("fixed")))
+                    errors << QStringLiteral("Type: %1 argument %2 expects %3, got %4").arg(name).arg(j+1).arg(expected, actual);
+            }
+        }
+        return errors;
+    };
+    const auto errors = validate(helper);
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join(QLatin1Char('\n'))));
+    // Prove this contract check detects the two runtime compilation regressions.
+    QString wrongOrder = helper;
+    wrongOrder.replace(QStringLiteral("unitType, \"Model\", player"), QStringLiteral("unitType, player, \"Model\""));
+    QVERIFY(!validate(wrongOrder).isEmpty());
+    QString nonexistent = helper;
+    nonexistent.replace(QStringLiteral("libNtve_gf_ShowHideUnit(u, false)"), QStringLiteral("UnitShow(u, false)"));
+    QVERIFY(validate(nonexistent).contains(QStringLiteral("Unknown API: UnitShow")));
 }
 
 void CoreTests::decorationMapCopyPreloadsNativeVariants()
