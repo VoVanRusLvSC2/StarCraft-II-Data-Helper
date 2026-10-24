@@ -90,7 +90,14 @@ QByteArray loadSchemaSourceBytes()
         QDir::current().absoluteFilePath(QStringLiteral("../../resources/catalogsData.xsd")),
         QCoreApplication::applicationDirPath() + QStringLiteral("/../resources/catalogsData.xsd")
     };
-    for (const QString &path : paths) if (readAll(path, &bytes)) return bytes;
+    for (const QString &path : paths) {
+        if (readAll(path, &bytes)) {
+            // Git may check out text files with platform-specific line endings.
+            // Hash the canonical source so the schema index works on Windows CI.
+            bytes.replace("\r\n", "\n");
+            return bytes;
+        }
+    }
     return {};
 }
 

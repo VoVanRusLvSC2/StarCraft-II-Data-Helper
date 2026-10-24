@@ -16,7 +16,7 @@ SUPPORTED = {'schema', 'complexType', 'simpleType', 'complexContent', 'simpleCon
              'totalDigits', 'union', 'list'}
 
 def generate(path: Path) -> dict:
-    raw = path.read_bytes()
+    raw = path.read_bytes().replace(b'\r\n', b'\n')
     root = etree.fromstring(raw, etree.XMLParser(resolve_entities=False, no_network=True))
     namespace = root.get('targetNamespace', '')
     def qname(node, value):
