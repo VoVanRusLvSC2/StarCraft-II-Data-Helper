@@ -1096,13 +1096,19 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
             QStringList directReferences;
             for (const QString &key : doodadKeys(doodad))
                 directReferences += safetyContext.referenceFilesByDoodadKey.value(key);
+            // A single disabled-Custom-Color placement makes runtime creation
+            // opt-in for its entire type. The explicit ID override may also
+            // select the other placements of that same type, whose editor
+            // checkbox is off and whose TintColor field is simply absent.
+            const QString type = doodad.type.trimmed().toCaseFolded();
             const ParsedTint tint = parseTintColor(doodad.tintColor);
+            const bool supportedTint = doodad.tintColor.trimmed().isEmpty() || tint.valid;
             const int forcedZone = forcedZoneIdFor(doodad, safetyContext);
             const bool hasZone = forcedZone > 0 ? zoneIndexById.contains(forcedZone)
                 : std::any_of(zones.cbegin(), zones.cend(), [&](const DecorZone &zone) {
                     return relationToZone(doodad, zone) == sc2dh::region::SpatialRelation::Inside;
                 });
-            if (tint.valid && tint.nullColor && doodad.dynamicCandidate && hasZone
+            if (nullableTintTypes.contains(type) && supportedTint && doodad.dynamicCandidate && hasZone
                 && !isDoodadExcluded(doodad, safetyContext)
                 && typeStaticOnlyReason(doodad, safetyContext).isEmpty()
                 && directReferences.isEmpty() && validDoodadActorId(doodad, &id)

@@ -143,8 +143,9 @@ struct DecorationSafetyContext
     // Move every placement of a NULL-tint type with type-wide trigger calls.
     // Direct ID/name links and unsafe placements still reject the whole type.
     QSet<QString> recreateReferencedNullableTintTypes;
-    // Recreate one NULL-tint placement, even when its type is used by
-    // supported region-wide trigger calls. Direct ID/name links remain native.
+    // Recreate one placement of a type with a valid NULL tint elsewhere,
+    // even when the type is used by supported region-wide trigger calls.
+    // Direct ID/name links and malformed tint values remain native.
     QSet<QString> recreateNullableTintDoodadKeys;
     // Explicit native show/hide for a placed doodad that has type-level
     // references. Direct ID/name references still block automatic control.

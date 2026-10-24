@@ -7095,6 +7095,30 @@ void CoreTests::decorationStreamingRecreatesExplicitNullableTintTypeSafely()
     QVERIFY2(planner.restoreObjectsFromGalaxy(bridged.optimizedObjectsBytes, bridged.galaxySource,
                                                &restoredGenerator, &doodads, &units, &error), qPrintable(error));
     QVERIFY(restoredGenerator.contains("TintColor=\"NULL 100.000000\""));
+    const QByteArray mixedGenerators = QByteArrayLiteral(
+        "<PlacedObjects Version=\"27\">"
+        "<ObjectDoodad Id=\"66268824\" Type=\"AiurTempleAdunGeneratorDoodadWork\" "
+        "Position=\"103.5,186.5,10\" TintColor=\"NULL 100.000000\"/>"
+        "<ObjectDoodad Id=\"773845102\" Type=\"AiurTempleAdunGeneratorDoodadWork\" "
+        "Position=\"119.5,192.5,10\"/>"
+        "<ObjectDoodad Id=\"1814269951\" Type=\"AiurTempleAdunGeneratorDoodadWork\" "
+        "Position=\"121,163,8\"/>"
+        "</PlacedObjects>");
+    auto mixedSafety = adunSafety;
+    mixedSafety.excludedDoodadKeys.insert(QStringLiteral("773845102"));
+    mixedSafety.recreateNullableTintDoodadKeys.insert(QStringLiteral("1814269951"));
+    const QVector<sc2dh::decor::DecorZone> mixedZone{{8, QStringLiteral("Map_3"), 80, 150, 140, 210}};
+    const auto mixed = planner.createOptimizedArtifacts(mixedGenerators, mixedZone, mixedSafety);
+    QVERIFY2(mixed.valid, qPrintable(mixed.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(mixed.removedDoodadIndices, (QVector<int>{0, 2}));
+    QCOMPARE(mixed.plan.bridgedDoodads, (QVector<int>{0, 2}));
+    QVERIFY(mixed.optimizedObjectsBytes.contains("Id=\"773845102\""));
+    QVERIFY(!mixed.optimizedObjectsBytes.contains("Id=\"1814269951\""));
+    QVERIFY(!mixed.galaxySource.contains(QStringLiteral("SetTintColor {NULL")));
+    QVERIFY2(planner.restoreObjectsFromGalaxy(mixed.optimizedObjectsBytes, mixed.galaxySource,
+                                              &restoredGenerator, &doodads, &units, &error), qPrintable(error));
+    QCOMPARE(doodads, 2);
+    QVERIFY(restoredGenerator.contains("Id=\"1814269951\""));
     auto wrongBridge = bridged.galaxySource;
     wrongBridge.replace(QStringLiteral("DecorOpt_BridgedActor_66268824 = a;"),
                         QStringLiteral("DecorOpt_BridgedActor_66268825 = a;"));

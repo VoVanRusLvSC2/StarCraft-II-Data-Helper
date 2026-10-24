@@ -606,7 +606,7 @@ QString usageText()
         "  --keep-doodad-type <type>   Keep every doodad of this type (repeatable).\n"
         "  --recreate-null-tint-type <type>  Trial: recreate all placements of this disabled-Custom-Color type only if every placement is safe (repeatable).\n"
         "  --recreate-referenced-null-tint-type <type>  Recreate all safe placements of this type and bridge supported region-wide trigger calls (repeatable).\n"
-        "  --recreate-null-tint-doodad-id <id>  Recreate this disabled-Custom-Color placement and bridge supported type-wide trigger calls (repeatable).\n"
+        "  --recreate-null-tint-doodad-id <id>  Recreate this placement of a NULL-tint type and bridge supported type-wide trigger calls (repeatable).\n"
         "  --native-visibility-doodad-id <id>  Show/hide this original NULL-tint doodad even if its type is referenced by triggers (repeatable).\n"
         "  --report <file>             Write JSON report.\n"
         "  --overwrite                 Replace existing output archive.\n"
