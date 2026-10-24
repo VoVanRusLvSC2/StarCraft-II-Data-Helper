@@ -11,7 +11,7 @@ on:
       release_tag:
         description: Existing GitHub release tag that receives the installer
         required: true
-        default: v4.0.0-beta.2
+        default: v4.0.0-beta.3
 
 jobs:
   installer:
@@ -152,17 +152,38 @@ jobs:
         run: |
           $version = $env:RELEASE_TAG.TrimStart('v')
           iscc "/DAppVersion=$version" packaging/SC2DataHelper.iss
-      - name: Upload installer
+      - name: Package portable build and checksums
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $stage = "dist/SC2DataHelper-$version-win64"
+          $archive = "dist/SC2DataHelper-$version-win64.zip"
+          $installer = "dist/SC2DataHelper-$version-setup.exe"
+          $checksums = "dist/SC2DataHelper-$version-SHA256SUMS.txt"
+          Compress-Archive -LiteralPath $stage -DestinationPath $archive -Force
+          @($installer, $archive) | ForEach-Object {
+            $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256
+            '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), [IO.Path]::GetFileName($hash.Path)
+          } | Set-Content -LiteralPath $checksums -Encoding ascii
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $installer = Get-Item "dist/SC2DataHelper-$($env:RELEASE_TAG.TrimStart('v'))-setup.exe"
-          $assets = gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name'
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $files = @(
+            "dist/SC2DataHelper-$version-setup.exe",
+            "dist/SC2DataHelper-$version-win64.zip",
+            "dist/SC2DataHelper-$version-SHA256SUMS.txt"
+          )
+          $assets = @(gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name')
           if ($LASTEXITCODE -ne 0) { throw 'Cannot read release assets.' }
-          if ($assets -contains $installer.Name) {
-            Write-Host 'Installer already published; preserving the existing binary and checksums.'
-          } else {
-            gh release upload $env:RELEASE_TAG $installer.FullName
-            if ($LASTEXITCODE -ne 0) { throw 'Installer upload failed.' }
+          foreach ($file in $files) {
+            $item = Get-Item -LiteralPath $file
+            if ($assets -contains $item.Name) {
+              Write-Host "Already published: $($item.Name)"
+              continue
+            }
+            gh release upload $env:RELEASE_TAG $item.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Release upload failed: $($item.Name)" }
           }
