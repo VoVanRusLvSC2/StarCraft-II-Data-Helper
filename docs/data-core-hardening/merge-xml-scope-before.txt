@@ -1,0 +1,10 @@
+********* Start testing of CoreTests *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by MSVC 2022), windows 11
+PASS   : CoreTests::initTestCase()
+FAIL!  : CoreTests::mergeXmlReferencesUseTargetCatalog() Compared values are not the same
+   Actual   (QString::fromUtf8(doc.select_node("/Catalog/CActorModel[@id='AuditChild']").node().attribute("parent").value())): "AuditKeep"
+   Expected (QStringLiteral("SharedAudit"))                                                                                  : "SharedAudit"
+E:\SK2\Data helper KSP\tests\test_core.cpp(977) : failure location
+PASS   : CoreTests::cleanupTestCase()
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 1135ms
+********* Finished testing of CoreTests *********

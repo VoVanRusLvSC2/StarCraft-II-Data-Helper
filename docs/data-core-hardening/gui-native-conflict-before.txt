@@ -1,0 +1,11 @@
+********* Start testing of CoreTests *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by MSVC 2022), windows 11
+PASS   : CoreTests::initTestCase()
+FAIL!  : CoreTests::guiNativeConflictingProjectDefinitionRemainsUnknown() Compared values are not the same
+   Actual   (blocked): 1
+   Expected (2)      : 2
+E:\SK2\Data helper KSP\tests\test_core.cpp(753) : failure location
+PASS   : CoreTests::guiLibraryScopedParameterDefinitionsStaySeparate()
+PASS   : CoreTests::cleanupTestCase()
+Totals: 3 passed, 1 failed, 0 skipped, 0 blacklisted, 1828ms
+********* Finished testing of CoreTests *********

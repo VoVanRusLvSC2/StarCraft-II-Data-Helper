@@ -11,7 +11,7 @@ on:
       release_tag:
         description: Existing GitHub release tag that receives the installer
         required: true
-        default: v4.0.0-beta.2
+        default: v4.0.0-beta.3
 
 jobs:
   installer:
@@ -30,7 +30,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G "Ninja Multi-Config"
       - name: Build
-        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums SC2DecorOptimizeMap SC2DataHelperTests
+        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums SC2DecorOptimizeMap SC2ModkitDataProbe SC2DataHelperTests
       - name: Test
         shell: pwsh
         env:
@@ -54,9 +54,12 @@ jobs:
           Copy-Item build/Release/SC2OptimizeMaps.exe $stage/
           Copy-Item build/Release/SC2RepairMapEnums.exe $stage/
           Copy-Item build/Release/SC2DecorOptimizeMap.exe $stage/
+          Copy-Item build/Release/SC2ModkitDataProbe.exe $stage/
           Copy-Item resources $stage/resources -Recurse
           Copy-Item scripts $stage/scripts -Recurse
           Copy-Item LICENSE $stage/
+          New-Item -ItemType Directory -Force "$stage/third_party" | Out-Null
+          Copy-Item third_party/SC2Editor-MCP-Codex-LICENSE.txt "$stage/third_party/"
           Copy-Item README.md $stage/
           Copy-Item docs/USER_GUIDE.md $stage/
           Copy-Item docs/DECOR_GUI_RU.md $stage/
@@ -108,6 +111,8 @@ jobs:
             'SC2OptimizeMaps.exe',
             'SC2RepairMapEnums.exe',
             'SC2DecorOptimizeMap.exe',
+            'SC2ModkitDataProbe.exe',
+            'third_party/SC2Editor-MCP-Codex-LICENSE.txt',
             'Qt6Core.dll',
             'Qt6Gui.dll',
             'Qt6Widgets.dll',
@@ -147,17 +152,38 @@ jobs:
         run: |
           $version = $env:RELEASE_TAG.TrimStart('v')
           iscc "/DAppVersion=$version" packaging/SC2DataHelper.iss
-      - name: Upload installer
+      - name: Package portable build and checksums
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $stage = "dist/SC2DataHelper-$version-win64"
+          $archive = "dist/SC2DataHelper-$version-win64.zip"
+          $installer = "dist/SC2DataHelper-$version-setup.exe"
+          $checksums = "dist/SC2DataHelper-$version-SHA256SUMS.txt"
+          Compress-Archive -LiteralPath $stage -DestinationPath $archive -Force
+          @($installer, $archive) | ForEach-Object {
+            $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256
+            '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), [IO.Path]::GetFileName($hash.Path)
+          } | Set-Content -LiteralPath $checksums -Encoding ascii
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $installer = Get-Item "dist/SC2DataHelper-$($env:RELEASE_TAG.TrimStart('v'))-setup.exe"
-          $assets = gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name'
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $files = @(
+            "dist/SC2DataHelper-$version-setup.exe",
+            "dist/SC2DataHelper-$version-win64.zip",
+            "dist/SC2DataHelper-$version-SHA256SUMS.txt"
+          )
+          $assets = @(gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name')
           if ($LASTEXITCODE -ne 0) { throw 'Cannot read release assets.' }
-          if ($assets -contains $installer.Name) {
-            Write-Host 'Installer already published; preserving the existing binary and checksums.'
-          } else {
-            gh release upload $env:RELEASE_TAG $installer.FullName
-            if ($LASTEXITCODE -ne 0) { throw 'Installer upload failed.' }
+          foreach ($file in $files) {
+            $item = Get-Item -LiteralPath $file
+            if ($assets -contains $item.Name) {
+              Write-Host "Already published: $($item.Name)"
+              continue
+            }
+            gh release upload $env:RELEASE_TAG $item.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Release upload failed: $($item.Name)" }
           }

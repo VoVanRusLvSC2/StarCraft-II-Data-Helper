@@ -1,0 +1,152 @@
+********* Start testing of CoreTests *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-llp64 shared (dynamic) debug build; by MSVC 2022), windows 11
+PASS   : CoreTests::initTestCase()
+FAIL!  : CoreTests::tokenContextProtectsResolvedTargets() 'candidate.state != CandidateState::Safe' returned FALSE. ()
+E:\SK2\Data helper KSP\tests\test_core.cpp(463) : failure location
+FAIL!  : CoreTests::galaxyConcatenationProtectsTarget() 'candidate.state != CandidateState::Safe' returned FALSE. ()
+E:\SK2\Data helper KSP\tests\test_core.cpp(477) : failure location
+FAIL!  : CoreTests::arrayEqualityIsNotRemovalProof() 'candidate.state != CandidateState::Safe' returned FALSE. ()
+E:\SK2\Data helper KSP\tests\test_core.cpp(489) : failure location
+FAIL!  : CoreTests::catalogIdentityKeepsIndependentIds() 'analysis.duplicateIdGroups.isEmpty()' returned FALSE. ()
+E:\SK2\Data helper KSP\tests\test_core.cpp(497) : failure location
+FAIL!  : CoreTests::catalogDefaultsAndNestedIdsAreSeparate() Compared values are not the same
+   Actual   (nodes[0].id): "A"
+   Expected (QString())  : ""
+E:\SK2\Data helper KSP\tests\test_core.cpp(509) : failure location
+PASS   : CoreTests::xmlTokenNoOpAndMutationPreserveData()
+PASS   : CoreTests::xmlTokenDeclarationsAffectEquivalence()
+PASS   : CoreTests::actorEventChildCarriersAreNotBroken()
+QINFO  : CoreTests::folderScanAndAnalysis() folderScanAndAnalysis
+PASS   : CoreTests::folderScanAndAnalysis()
+PASS   : CoreTests::analysisCompletenessIsCompleteWhenAllSourcesParse()
+PASS   : CoreTests::parseErrorBlocksFalseSafeUnused()
+PASS   : CoreTests::incompleteAnalysisRejectsDestructiveApply()
+PASS   : CoreTests::changedSourceRejectsStaleDestructiveApply()
+QINFO  : CoreTests::xmlParseAndLookup() xmlParseAndLookup
+PASS   : CoreTests::xmlParseAndLookup()
+QINFO  : CoreTests::duplicateIdDetection() duplicateIdDetection
+PASS   : CoreTests::duplicateIdDetection()
+QINFO  : CoreTests::duplicateContentDetection() duplicateContentDetection
+PASS   : CoreTests::duplicateContentDetection()
+PASS   : CoreTests::duplicateBodyRequiresSameTypeAndExactNestedBody()
+QINFO  : CoreTests::backupCreation() backupCreation
+PASS   : CoreTests::backupCreation()
+PASS   : CoreTests::folderTransactionRollsBackOnValidationFailure()
+PASS   : CoreTests::folderTransactionRejectsStaleSourceBeforeCommit()
+QWARN  : CoreTests::localizationWidgetTreeRetranslatesAndPreservesDomainValue() QFontDatabase: Cannot find font directory C:/Qt/6.8.2/msvc2022_64/lib/fonts.
+Note that Qt no longer ships fonts. Deploy some (from https://dejavu-fonts.github.io/ for example) or switch to fontconfig.
+PASS   : CoreTests::localizationWidgetTreeRetranslatesAndPreservesDomainValue()
+QINFO  : CoreTests::dryRunGeneration() dryRunGeneration
+PASS   : CoreTests::dryRunGeneration()
+QINFO  : CoreTests::selectedNodeRemoval() selectedNodeRemoval
+PASS   : CoreTests::selectedNodeRemoval()
+PASS   : CoreTests::removeMultipleSameNameSiblingsWithoutIndexShift()
+QINFO  : CoreTests::saveFailureSafety() saveFailureSafety
+PASS   : CoreTests::saveFailureSafety()
+QINFO  : CoreTests::archiveAnalysis() archiveAnalysis
+SKIP   : CoreTests::archiveAnalysis() Sample archive is not available on this machine.
+E:\SK2\Data helper KSP\tests\test_core.cpp(5599) : failure location
+SKIP   : CoreTests::archiveRewriteRoundTrip() SC2 archive rewrite fixture is not available.
+E:\SK2\Data helper KSP\tests\test_core.cpp(5616) : failure location
+SKIP   : CoreTests::archiveDataCollectionCreatesFileAndListfile() SC2 archive Data Collection fixture is not available.
+E:\SK2\Data helper KSP\tests\test_core.cpp(5640) : failure location
+PASS   : CoreTests::archiveSaveCopyRemovesEntriesAndUpdatesListfile()
+PASS   : CoreTests::objectFileFilterUsesFullSourcePath()
+PASS   : CoreTests::normalizedDuplicateIgnoresOnlyRootIdentity()
+PASS   : CoreTests::tokenAwareReplacementVariants()
+PASS   : CoreTests::numericOnlyIdsAreNotRewritten()
+PASS   : CoreTests::unifiedReferenceIndexClassifiesStrongWeakAssetAndBinaryReferences()
+PASS   : CoreTests::mergePreviewAndApplyRedirectBeforeDelete()
+PASS   : CoreTests::mergeAllowsManualUnrelatedExactDuplicateAndActorEvents()
+PASS   : CoreTests::mergeRewritesNonXmlReferenceFiles()
+PASS   : CoreTests::mergeBlocksBinaryNonRewritableReferences()
+PASS   : CoreTests::mergeDoesNotRewriteSurvivingCatalogIdentityIds()
+PASS   : CoreTests::mergeAllowsResidualOldIdWarning()
+PASS   : CoreTests::mergeRollbackOnFailure()
+PASS   : CoreTests::unusedSafetyClassification()
+PASS   : CoreTests::unusedReachabilityDistinguishesStatesAndPaths()
+PASS   : CoreTests::unusedReachabilityUsesActorUnitNameWithoutTestRefs()
+PASS   : CoreTests::unusedObjectChainsCoverFullCatalogGraphAndPlacementRoots()
+PASS   : CoreTests::unusedDeletionRemovesWholeUnusedChain()
+PASS   : CoreTests::unusedDeletionSkipsPartialChainWithoutFailingBatch()
+PASS   : CoreTests::unusedDeletionPreservesDataCollectionLinks()
+PASS   : CoreTests::editorRuntimeCatalogObjectsAreProtected()
+PASS   : CoreTests::deepCleanupAppliesSafeCandidates()
+PASS   : CoreTests::deepCleanupRemovesStructurallyInvalidActorEvents()
+PASS   : CoreTests::deepCleanupPlanningFailureLeavesOriginalsByteIdentical()
+PASS   : CoreTests::binaryAssetReferencesProtectImports()
+PASS   : CoreTests::standaloneModExternalConsumersAreProtected()
+PASS   : CoreTests::largeDataCollectionPlansRequireExplicitReview()
+PASS   : CoreTests::deepCleanupRemovesRedundantInheritedXmlNodes()
+PASS   : CoreTests::deepCleanupReportsAssetAndTriggerOptimization()
+PASS   : CoreTests::deepCleanupReportsSemanticDuplicateReview()
+PASS   : CoreTests::dependencyUsageReportExportsRealUsagePaths()
+PASS   : CoreTests::mapPerformanceAnalyzerBuildsEstimatedStaticRiskHeatmap()
+PASS   : CoreTests::readsRealSc2RegionXmlAndPreservesGeometry()
+PASS   : CoreTests::realMapRegionReader()
+PASS   : CoreTests::malformedOrUnsupportedRegionIsFailClosed()
+PASS   : CoreTests::mapPreviewParsesTerrainAndRejectsMalformedHeightData()
+PASS   : CoreTests::maximumCompressionFailurePathsPreserveSourceAndOutput()
+PASS   : CoreTests::decorationXmlRoundTripAndRegionScopeIsolation()
+PASS   : CoreTests::decorationStreamingParsesZonesAndGeneratesGalaxy()
+PASS   : CoreTests::decorationStreamingKeepsExternallyReferencedDoodadsStatic()
+PASS   : CoreTests::decorationStreamingSupportsManualAssignmentOverrides()
+PASS   : CoreTests::decorationStreamingSupportsSparseZoneIds()
+PASS   : CoreTests::decorationStreamingRejectsInvalidGalaxyOptions()
+PASS   : CoreTests::decorationStreamingBuildsOptimizedObjectsArtifacts()
+PASS   : CoreTests::decorationStreamingInjectsGalaxyIncludeOnce()
+PASS   : CoreTests::decorationStreamingPreparesArchivePatch()
+PASS   : CoreTests::decorationVisibilityStreamingPreservesObjectsAndGeneratesRestoreApi()
+PASS   : CoreTests::decorationMapCopyServiceCreatesOptimizedArchive()
+PASS   : CoreTests::decorationCliCreatesOptimizedArchiveAndReport()
+PASS   : CoreTests::unitFamilyDetectionAndStandardPlanning()
+PASS   : CoreTests::renamePlannerStandardizesOwnedCustomCatalogTypes()
+PASS   : CoreTests::renamePlannerBlocksConflicts()
+PASS   : CoreTests::renamePlannerSkipsDependencyCatalogObjects()
+PASS   : CoreTests::renamePlannerSkipsActorUnitsOutsideFamilyScope()
+PASS   : CoreTests::catalogEnumRepairFixesLegacyRenameDamage()
+PASS   : CoreTests::reservedCatalogFilterTokensAreNotReferences()
+PASS   : CoreTests::referenceRenamePreviewAndApply()
+PASS   : CoreTests::referenceRenameRewritesSafeTextReferences()
+FAIL!  : CoreTests::referenceRenamePreflightCatchesResidualStrongLinks() '!preview.valid' returned FALSE. ()
+E:\SK2\Data helper KSP\tests\test_core.cpp(2051) : failure location
+PASS   : CoreTests::referenceRenameBlocksBinaryReferences()
+PASS   : CoreTests::referenceRenameDoesNotRewriteFilterFields()
+PASS   : CoreTests::referenceRenameDoesNotRewriteUntypedEnumValues()
+PASS   : CoreTests::referenceRenameDoesNotRewriteParentFields()
+PASS   : CoreTests::referenceRenameUsesTypedCatalogFields()
+PASS   : CoreTests::referenceRenameActorIdDoesNotRewriteUnitScope()
+PASS   : CoreTests::referenceRenameSkipsOccupiedTargetWhenOwnerNotMoved()
+PASS   : CoreTests::referenceRenameRollback()
+PASS   : CoreTests::dataCollectionAliasMapping()
+PASS   : CoreTests::dataCollectionCreatePreviewAndApply()
+PASS   : CoreTests::dataCollectionOffersSingleCustomUnit()
+PASS   : CoreTests::dataCollectionUsesRootRaceAndFamilyCategories()
+PASS   : CoreTests::dataCollectionFallbackDetectsCustomFamiliesWithoutAtSign()
+PASS   : CoreTests::dataCollectionUnitAbilWeaponModeSplitsRoots()
+PASS   : CoreTests::dataCollectionTypedPreservesLegacyNonScopedAbilityRecords()
+PASS   : CoreTests::dataCollectionTypedSplitPreservesEveryCatalogRecord()
+PASS   : CoreTests::dataCollectionPreservationRestoresLossyXml()
+PASS   : CoreTests::dataCollectionMigrationPreservesExistingTargetRecords()
+PASS   : CoreTests::dataCollectionTypedSplitAssignsCanonicalSharedOwnership()
+PASS   : CoreTests::dataCollectionMigrationRollbackRestoresAllCollections()
+PASS   : CoreTests::dataCollectionPatternInheritanceValidation()
+PASS   : CoreTests::dataCollectionRecognizesEvoSemanticPatternNames()
+PASS   : CoreTests::dataCollectionEntityRootsAndConflicts()
+SKIP   : CoreTests::gargantuaReferenceFixture() Reference XML fixtures are unavailable.
+E:\SK2\Data helper KSP\tests\test_core.cpp(1252) : failure location
+SKIP   : CoreTests::gargantuaApplyFixture() Reference XML fixtures are unavailable.
+E:\SK2\Data helper KSP\tests\test_core.cpp(1298) : failure location
+SKIP   : CoreTests::zombieWorldUpdate3Audit() Zombie World audit fixtures are unavailable.
+E:\SK2\Data helper KSP\tests\test_core.cpp(1340) : failure location
+PASS   : CoreTests::dataCollectionUpdatePreservesAndSorts()
+PASS   : CoreTests::dataCollectionRollback()
+PASS   : CoreTests::autoCollectionSurvivesOptimizationBatch()
+PASS   : CoreTests::folderAnalysisStoresFullXmlSource()
+PASS   : CoreTests::folderAnalysisCanBeCancelled()
+PASS   : CoreTests::unrelatedIdenticalBodiesAreAllowed()
+SKIP   : CoreTests::m3ParserReadsRealModelFixture() Real M3 fixture is unavailable.
+E:\SK2\Data helper KSP\tests\test_core.cpp(375) : failure location
+PASS   : CoreTests::cleanupTestCase()
+Totals: 109 passed, 6 failed, 7 skipped, 0 blacklisted, 122132ms
+********* Finished testing of CoreTests *********

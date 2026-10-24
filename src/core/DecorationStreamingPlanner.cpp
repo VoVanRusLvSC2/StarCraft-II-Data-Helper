@@ -302,8 +302,9 @@ QString actorRotation(const sc2dh::decor::DoodadPlacement &doodad)
              preciseNumber(cy * sr + sy * sp * cr), preciseNumber(sy * sr - cy * sp * cr), preciseNumber(cp * cr));
 }
 
-// Only identity and editor flags live in this annotation. Every transform,
-// model variant, player and tint is reconstructed from executable statements.
+// Identity and editor-only fields live in this annotation. A disabled Custom
+// Color (NULL tint) is also stored here: it has no runtime color command, but
+// must survive restoration. Active tint remains executable placement data.
 QString placementIdentity(const QString &raw, const char *kind, const QString &id, const QString &name)
 {
     pugi::xml_document doc;
@@ -311,7 +312,10 @@ QString placementIdentity(const QString &raw, const char *kind, const QString &i
     doc.load_buffer(bytes.constData(), size_t(bytes.size()));
     auto node = doc.document_element();
     if (!node) node = doc.append_child(kind);
-    for (const char *field : {"Type", "UnitType", "Player", "Position", "Rotation", "Pitch", "Roll", "Scale", "Variation", "TeamColor", "TintColor"})
+    const ParsedTint tint = parseTintColor(QString::fromUtf8(node.attribute("TintColor").value()));
+    if (QString::fromLatin1(kind) != QStringLiteral("ObjectDoodad") || !tint.valid || !tint.nullColor)
+        node.remove_attribute("TintColor");
+    for (const char *field : {"Type", "UnitType", "Player", "Position", "Rotation", "Pitch", "Roll", "Scale", "Variation", "TeamColor"})
         node.remove_attribute(field);
     if (!node.attribute("Id")) node.append_attribute("Id") = id.toUtf8().constData();
     if (!name.isEmpty() && !node.attribute("Name")) node.append_attribute("Name") = name.toUtf8().constData();
@@ -1025,14 +1029,107 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
             zoneIndexById.insert(zone.id, zoneIndex);
     }
 
+    // NULL means the editor's Custom Color checkbox is off. Never replay it
+    // with SetTintColor. By default keep the entire type native; an explicit
+    // trial may recreate it only if every placement can move together, so a
+    // generated ActorData profile cannot affect a native placement.
+    QSet<QString> nullableTintTypes;
+    for (const DoodadPlacement &doodad : plan.doodads) {
+        const ParsedTint tint = parseTintColor(doodad.tintColor);
+        if (tint.valid && tint.nullColor)
+            nullableTintTypes.insert(doodad.type.trimmed().toCaseFolded());
+    }
+    QHash<qint64, int> doodadIdCounts;
+    for (const DoodadPlacement &doodad : plan.doodads) {
+        qint64 doodadId = 0;
+        if (validDoodadActorId(doodad, &doodadId))
+            ++doodadIdCounts[doodadId];
+    }
+    QSet<QString> recreatedNullableTintTypes;
+    QSet<QString> requestedNullableTintTypes = safetyContext.recreateNullableTintTypes;
+    requestedNullableTintTypes.unite(safetyContext.recreateReferencedNullableTintTypes);
+    for (const QString &requested : requestedNullableTintTypes) {
+        const QString type = requested.trimmed().toCaseFolded();
+        const bool bridgeTypeReferences = safetyContext.recreateReferencedNullableTintTypes.contains(type);
+        if (!nullableTintTypes.contains(type)) {
+            plan.warnings << QStringLiteral("NULL-tint recreation was requested for %1, but that type has no valid NULL tint placement.")
+                                 .arg(requested);
+            continue;
+        }
+        bool safe = true;
+        for (const DoodadPlacement &doodad : plan.doodads) {
+            if (doodad.type.trimmed().toCaseFolded() != type)
+                continue;
+            qint64 doodadId = 0;
+            const bool hasZone = forcedZoneIdFor(doodad, safetyContext) > 0
+                ? zoneIndexById.contains(forcedZoneIdFor(doodad, safetyContext))
+                : std::any_of(zones.cbegin(), zones.cend(), [&](const DecorZone &zone) {
+                    return relationToZone(doodad, zone) == sc2dh::region::SpatialRelation::Inside;
+                });
+            QStringList directReferences;
+            for (const QString &key : doodadKeys(doodad))
+                directReferences += safetyContext.referenceFilesByDoodadKey.value(key);
+            if (!doodad.dynamicCandidate || isDoodadExcluded(doodad, safetyContext)
+                || !typeStaticOnlyReason(doodad, safetyContext).isEmpty()
+                || !directReferences.isEmpty()
+                || (!bridgeTypeReferences && !safetyContext.referenceFilesByDoodadType.value(type).isEmpty())
+                || !validDoodadActorId(doodad, &doodadId) || doodadIdCounts.value(doodadId) != 1
+                || !hasZone) {
+                safe = false;
+                break;
+            }
+        }
+        if (safe) {
+            recreatedNullableTintTypes.insert(type);
+        } else {
+            plan.warnings << QStringLiteral("NULL-tint recreation of %1 was refused: at least one placement must remain native.")
+                                 .arg(requested);
+        }
+    }
+
+    QSet<QString> recreatedNullableTintIds;
+    for (const QString &requested : safetyContext.recreateNullableTintDoodadKeys) {
+        for (const DoodadPlacement &doodad : plan.doodads) {
+            if (safetyKey(doodad.id) != requested)
+                continue;
+            qint64 id = 0;
+            QStringList directReferences;
+            for (const QString &key : doodadKeys(doodad))
+                directReferences += safetyContext.referenceFilesByDoodadKey.value(key);
+            const ParsedTint tint = parseTintColor(doodad.tintColor);
+            const int forcedZone = forcedZoneIdFor(doodad, safetyContext);
+            const bool hasZone = forcedZone > 0 ? zoneIndexById.contains(forcedZone)
+                : std::any_of(zones.cbegin(), zones.cend(), [&](const DecorZone &zone) {
+                    return relationToZone(doodad, zone) == sc2dh::region::SpatialRelation::Inside;
+                });
+            if (tint.valid && tint.nullColor && doodad.dynamicCandidate && hasZone
+                && !isDoodadExcluded(doodad, safetyContext)
+                && typeStaticOnlyReason(doodad, safetyContext).isEmpty()
+                && directReferences.isEmpty() && validDoodadActorId(doodad, &id)
+                && doodadIdCounts.value(id) == 1)
+                recreatedNullableTintIds.insert(requested);
+        }
+        if (!recreatedNullableTintIds.contains(requested))
+            plan.warnings << QStringLiteral("NULL-tint recreation of doodad ID %1 was refused: the placement is missing, referenced directly, or unsafe.").arg(requested);
+    }
+
     for (int i = 0; i < plan.doodads.size(); ++i) {
         DoodadPlacement &doodad = plan.doodads[i];
+        const bool explicitlyRecreated = recreatedNullableTintIds.contains(safetyKey(doodad.id));
         const QString label = doodad.name.isEmpty() ? (doodad.id.isEmpty() ? doodad.type : doodad.id) : doodad.name;
         doodad.userExcluded = isDoodadExcluded(doodad, safetyContext);
         doodad.forcedZoneId = forcedZoneIdFor(doodad, safetyContext);
         if (doodad.userExcluded && doodad.dynamicCandidate) {
             doodad.dynamicCandidate = false;
             doodad.staticOnlyReason = QStringLiteral("Static-only: excluded by user.");
+        }
+        const bool nativeTintFallback = doodad.dynamicCandidate
+            && nullableTintTypes.contains(doodad.type.trimmed().toCaseFolded())
+            && !recreatedNullableTintTypes.contains(doodad.type.trimmed().toCaseFolded())
+            && !explicitlyRecreated;
+        if (nativeTintFallback) {
+            doodad.dynamicCandidate = false;
+            doodad.staticOnlyReason = QStringLiteral("Static-only: disabled Custom Color (NULL tint) cannot be recreated safely.");
         }
         if (doodad.dynamicCandidate) {
             const QString typeReason = typeStaticOnlyReason(doodad, safetyContext);
@@ -1041,7 +1138,9 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
                 doodad.staticOnlyReason = typeReason;
             }
         }
-        if (doodad.dynamicCandidate) {
+        const bool typeRecreatedWithBridge = recreatedNullableTintTypes.contains(safetyKey(doodad.type))
+            && safetyContext.recreateReferencedNullableTintTypes.contains(safetyKey(doodad.type));
+        if (doodad.dynamicCandidate && !explicitlyRecreated && !typeRecreatedWithBridge) {
             doodad.safetyReferenceFiles = externalReferenceFiles(doodad, safetyContext);
             if (!doodad.safetyReferenceFiles.isEmpty()) {
                 doodad.dynamicCandidate = false;
@@ -1050,6 +1149,42 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
             }
         }
         if (!doodad.dynamicCandidate) {
+            // The original placed actor can still follow region visibility.
+            // An ID/type used by triggers or a physical doodad stays untouched.
+            qint64 doodadId = 0;
+            QStringList references = externalReferenceFiles(doodad, safetyContext);
+            references += safetyContext.referenceFilesByDoodadType.value(safetyKey(doodad.type));
+            QStringList directReferences;
+            for (const QString &key : doodadKeys(doodad))
+                directReferences += safetyContext.referenceFilesByDoodadKey.value(key);
+            const bool explicitNativeVisibility =
+                safetyContext.nativeVisibilityReferencedDoodadKeys.contains(safetyKey(doodad.id))
+                && directReferences.isEmpty();
+            if (nativeTintFallback && !doodad.userExcluded
+                && (references.isEmpty() || explicitNativeVisibility)
+                && typeStaticOnlyReason(doodad, safetyContext).isEmpty()
+                && validDoodadActorId(doodad, &doodadId) && doodadIdCounts.value(doodadId) == 1
+                && doodad.hasPosition
+                && !doodad.type.startsWith(QStringLiteral("TerrainObject"), Qt::CaseInsensitive)
+                && !containsAny(doodad.type + QLatin1Char(' ') + doodad.name + QLatin1Char(' ') + doodad.flags,
+                                {QStringLiteral("pathing"), QStringLiteral("blocker"),
+                                 QStringLiteral("footprint"), QStringLiteral("destruct")})) {
+                if (doodad.forcedZoneId > 0) {
+                    const int zoneIndex = zoneIndexById.value(doodad.forcedZoneId, -1);
+                    if (zoneIndex >= 0) {
+                        plan.zones[zoneIndex].nativeVisibilityDoodadIndices << i;
+                        doodad.visibilityCandidate = true;
+                    }
+                } else {
+                    for (int zoneIndex = 0; zoneIndex < zones.size(); ++zoneIndex) {
+                        if (relationToZone(doodad, zones.at(zoneIndex)) == sc2dh::region::SpatialRelation::Inside) {
+                            plan.zones[zoneIndex].nativeVisibilityDoodadIndices << i;
+                            doodad.visibilityCandidate = true;
+                            break;
+                        }
+                    }
+                }
+            }
             if (doodad.forcedZoneId > 0)
                 plan.warnings << QStringLiteral("Doodad %1 has a forced decoration zone %2, but it is static-only: %3")
                                      .arg(label)
@@ -1099,6 +1234,9 @@ DecorationStreamingPlan DecorationStreamingPlanner::buildPlan(const QByteArray &
             continue;
         }
         plan.zones[assignedZoneIndex].doodadIndices << i;
+        if ((explicitlyRecreated || typeRecreatedWithBridge)
+            && !safetyContext.referenceFilesByDoodadType.value(safetyKey(doodad.type)).isEmpty())
+            plan.bridgedDoodads << i;
     }
 
     plan.units = parseUnits(objectsBytes);
@@ -1554,6 +1692,8 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("const int DecorOpt_MaxActorsPerZone = %1;\n").arg(maxActors);
     out += QStringLiteral("actorscope[%1] DecorOpt_Scopes;\n").arg(exportedDoodads + 1);
     out += QStringLiteral("actor[%1] DecorOpt_Actors;\n").arg(exportedDoodads + 1);
+    for (int index : plan.bridgedDoodads)
+        out += QStringLiteral("actor DecorOpt_BridgedActor_%1;\n").arg(plan.doodads.at(index).id);
     out += QStringLiteral("point[%1] DecorOpt_Positions;\n").arg(exportedDoodads + 1);
     out += QStringLiteral("int[%1] DecorOpt_ActorCount;\n").arg(maxZoneId + 1);
     out += QStringLiteral("unit[%1] DecorOpt_Units;\n").arg(exportedUnits + 1);
@@ -1583,13 +1723,70 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("        DecorOpt_Loaded[zoneId] = false;\n");
     out += QStringLiteral("        zoneId += 1;\n");
     out += QStringLiteral("    }\n");
+    for (int index : plan.bridgedDoodads)
+        out += QStringLiteral("    DecorOpt_BridgedActor_%1 = null;\n").arg(plan.doodads.at(index).id);
     out += QStringLiteral("}\n\n");
+
+    out += QStringLiteral("void DecorOpt_SetNativeZoneVisible(int zoneId, bool visible) {\n");
+    out += QStringLiteral("    actor a;\n");
+    for (const ZoneAssignment &zone : plan.zones) {
+        if (zone.nativeVisibilityDoodadIndices.isEmpty())
+            continue;
+        out += QStringLiteral("    if (zoneId == %1) {\n").arg(zone.zoneId);
+        for (int doodadIndex : zone.nativeVisibilityDoodadIndices) {
+            const DoodadPlacement &doodad = plan.doodads.at(doodadIndex);
+            out += QStringLiteral("        a = ActorFromDoodad(DoodadFromId(%1));\n").arg(doodad.id);
+            out += QStringLiteral("        if (a != null) { if (visible) { ActorSend(a, \"SetVisibility 1\"); } else { ActorSend(a, \"SetVisibility 0\"); } }\n");
+        }
+        out += QStringLiteral("        return;\n    }\n");
+    }
+    out += QStringLiteral("}\n\n");
+
+    out += QStringLiteral("void DecorOpt_ShowNativeRegion(region target) {\n");
+    out += QStringLiteral("    actor a;\n");
+    for (const ZoneAssignment &zone : plan.zones) {
+        for (int doodadIndex : zone.nativeVisibilityDoodadIndices) {
+            const DoodadPlacement &doodad = plan.doodads.at(doodadIndex);
+            out += QStringLiteral("    a = ActorFromDoodad(DoodadFromId(%1));\n").arg(doodad.id);
+            out += QStringLiteral("    if (a != null) {\n");
+            out += QStringLiteral("        if (target == null || RegionContainsPoint(target, Point(%1, %2))) { ActorSend(a, \"SetVisibility 1\"); }\n")
+                       .arg(fixed(doodad.x), fixed(doodad.y));
+            out += QStringLiteral("        else { ActorSend(a, \"SetVisibility 0\"); }\n    }\n");
+        }
+    }
+    out += QStringLiteral("}\n\n");
+
+    if (!plan.bridgedDoodads.isEmpty()) {
+        const auto appendBridgedActors = [&](const QString &operation) {
+            for (const ZoneAssignment &zone : plan.zones) {
+                for (int ordinal = 0; ordinal < zone.doodadIndices.size(); ++ordinal) {
+                    const int index = zone.doodadIndices.at(ordinal);
+                    if (!plan.bridgedDoodads.contains(index))
+                        continue;
+                    const DoodadPlacement &doodad = plan.doodads.at(index);
+                    out += QStringLiteral("    if (actorType == %1 && (target == null || RegionContainsPoint(target, Point(%2, %3)))) {\n")
+                               .arg(galaxyString(doodad.type), fixed(doodad.x), fixed(doodad.y));
+                    out += QStringLiteral("        a = DecorOpt_BridgedActor_%1;\n").arg(doodad.id);
+                    out += QStringLiteral("        if (a != null) { %1 }\n    }\n").arg(operation);
+                }
+            }
+        };
+        out += QStringLiteral("void DecorOpt_SendMessageToDoodadsInRegion(string message, string actorType, region target) {\n");
+        out += QStringLiteral("    actor a;\n    libVCMI_gf_SendActorMessageToDoodadsInRegion(message, actorType, target);\n");
+        appendBridgedActors(QStringLiteral("ActorSend(a, message);"));
+        out += QStringLiteral("}\n\n");
+        out += QStringLiteral("void DecorOpt_PlayAnimationOnDoodadsInRegion(region target, string actorType, string animationName, string animation, int flags, fixed time) {\n");
+        out += QStringLiteral("    actor a;\n    libNtve_gf_PlayAnimationOnDoodadsInRegion(target, actorType, animationName, animation, flags, time);\n");
+        appendBridgedActors(QStringLiteral("libNtve_gf_PlayAnimation(a, animationName, animation, flags, time);"));
+        out += QStringLiteral("}\n\n");
+    }
 
     out += QStringLiteral("void DecorOpt_ShowZone(int zoneId) {\n");
     out += QStringLiteral("    int i;\n    i = 0;\n");
     out += QStringLiteral("    while (i < DecorOpt_ActorCount[zoneId]) {\n");
     out += QStringLiteral("        ActorSend(DecorOpt_Actors[DecorOpt_ActorOffset(zoneId) + i], \"SetVisibility 1\");\n");
-    out += QStringLiteral("        i += 1;\n    }\n}\n\n");
+    out += QStringLiteral("        i += 1;\n    }\n");
+    out += QStringLiteral("    DecorOpt_SetNativeZoneVisible(zoneId, true);\n}\n\n");
     out += QStringLiteral("void DecorOpt_ShowRegion(region target) {\n");
     out += QStringLiteral("    int zoneId;\n    int i;\n    int slot;\n    zoneId = 1;\n");
     out += QStringLiteral("    while (zoneId <= DecorOpt_ZoneCount) {\n");
@@ -1598,7 +1795,8 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("            if (target == null || RegionContainsPoint(target, DecorOpt_Positions[slot])) {\n");
     out += QStringLiteral("                ActorSend(DecorOpt_Actors[slot], \"SetVisibility 1\");\n");
     out += QStringLiteral("            } else {\n                ActorSend(DecorOpt_Actors[slot], \"SetVisibility 0\");\n            }\n");
-    out += QStringLiteral("            i += 1;\n        }\n        zoneId += 1;\n    }\n}\n\n");
+    out += QStringLiteral("            i += 1;\n        }\n        zoneId += 1;\n    }\n");
+    out += QStringLiteral("    DecorOpt_ShowNativeRegion(target);\n}\n\n");
     out += QStringLiteral("void DecorOpt_ShowAllUnits() {\n");
     out += QStringLiteral("    int zoneId;\n    int i;\n    unit u;\n    zoneId = 1;\n");
     out += QStringLiteral("    while (zoneId <= DecorOpt_ZoneCount) {\n        i = 0;\n");
@@ -1609,6 +1807,14 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("void DecorOpt_ClearZone(int zoneId) {\n");
     out += QStringLiteral("    int i;\n");
     out += QStringLiteral("    if (zoneId < 1 || zoneId > DecorOpt_ZoneCount) { return; }\n");
+    out += QStringLiteral("    DecorOpt_SetNativeZoneVisible(zoneId, false);\n");
+    for (const ZoneAssignment &zone : plan.zones) {
+        for (int index : zone.doodadIndices) {
+            if (plan.bridgedDoodads.contains(index))
+                out += QStringLiteral("    if (zoneId == %1) { DecorOpt_BridgedActor_%2 = null; }\n")
+                           .arg(zone.zoneId).arg(plan.doodads.at(index).id);
+        }
+    }
     out += QStringLiteral("    i = 0;\n");
     out += QStringLiteral("    while (i < DecorOpt_ActorCount[zoneId]) {\n");
     out += QStringLiteral("        ActorScopeKill(DecorOpt_Scopes[DecorOpt_ActorOffset(zoneId) + i]);\n");
@@ -1766,7 +1972,7 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
     out += QStringLiteral("    DecorOpt_Units[DecorOpt_UnitOffset(zoneId) + DecorOpt_UnitCount[zoneId]] = u; DecorOpt_UnitCount[zoneId] += 1;\n}\n\n");
 
     QByteArray identities;
-    const auto appendActorCreation = [&](QString *source, int zoneId, const DoodadPlacement &doodad) {
+    const auto appendActorCreation = [&](QString *source, int zoneId, const DoodadPlacement &doodad, bool bridged) {
         identities += placementIdentity(doodad.rawSource, "ObjectDoodad", doodad.id, doodad.name).toLatin1() + '\n';
         QString basis = actorRotation(doodad);
         basis = basis.mid(basis.indexOf(QLatin1Char('(')) + 1);
@@ -1786,13 +1992,11 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
                        .arg(doodad.variation.trimmed().isEmpty() ? 0 : doodad.variation.toInt())
                        .arg(doodad.teamColor.trimmed().isEmpty() ? -1 : doodad.teamColor.toInt())
                        .arg(galaxyString(bearingsMessage));
+        if (bridged)
+            *source += QStringLiteral("    DecorOpt_BridgedActor_%1 = a;\n").arg(doodad.id);
         if (!doodad.tintColor.isEmpty()) {
             const ParsedTint tint = parseTintColor(doodad.tintColor);
-            if (tint.valid && tint.nullColor) {
-                // NULL and HDR together form one CColorHDR message argument.
-                *source += QStringLiteral("    ActorSend(a, \"SetTintColor {NULL %1} {0.0}\");\n")
-                               .arg(fixed(tint.hdr));
-            } else if (tint.valid) {
+            if (tint.valid && !tint.nullColor) {
                 *source += QStringLiteral("    ActorSend(a, libNtve_gf_SetTintColor(Color(%1, %2, %3), %4, 0.0));\n")
                                .arg(fixed(tint.red), fixed(tint.green), fixed(tint.blue), fixed(tint.hdr));
             }
@@ -1820,7 +2024,8 @@ QString DecorationStreamingPlanner::generateGalaxy(const DecorationStreamingPlan
         for (int doodadIndex : zone.doodadIndices) {
             if (placementsInHelper == 0)
                 beginHelper();
-            appendActorCreation(&out, zone.zoneId, plan.doodads.at(doodadIndex));
+            appendActorCreation(&out, zone.zoneId, plan.doodads.at(doodadIndex),
+                                plan.bridgedDoodads.contains(doodadIndex));
             finishPlacement();
         }
         for (int unitIndex : zone.unitIndices) {
@@ -2048,8 +2253,13 @@ bool DecorationStreamingPlanner::restoreObjectsFromGalaxy(const QByteArray &obje
         bool ok = false;
         const auto value = id.toULongLong(&ok);
         if ((kind != QStringLiteral("ObjectDoodad") && kind != QStringLiteral("ObjectUnit")) || !ok || !value || ids.contains(id)) return false;
-        for (const char *key : {"Type","UnitType","Position","Rotation","Pitch","Roll","Scale","Variation","Player","TeamColor","TintColor"})
+        for (const char *key : {"Type","UnitType","Position","Rotation","Pitch","Roll","Scale","Variation","Player","TeamColor"})
             if (pending.attribute(key)) return false;
+        if (pending.attribute("TintColor")) {
+            const ParsedTint tint = parseTintColor(QString::fromUtf8(pending.attribute("TintColor").value()));
+            if (kind != QStringLiteral("ObjectDoodad") || !tint.valid || !tint.nullColor)
+                return false;
+        }
         ids.insert(id);
         return true;
     };
@@ -2060,6 +2270,7 @@ bool DecorationStreamingPlanner::restoreObjectsFromGalaxy(const QByteArray &obje
     const QRegularExpression tintNull(QStringLiteral(R"re(^ActorSend\(a, "SetTintColor \{NULL ([^ ]+)\} \{0\.0\}"\);$)re"));
     const QRegularExpression tintNullLegacy(QStringLiteral(R"re(^ActorSend\(a, "SetTintColor NULL ([^ ]+) 0\.0"\);$)re"));
     const QRegularExpression tintColor(QStringLiteral(R"re(^ActorSend\(a, libNtve_gf_SetTintColor\(Color\((.*)\), ([^,]+), 0\.0\)\);$)re"));
+    const QRegularExpression bridgedActor(QStringLiteral(R"re(^DecorOpt_BridgedActor_([0-9]+) = a;$)re"));
     const QRegularExpression unitV2Call(QStringLiteral(R"re(^DecorOpt_CreateUnitV2\((\d+), "((?:\\.|[^"\\])*)", (0|c_unitCreateIgnorePlacement), ([^,]+), ([^,]+), ([^,]+), "([^"\\]+)"\);$)re"));
     for (const QString &rawLine : galaxy.split(QLatin1Char('\n'))) {
         const QString line = rawLine.trimmed();
@@ -2086,6 +2297,13 @@ bool DecorationStreamingPlanner::restoreObjectsFromGalaxy(const QByteArray &obje
                 return fail(QStringLiteral("Missing, invalid or duplicate compact placement identity."));
         }
         if (!pending) return fail(QStringLiteral("Placement has no script identity; re-export it with this version."));
+        auto bridgedMatch = bridgedActor.match(line);
+        if (bridgedMatch.hasMatch()) {
+            if (!created || QString::fromUtf8(pending.name()) != QStringLiteral("ObjectDoodad")
+                || bridgedMatch.captured(1) != QString::fromUtf8(pending.attribute("Id").value()))
+                return fail(QStringLiteral("Bridged actor ID does not match its placement."));
+            continue;
+        }
         auto match = compactActorCall.match(line);
         if (match.hasMatch()) {
             QVector<double> args, world;
@@ -2199,13 +2417,15 @@ bool DecorationStreamingPlanner::restoreObjectsFromGalaxy(const QByteArray &obje
         if (!match.hasMatch()) match = tintNullLegacy.match(line);
         if (match.hasMatch()) {
             QVector<double> v;
-            if (!created || !bearings || !numeric(match.captured(1),1,&v) || v[0] < 0) return fail(QStringLiteral("Invalid tint."));
+            if (!created || !bearings || pending.attribute("TintColor")
+                || !numeric(match.captured(1),1,&v) || v[0] < 0) return fail(QStringLiteral("Invalid tint."));
             attr(pending,"TintColor",QStringLiteral("NULL ")+tuple(v,0,1)); continue;
         }
         match = tintColor.match(line);
         if (match.hasMatch()) {
             QVector<double> v;
-            if (!created || !bearings || !numeric(match.captured(1)+QLatin1Char(',')+match.captured(2),4,&v)
+            if (!created || !bearings || pending.attribute("TintColor")
+                || !numeric(match.captured(1)+QLatin1Char(',')+match.captured(2),4,&v)
                 || v[3] < 0) return fail(QStringLiteral("Invalid tint."));
             for (int i=0;i<3;++i) { if (v[i]<0 || v[i]>100) return fail(QStringLiteral("Invalid tint component.")); v[i] = std::round(v[i]*2.55); }
             attr(pending,"TintColor",tuple(v,0,3)+QLatin1Char(' ')+tuple(v,3,1)); continue;

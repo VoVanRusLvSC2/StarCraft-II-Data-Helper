@@ -1,0 +1,15 @@
+{
+    "duration_ms": 692,
+    "files": 2,
+    "incomplete_sources": [
+    ],
+    "input": ".\\native-fixture",
+    "objects": 3,
+    "peak_working_set_bytes": 162095104,
+    "references": 3,
+    "safe_candidates": 2,
+    "source_completeness": "Complete",
+    "unknown_candidates": 0,
+    "unknown_reasons": {
+    }
+}

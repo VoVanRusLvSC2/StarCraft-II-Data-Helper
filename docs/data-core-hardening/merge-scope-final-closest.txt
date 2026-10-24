@@ -1,0 +1,18 @@
+********* Start testing of CoreTests *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by MSVC 2022), windows 11
+PASS   : CoreTests::initTestCase()
+PASS   : CoreTests::mergeTypedConsumersUseCatalogWhenIdsOverlap()
+PASS   : CoreTests::mergeXmlReferencesUseTargetCatalog()
+PASS   : CoreTests::mergeVerifierFindsDanglingTypedConsumersWithoutTarget()
+PASS   : CoreTests::mergeAmbiguousUnscopedConsumerBlocksRemoval()
+PASS   : CoreTests::mergePreviewAndApplyRedirectBeforeDelete()
+PASS   : CoreTests::mergeAllowsManualUnrelatedExactDuplicateAndActorEvents()
+PASS   : CoreTests::mergeRewritesNonXmlReferenceFiles()
+PASS   : CoreTests::mergeBlocksBinaryNonRewritableReferences()
+PASS   : CoreTests::mergeDoesNotRewriteSurvivingCatalogIdentityIds()
+PASS   : CoreTests::mergeAllowsResidualOldIdWarning()
+PASS   : CoreTests::mergeRollbackOnFailure()
+PASS   : CoreTests::galaxyUnresolvedReferencesBlockMerge()
+PASS   : CoreTests::cleanupTestCase()
+Totals: 14 passed, 0 failed, 0 skipped, 0 blacklisted, 15090ms
+********* Finished testing of CoreTests *********

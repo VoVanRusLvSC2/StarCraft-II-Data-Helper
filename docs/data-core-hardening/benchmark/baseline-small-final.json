@@ -1,0 +1,15 @@
+{
+    "duration_ms": 2342,
+    "files": 75,
+    "incomplete_sources": [
+    ],
+    "input": "E:\\SK2\\SC2_Edition_MCP\\hardening-stage\\benchmark\\Mercs Episode 2.SC2Map",
+    "objects": 863,
+    "peak_working_set_bytes": 47292416,
+    "references": 7842,
+    "safe_candidates": 345,
+    "source_completeness": "Complete",
+    "unknown_candidates": 0,
+    "unknown_reasons": {
+    }
+}

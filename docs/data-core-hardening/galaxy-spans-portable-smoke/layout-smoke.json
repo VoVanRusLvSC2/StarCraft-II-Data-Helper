@@ -1,0 +1,110 @@
+{
+    "profiles": [
+        {
+            "actions_screenshot": "1280x720-100-en-actions.png",
+            "failures": [
+            ],
+            "interactive_controls": 20,
+            "language": "enUS",
+            "logical_height": 720,
+            "logical_width": 1280,
+            "opengl_canvas": true,
+            "opengl_context_valid": false,
+            "profile": "1280x720-100-en",
+            "qt_opengl_mode": "",
+            "result": "PASS",
+            "screenshot": "1280x720-100-en.png"
+        },
+        {
+            "actions_screenshot": "1366x768-100-ru-actions.png",
+            "failures": [
+            ],
+            "interactive_controls": 20,
+            "language": "ruRU",
+            "logical_height": 768,
+            "logical_width": 1366,
+            "opengl_canvas": true,
+            "opengl_context_valid": false,
+            "profile": "1366x768-100-ru",
+            "qt_opengl_mode": "",
+            "result": "PASS",
+            "screenshot": "1366x768-100-ru.png"
+        },
+        {
+            "actions_screenshot": "1366x768-125-en-actions.png",
+            "failures": [
+            ],
+            "interactive_controls": 20,
+            "language": "enUS",
+            "logical_height": 614,
+            "logical_width": 1093,
+            "opengl_canvas": true,
+            "opengl_context_valid": false,
+            "profile": "1366x768-125-en",
+            "qt_opengl_mode": "",
+            "result": "PASS",
+            "screenshot": "1366x768-125-en.png"
+        },
+        {
+            "actions_screenshot": "1366x768-125-ru-actions.png",
+            "failures": [
+            ],
+            "interactive_controls": 20,
+            "language": "ruRU",
+            "logical_height": 614,
+            "logical_width": 1093,
+            "opengl_canvas": true,
+            "opengl_context_valid": false,
+            "profile": "1366x768-125-ru",
+            "qt_opengl_mode": "",
+            "result": "PASS",
+            "screenshot": "1366x768-125-ru.png"
+        },
+        {
+            "actions_screenshot": "1920x1080-100-en-actions.png",
+            "failures": [
+            ],
+            "interactive_controls": 20,
+            "language": "enUS",
+            "logical_height": 1080,
+            "logical_width": 1920,
+            "opengl_canvas": true,
+            "opengl_context_valid": false,
+            "profile": "1920x1080-100-en",
+            "qt_opengl_mode": "",
+            "result": "PASS",
+            "screenshot": "1920x1080-100-en.png"
+        },
+        {
+            "actions_screenshot": "1920x1080-150-ru-actions.png",
+            "failures": [
+            ],
+            "interactive_controls": 20,
+            "language": "ruRU",
+            "logical_height": 720,
+            "logical_width": 1280,
+            "opengl_canvas": true,
+            "opengl_context_valid": false,
+            "profile": "1920x1080-150-ru",
+            "qt_opengl_mode": "",
+            "result": "PASS",
+            "screenshot": "1920x1080-150-ru.png"
+        },
+        {
+            "actions_screenshot": "1920x1080-200-en-actions.png",
+            "failures": [
+            ],
+            "interactive_controls": 20,
+            "language": "enUS",
+            "logical_height": 540,
+            "logical_width": 960,
+            "opengl_canvas": true,
+            "opengl_context_valid": false,
+            "profile": "1920x1080-200-en",
+            "qt_opengl_mode": "",
+            "result": "PASS",
+            "screenshot": "1920x1080-200-en.png"
+        }
+    ],
+    "schema": "sc2dh.beta2.layout-smoke.v1"
+}

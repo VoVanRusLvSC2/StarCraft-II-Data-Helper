@@ -1,0 +1,35 @@
+{
+    "duplicateNodesRemoved": 0,
+    "finalDuplicateMergeCandidates": 0,
+    "finalObjects": 3,
+    "initialObjects": 3,
+    "mergeGroupsApplied": 0,
+    "merges": [
+    ],
+    "referencesRedirected": 0,
+    "success": true,
+    "unusedApplyMode": "preview-only: archive binary references are not fully analyzable",
+    "unusedIds": [
+        "NativeAudit",
+        "IndependentAudit"
+    ],
+    "unusedObjects": [
+        {
+            "catalog": "cactor",
+            "element": "CActorModel",
+            "id": "NativeAudit",
+            "location": "/Catalog[1]/CActorModel[1]",
+            "source": "Data.xml"
+        },
+        {
+            "catalog": "ceffect",
+            "element": "CEffectDamage",
+            "id": "IndependentAudit",
+            "location": "/Catalog[1]/CEffectDamage[1]",
+            "source": "Data.xml"
+        }
+    ],
+    "unusedObjectsRemoved": 0,
+    "unusedObjectsSkipped": 0,
+    "unusedSafeCandidatesPreviewed": 2
+}

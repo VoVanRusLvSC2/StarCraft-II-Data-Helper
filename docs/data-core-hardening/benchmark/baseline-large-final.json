@@ -1,0 +1,15 @@
+{
+    "duration_ms": 41701,
+    "files": 527,
+    "incomplete_sources": [
+    ],
+    "input": "E:\\SK2\\SC2_Edition_MCP\\hardening-stage\\benchmark\\City of Tempest KSP Production.SC2Map",
+    "objects": 12855,
+    "peak_working_set_bytes": 248938496,
+    "references": 96546,
+    "safe_candidates": 7121,
+    "source_completeness": "Complete",
+    "unknown_candidates": 0,
+    "unknown_reasons": {
+    }
+}

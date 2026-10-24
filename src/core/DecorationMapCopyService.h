@@ -61,6 +61,7 @@ struct DecorRestoreMapRequest
     QString sourceArchivePath;
     QString outputArchivePath;
     QString objectsEntry = QStringLiteral("Objects");
+    QString mapScriptEntry = QStringLiteral("MapScript.galaxy");
     QString runtimeEntry = QStringLiteral("scripts/sc2dh_decor_opt.galaxy");
 };
 

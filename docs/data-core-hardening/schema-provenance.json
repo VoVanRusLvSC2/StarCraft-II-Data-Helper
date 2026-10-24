@@ -1,0 +1,7 @@
+{
+  "projectSha256": "49b36d9f9b529afe23d0a7f42672f2eff2eafd3352d5eebc422ca24cda6d77de",
+  "suppliedSha256": "cf5ac8c452a695f9504048481c16422719f8e2a07a898dca0a9802d100390488",
+  "structuralComparison": "annotations excluded; QName-expanded nested XSD AST including attributes/facets/occurrences",
+  "equal": true,
+  "namedAndInlineTypes": 7409
+}

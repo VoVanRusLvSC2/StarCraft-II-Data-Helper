@@ -1,6 +1,6 @@
 # StarCraft II Data Helper
 
-> **4.0 Beta 2.** Основная функция оптимизатора — преобразование размещённого декора и юнитов в Galaxy с обратным восстановлением разметки из скрипта. JSON/XML для восстановления по умолчанию выключены и доступны как дополнительный режим в настройках.
+> **4.0 Beta 3.** Основная функция оптимизатора — преобразование размещённого декора и юнитов в Galaxy с обратным восстановлением разметки из скрипта. JSON/XML для восстановления по умолчанию выключены и доступны как дополнительный режим в настройках.
 >
 > **Primary workflow:** convert placed decor and eligible units to Galaxy, then rebuild native placements from that script. This release is a **Beta**.
 
@@ -37,6 +37,36 @@ optimized map copy, and rebuild placements from its generated Galaxy when needed
 - Open an Optimization Wizard for batch review before apply
 - Check GitHub Releases for newer semantic versions; release builds also have a
   portable ZIP and an automatically built Windows installer
+
+## Optional ModKit effective Data inspection
+
+The **Properties** tab can now inspect the selected catalog object's effective
+Data through the separately installed SC2Editor-MCP-Codex server. Click
+**Inspect effective Data (ModKit)** after analyzing one `.SC2Map` or `.SC2Mod`.
+The first click asks for that server's built `dist/index.js`; the location is
+remembered in user settings. `SC2_MODKIT_MCP_ENTRY` overrides the saved path,
+and `SC2_MODKIT_NODE` can select a Node.js executable (Node 22 or newer).
+
+This read-only query shows inherited fields, the inheritance chain, the package
+snapshot revision, and the source catalog for each displayed field. It uses the
+installed game data and declared dependencies resolved by ModKit. The response
+is bounded to the first 24 fields by default; the optional field box requests
+up to 32 exact field names. For scalar fields the optimizer resolved with
+confidence, the panel compares its value with ModKit's effective value and
+marks differences for review. Omitted fields are counted. Reanalyze the
+source if it changes before comparing results. Missing or incomplete ModKit
+data is not evidence that an object is unused, and the optimizer's existing
+deletion/merge safety rules remain authoritative.
+
+For a command-line check, run
+`SC2ModkitDataProbe <map-or-mod> <CType> <ID> <MCP-dist/index.js> [field ...]`.
+To configure the GUI without its file picker, run
+`SC2ModkitDataProbe --configure-entry <MCP-dist/index.js>` once.
+This integration uses the public MCP protocol and does not bundle the ModKit
+runtime or game assets. It uses effective Data functionality from
+[SC2Editor-MCP-Codex by VoVanRusLvSC2](https://github.com/VoVanRusLvSC2/SC2Editor-MCP-Codex).
+The catalog-domain mapping follows that project's Data module; its
+[attribution license](third_party/SC2Editor-MCP-Codex-LICENSE.txt) is retained.
 
 ## Map Performance — primary workflow (4.0 Beta 2)
 

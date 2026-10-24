@@ -1,0 +1,18 @@
+﻿[
+    {
+        "name":  "Mercs Episode 2.SC2Map",
+        "sha256":  "22D2DC6D6892BFF006E0CAD9589174168C54342B773F65A0D6EA4B0FABC97729",
+        "copy":  "E:\\SK2\\SC2_Edition_MCP\\hardening-stage\\benchmark\\Mercs Episode 2.SC2Map",
+        "copiesUnchanged":  true,
+        "original":  "C:\\Users\\Vladimir\\Downloads\\TriggerRivezerTests\\Mercs Episode 2.SC2Map",
+        "size":  3840869
+    },
+    {
+        "name":  "City of Tempest KSP Production.SC2Map",
+        "sha256":  "7C52A0DA5A2E0943EE19A533B76606EE50880AEC18BEC4E72A3593A65780D74C",
+        "copy":  "E:\\SK2\\SC2_Edition_MCP\\hardening-stage\\benchmark\\City of Tempest KSP Production.SC2Map",
+        "copiesUnchanged":  true,
+        "original":  "C:\\Users\\Vladimir\\Downloads\\TriggerRivezerTests\\City of Tempest KSP Production.SC2Map",
+        "size":  39809791
+    }
+]

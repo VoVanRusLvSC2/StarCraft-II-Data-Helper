@@ -1,0 +1,8 @@
+********* Start testing of CoreTests *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by MSVC 2022), windows 11
+PASS   : CoreTests::initTestCase()
+FAIL!  : CoreTests::caseVariantTypedReferenceRejectsMutation() '!ReferenceRenamer().preview(analysis,plan).valid' returned FALSE. ()
+E:\SK2\Data helper KSP\tests\test_core.cpp(1096) : failure location
+PASS   : CoreTests::cleanupTestCase()
+Totals: 2 passed, 1 failed, 0 skipped, 0 blacklisted, 685ms
+********* Finished testing of CoreTests *********

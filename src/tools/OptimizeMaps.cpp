@@ -1210,10 +1210,26 @@ bool optimizeMap(const QString &mapPath, MapReport *report, bool aggressiveClose
     report->xmlMaterialized = materializeStats.xmlMaterialized;
     report->dataCollectionXmlSkipped = materializeStats.dataCollectionXmlSkipped;
 
+    // Include DocumentInfo, Triggers and Galaxy before the first analysis.
+    // Otherwise an archive with unresolved dependencies can look complete
+    // until a later transaction validates the already-materialized workspace.
+    QStringList archiveReferenceEntries = materializeArchiveReferenceEntries(archive, workspace.path(), &error);
+    if (!error.isEmpty() && archiveReferenceEntries.isEmpty()) {
+        report->error = error;
+        return false;
+    }
+
     AnalysisResult analysis;
     logProgress(report->mapPath, QStringLiteral("analysis_start"));
     if (!analyzeWorkspace(workspace.path(), &analysis, &error)) {
         report->error = error;
+        return false;
+    }
+    if (analysis.completeness != AnalysisCompleteness::Complete) {
+        report->error = QStringLiteral("Data optimization requires complete dependency analysis (%1). Resolve the declared dependency layers before applying changes.")
+                            .arg(analysisCompletenessName(analysis.completeness));
+        if (!analysis.incompleteSources.isEmpty())
+            report->error += QStringLiteral(" First gap: %1").arg(analysis.incompleteSources.first());
         return false;
     }
     if (!aggressiveClosedProject && sourceMayHaveExternalConsumers(report->mapPath)) {
@@ -1231,12 +1247,6 @@ bool optimizeMap(const QString &mapPath, MapReport *report, bool aggressiveClose
                     .arg(referenceStats.complete ? 1 : 0));
     report->archiveReferenceEntriesScanned = referenceStats.entriesScanned;
     report->archiveReferenceIdsFound = referenceStats.idsFound;
-    error.clear();
-    QStringList archiveReferenceEntries = materializeArchiveReferenceEntries(archive, workspace.path(), &error);
-    if (!error.isEmpty() && archiveReferenceEntries.isEmpty()) {
-        report->error = error;
-        return false;
-    }
     applyArchiveReferenceSafety(&analysis, referenceStats);
     report->objectsBefore = analysis.totalDataNodes();
     report->safeUnusedBefore = safeUnusedRemovalCount(analysis);
@@ -1386,9 +1396,10 @@ bool verifyOnlyMap(const QString &mapPath, MapReport *report)
 
 void printReport(const MapReport &report, QTextStream &out)
 {
-    const qint64 delta = report.afterBytes - report.beforeBytes;
+    const qint64 actualAfterBytes = QFileInfo(report.mapPath).size();
+    const qint64 delta = actualAfterBytes - report.beforeBytes;
     const double reducedPercent = report.beforeBytes > 0
-        ? (double(report.beforeBytes - report.afterBytes) * 100.0 / double(report.beforeBytes))
+        ? (double(report.beforeBytes - actualAfterBytes) * 100.0 / double(report.beforeBytes))
         : 0.0;
     out << "map=" << QDir::toNativeSeparators(report.mapPath) << '\n';
     out << "status=" << (report.success ? "ok" : "failed") << '\n';
@@ -1397,7 +1408,7 @@ void printReport(const MapReport &report, QTextStream &out)
     if (!report.backupPath.isEmpty())
         out << "backup=" << QDir::toNativeSeparators(report.backupPath) << '\n';
     out << "before_bytes=" << report.beforeBytes << '\n';
-    out << "after_bytes=" << report.afterBytes << '\n';
+    out << "after_bytes=" << actualAfterBytes << '\n';
     out << "size_delta_bytes=" << delta << '\n';
     out << "size_reduced_percent=" << QString::number(reducedPercent, 'f', 2) << '\n';
     out << "archive_entries_before=" << report.archiveEntriesBefore << '\n';

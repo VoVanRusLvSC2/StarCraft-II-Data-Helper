@@ -1,0 +1,18 @@
+{
+    "duplicateNodesRemoved": 0,
+    "finalDuplicateMergeCandidates": 0,
+    "finalObjects": 1,
+    "initialObjects": 1,
+    "mergeGroupsApplied": 0,
+    "merges": [
+    ],
+    "referencesRedirected": 0,
+    "success": true,
+    "unusedApplyMode": "preview-only: archive binary references are not fully analyzable",
+    "unusedIds": [
+        "SmokeUnit"
+    ],
+    "unusedObjectsRemoved": 0,
+    "unusedObjectsSkipped": 0,
+    "unusedSafeCandidatesPreviewed": 1
+}

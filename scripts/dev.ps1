@@ -74,6 +74,11 @@ function Stage-Executable([string] $qtRoot) {
             Copy-Item -Destination $destination -Recurse -Force
     }
 
+    $licenseDirectory = Join-Path $buildDirectory "$Configuration\third_party"
+    New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $projectRoot "third_party\SC2Editor-MCP-Codex-LICENSE.txt") `
+        -Destination (Join-Path $licenseDirectory "SC2Editor-MCP-Codex-LICENSE.txt") -Force
+
 }
 
 $cmake = Find-Tool "cmake" @(

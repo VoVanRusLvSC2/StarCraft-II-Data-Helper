@@ -1,0 +1,12 @@
+********* Start testing of CoreTests *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-llp64 shared (dynamic) debug build; by MSVC 2022), windows 11
+PASS   : CoreTests::initTestCase()
+FAIL!  : CoreTests::xmlTokenNoOpAndMutationPreserveData() 'nodes.first().serializedXml.contains(QStringLiteral("<?token"))' returned FALSE. ()
+E:\SK2\Data helper KSP\tests\test_core.cpp(408) : failure location
+FAIL!  : CoreTests::xmlTokenDeclarationsAffectEquivalence() 'nodes[0].contentHash != nodes[1].contentHash' returned FALSE. ()
+E:\SK2\Data helper KSP\tests\test_core.cpp(428) : failure location
+FAIL!  : CoreTests::actorEventChildCarriersAreNotBroken() 'candidate.kind != DeepCleanupKind::BrokenActorEvent || candidate.state != CandidateState::Safe' returned FALSE. (Actor event has no triggering Terms and no Send action.)
+E:\SK2\Data helper KSP\tests\test_core.cpp(444) : failure location
+PASS   : CoreTests::cleanupTestCase()
+Totals: 2 passed, 3 failed, 0 skipped, 0 blacklisted, 209ms
+********* Finished testing of CoreTests *********

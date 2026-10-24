@@ -19,6 +19,14 @@ catalog XML files.
 6. Apply changes with backup enabled.
 7. Open the result in StarCraft II Editor and test the affected maps.
 
+For a single `.SC2Map` or `.SC2Mod`, select a catalog object in **Objects**,
+open **Properties**, and click **Inspect effective Data (ModKit)**. On first use,
+select `dist/index.js` from your installed SC2Editor-MCP-Codex. The read-only
+panel shows inherited values and which dependency supplied each field. Enter
+exact field names separated by commas to inspect fields beyond the default
+first 24. A missing ModKit result does not authorize deletion; rely on the
+normal cleanup preview and safety checks.
+
 In the Optimization Wizard, if reference safety checks exclude every selected
 rename item, the rename step is skipped and its reasons appear in the summary.
 The other selected steps can continue. Invalid rename results and file errors

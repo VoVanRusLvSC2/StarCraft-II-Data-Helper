@@ -2076,8 +2076,26 @@ void MainWindow::applyMerge(const MergeRequest &request)
 
 void MainWindow::previewUnusedDeletion(const QVector<int> &rows)
 {
+    m_previewedUnusedRows.clear();
+    if (m_sourceKind == SourceKind::ArchiveFolder) {
+        m_cleanupPage->setPreviewText(archiveFolderReadOnlyMessage(), false);
+        return;
+    }
+    if (rows.isEmpty()) {
+        m_cleanupPage->setPreviewText(QStringLiteral("Select at least one Safe candidate first."), false);
+        return;
+    }
+    const DestructiveOperationPermission permission = canApplyDestructiveChanges(m_result);
+    if (!permission.allowed) {
+        m_cleanupPage->setPreviewText(destructiveOperationPermissionText(permission), false);
+        return;
+    }
+    if (m_sourceKind == SourceKind::ArchiveFile && !m_archiveReferenceScanComplete) {
+        m_cleanupPage->setPreviewText(QStringLiteral("Blocked: the archive reference scan was incomplete."), false);
+        return;
+    }
     m_previewedUnusedRows = rows;
-    m_cleanupPage->setPreviewText(m_analyzer.buildDryRunReport(m_result, rows));
+    m_cleanupPage->setPreviewText(m_analyzer.buildDryRunReport(m_result, rows), true);
 }
 
 void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
@@ -2096,6 +2114,8 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
     const DestructiveOperationPermission permission = canApplyDestructiveChanges(m_result);
     if (!permission.allowed)
     {
+        m_previewedUnusedRows.clear();
+        m_cleanupPage->setPreviewText(destructiveOperationPermissionText(permission), false);
         QMessageBox::warning(this, QStringLiteral("Delete Unused Data Objects"),
                              destructiveOperationPermissionText(permission));
         return;
@@ -2104,6 +2124,8 @@ void MainWindow::applyUnusedDeletion(const QVector<int> &rows)
     {
         if (!m_archiveReferenceScanComplete)
         {
+            m_previewedUnusedRows.clear();
+            m_cleanupPage->setPreviewText(QStringLiteral("Blocked: the archive reference scan was incomplete."), false);
             QMessageBox::information(this, QStringLiteral("Delete Unused Data Objects"),
                                      QStringLiteral("Blocked: the archive reference scan was incomplete."));
             return;

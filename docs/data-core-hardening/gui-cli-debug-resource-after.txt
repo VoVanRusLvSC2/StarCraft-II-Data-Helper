@@ -1,0 +1,9 @@
+********* Start testing of CoreTests *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-llp64 shared (dynamic) debug build; by MSVC 2022), windows 11
+PASS   : CoreTests::initTestCase()
+PASS   : CoreTests::optimizationCliKeepsOtherCatalogIdentity()
+PASS   : CoreTests::schemaCacheDetectsIncompatibleIndex()
+PASS   : CoreTests::guiNativeBindingChangeRejectsStaleApply()
+PASS   : CoreTests::cleanupTestCase()
+Totals: 5 passed, 0 failed, 0 skipped, 0 blacklisted, 16483ms
+********* Finished testing of CoreTests *********

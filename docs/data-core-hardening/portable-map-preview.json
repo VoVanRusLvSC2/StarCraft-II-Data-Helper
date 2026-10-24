@@ -1,0 +1,16 @@
+{
+    "archive_entries": 75,
+    "first_paint_ready_ms": 2310,
+    "opengl_context_valid": false,
+    "opengl_framebuffer_composited": false,
+    "ready": true,
+    "schema": "sc2dh.beta2.real-map-preview-smoke.v1",
+    "screenshot": "E:/SK2/SC2_Edition_MCP/hardening-stage/gui/portable-map-preview/real-map-preview.png",
+    "screenshot_saved": true,
+    "source_path": "E:/SK2/SC2_Edition_MCP/hardening-stage/benchmark/Mercs Episode 2.SC2Map",
+    "source_sha256_after": "22d2dc6d6892bff006e0cad9589174168c54342b773f65a0d6ea4b0fabc97729",
+    "source_sha256_before": "22d2dc6d6892bff006e0cad9589174168c54342b773f65a0d6ea4b0fabc97729",
+    "source_unchanged": true,
+    "summary": "1252 positioned object(s) loaded. Choose exact map Regions to move safe decor from Objects into generated Galaxy actor functions. Source: Objects | Minimap: t3Terrain.xml + t3HeightMap",
+    "warning": "Region outlines use the map's exact circle, polygon, rectangle or composite geometry. The source archive is read-only. Terrain-backed preview: t3Terrain.xml + t3HeightMap."
+}
