@@ -17,7 +17,7 @@ public:
     explicit UnusedPage(QWidget *parent = nullptr);
     void setAnalysisResult(const AnalysisResult &result);
     void selectRows(const QVector<int> &rows);
-    void setPreviewText(const QString &text);
+    void setPreviewText(const QString &text, bool canApply);
 
 signals:
     void previewDeletionRequested(const QVector<int> &rows);
@@ -31,6 +31,9 @@ private:
     class QTextEdit *m_preview = nullptr;
     QPushButton *m_previewButton = nullptr;
     QPushButton *m_applyButton = nullptr;
+    QVector<int> m_previewedRows;
+    bool m_previewReady = false;
     QVector<int> selectedSafeRows() const;
+    void invalidatePreview();
     void updateActionState();
 };

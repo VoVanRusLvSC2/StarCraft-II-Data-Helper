@@ -111,6 +111,8 @@ target_sources(SC2DataHelper PRIVATE
     src/core/ArchiveReferenceRewriter.cpp
     src/core/AnalysisModels.h
     src/core/AnalysisModels.cpp
+    src/core/ModkitMcpClient.h
+    src/core/ModkitMcpClient.cpp
     src/core/AnalysisIndex.h
     src/core/AnalysisIndex.cpp
     src/core/ScannedFileReader.h
@@ -371,6 +373,7 @@ add_executable(SC2DataHelperTests
     src/core/M3ModelParser.cpp
     src/ui/ObjectTableModel.cpp
     src/ui/ObjectFilterProxyModel.cpp
+    src/ui/UnusedPage.cpp
 )
 
 target_include_directories(SC2DataHelperTests PRIVATE src)
@@ -714,5 +717,13 @@ endif()
 if(WIN32)
  target_link_libraries(SC2CatalogAnalysisProbe PRIVATE Psapi)
 endif()
+
+add_executable(SC2ModkitDataProbe
+    src/tools/ModkitDataProbe.cpp
+    src/core/ModkitMcpClient.cpp
+)
+target_include_directories(SC2ModkitDataProbe PRIVATE src)
+target_link_libraries(SC2ModkitDataProbe PRIVATE Qt6::Core)
+sc2dh_apply_version_definitions(SC2ModkitDataProbe)
 
 add_dependencies(SC2DataHelperTests SC2OptimizeFolder)

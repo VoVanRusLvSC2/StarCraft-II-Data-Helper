@@ -1,0 +1,12 @@
+********* Start testing of CoreTests *********
+Config: Using QtTest library 6.8.2, Qt 6.8.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by MSVC 2022), windows 11
+PASS   : CoreTests::initTestCase()
+FAIL!  : CoreTests::guiGamelinkUsesParamDefinitionCatalog() Compared values are not the same
+   Actual   (typed): 0
+   Expected (1)    : 1
+E:\SK2\Data helper KSP\tests\test_core.cpp(716) : failure location
+FAIL!  : CoreTests::guiRenameOnlyChangesEstablishedGamelinkValues() 'result.success' returned FALSE. (No selected rename items are available.)
+E:\SK2\Data helper KSP\tests\test_core.cpp(736) : failure location
+PASS   : CoreTests::cleanupTestCase()
+Totals: 2 passed, 2 failed, 0 skipped, 0 blacklisted, 1190ms
+********* Finished testing of CoreTests *********

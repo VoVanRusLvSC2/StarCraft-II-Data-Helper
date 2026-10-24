@@ -1,0 +1,90 @@
+SC2Editor-MCP-Codex Attribution License 1.0
+License identifier: LicenseRef-SC2Editor-MCP-Attribution-1.0
+
+Copyright (c) 2026 VoVanRusLvSC2 <vladimir.lencmanis@gmail.com>
+All rights reserved.
+
+1. Scope
+
+This license applies to all original code and original documentation owned
+by VoVanRusLvSC2 in SC2Editor-MCP-Codex (the "Software"), across every project
+module. This includes original editor/MCP functions, authoring tools, project
+integration, original renderer settings and implementation, renderer adapters
+and lighting code. It covers copies, modified versions and incorporated
+portions of that original Software.
+
+Third-party implementations, including vendor/blizzard-models, native vendor
+libraries, imported Surface Toolkit core/format code, upstream schemas and
+third-party data, are excluded. Their own licenses and copyright notices
+remain in force. Changes to third-party code that are governed by its license
+remain governed by that license. See THIRD_PARTY_LICENSES.md and CREDITS.md.
+This license does not grant rights to StarCraft II software or game assets.
+
+2. Permission
+
+Subject to the conditions below, permission is granted, without a license fee,
+to use, copy, modify, incorporate, distribute and sell the Software, in source
+or binary form, including as part of commercial projects.
+
+3. Copyright and license preservation
+
+Copies and distributions of the Software or any incorporated portion must
+retain this copyright notice, these conditions and the disclaimer below.
+For binary distributions, reproduce them in accompanying documentation or
+other materials available to recipients.
+
+4. Project attribution
+
+Every project that incorporates the Software or uses it as a software component,
+in whole or in part,
+including modified modules or copied code fragments, must include a clear
+credit identifying VoVanRusLvSC2 and SC2Editor-MCP-Codex as the source of the
+modules or code used. Identify the modules or functionality actually used.
+
+Place the credit in the project's README, CREDITS, documentation credits or
+an About/Credits section. For a publicly distributed or publicly accessible
+project, including a hosted service, this credit must be publicly accessible
+to its users or readers of the project documentation. For a private project,
+retain the credit in its project documentation; this condition does not
+require making the project or its source public.
+
+Merely operating the authoring tools to create or edit a map, document or data
+does not apply this license to that output, unless the output itself contains
+the Software or a portion of its code.
+
+The credit must include the following information, or an equivalent
+translation with the same meaning:
+
+"Uses [identify modules or functionality] from SC2Editor-MCP-Codex
+by VoVanRusLvSC2.
+https://github.com/VoVanRusLvSC2/SC2Editor-MCP-Codex"
+
+Preserving a copyright notice only inside a source file, or privately
+notifying the author, does not by itself satisfy the project-credit condition.
+Do not remove or conceal the required credit from incorporated versions.
+Modified versions must not be represented as the author's unmodified work,
+and attribution must not imply the author's endorsement.
+
+5. Other licenses and earlier grants
+
+This is a custom license, not BSD-2-Clause. It is not represented as an
+OSI-approved license or as compatible with every third-party license.
+It does not authorize imposing these conditions on third-party code or
+distributing a combined work contrary to a third-party license. Where those
+conditions cannot be satisfied together, this license does not grant
+permission for that combined distribution; obtain separate compatible rights
+or use a compatible implementation. No GPL compatibility exception or
+alternative license is granted by this document.
+
+This license applies to versions provided under it. It does not withdraw
+permissions already granted for earlier copies under another license.
+
+6. Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. TO THE EXTENT PERMITTED
+BY APPLICABLE LAW, THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS
+USE OR OTHER DEALINGS IN THE SOFTWARE.

@@ -30,7 +30,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G "Ninja Multi-Config"
       - name: Build
-        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums SC2DecorOptimizeMap SC2DataHelperTests
+        run: cmake --build build --config Release --target SC2DataHelper SC2OptimizeMaps SC2RepairMapEnums SC2DecorOptimizeMap SC2ModkitDataProbe SC2DataHelperTests
       - name: Test
         shell: pwsh
         env:
@@ -54,9 +54,12 @@ jobs:
           Copy-Item build/Release/SC2OptimizeMaps.exe $stage/
           Copy-Item build/Release/SC2RepairMapEnums.exe $stage/
           Copy-Item build/Release/SC2DecorOptimizeMap.exe $stage/
+          Copy-Item build/Release/SC2ModkitDataProbe.exe $stage/
           Copy-Item resources $stage/resources -Recurse
           Copy-Item scripts $stage/scripts -Recurse
           Copy-Item LICENSE $stage/
+          New-Item -ItemType Directory -Force "$stage/third_party" | Out-Null
+          Copy-Item third_party/SC2Editor-MCP-Codex-LICENSE.txt "$stage/third_party/"
           Copy-Item README.md $stage/
           Copy-Item docs/USER_GUIDE.md $stage/
           Copy-Item docs/DECOR_GUI_RU.md $stage/
@@ -108,6 +111,8 @@ jobs:
             'SC2OptimizeMaps.exe',
             'SC2RepairMapEnums.exe',
             'SC2DecorOptimizeMap.exe',
+            'SC2ModkitDataProbe.exe',
+            'third_party/SC2Editor-MCP-Codex-LICENSE.txt',
             'Qt6Core.dll',
             'Qt6Gui.dll',
             'Qt6Widgets.dll',

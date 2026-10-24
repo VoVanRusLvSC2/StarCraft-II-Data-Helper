@@ -96,6 +96,9 @@ struct ZoneAssignment
     QVector<int> doodadIndices;
     QVector<int> unitIndices;
     QString zoneName;
+    // Original placements with a disabled Custom Color are controlled by ID.
+    // They remain in Objects and retain their native model and actor state.
+    QVector<int> nativeVisibilityDoodadIndices;
 };
 
 struct DecorationStreamingPlan
@@ -107,6 +110,9 @@ struct DecorationStreamingPlan
     QVector<int> staticOnlyDoodads;
     QVector<int> unassignedDoodads;
     QVector<int> boundaryDoodads;
+    // Explicitly recreated placements whose type-based trigger calls must
+    // also reach their runtime actor.
+    QVector<int> bridgedDoodads;
     QVector<int> staticOnlyUnits;
     QVector<int> unassignedUnits;
     QVector<int> boundaryUnits;
@@ -131,6 +137,18 @@ struct DecorationSafetyContext
     QHash<QString, QString> staticOnlyReasonByDoodadType;
     QHash<QString, QStringList> referenceFilesByUnitType;
     QHash<QString, QStringList> referenceFilesByDoodadType;
+    // Explicit trial of recreating all placements of a NULL-tint actor type.
+    // The planner accepts a type only when every placement is safe to move.
+    QSet<QString> recreateNullableTintTypes;
+    // Move every placement of a NULL-tint type with type-wide trigger calls.
+    // Direct ID/name links and unsafe placements still reject the whole type.
+    QSet<QString> recreateReferencedNullableTintTypes;
+    // Recreate one NULL-tint placement, even when its type is used by
+    // supported region-wide trigger calls. Direct ID/name links remain native.
+    QSet<QString> recreateNullableTintDoodadKeys;
+    // Explicit native show/hide for a placed doodad that has type-level
+    // references. Direct ID/name references still block automatic control.
+    QSet<QString> nativeVisibilityReferencedDoodadKeys;
     bool keepReferencedTypes = false;
     bool keepAiTemplates = true;
     bool keepAiBuildings = false;

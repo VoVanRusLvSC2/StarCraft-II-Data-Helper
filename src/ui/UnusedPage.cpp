@@ -130,7 +130,7 @@ UnusedPage::UnusedPage(QWidget *parent)
     connect(m_applyButton, &QPushButton::clicked, this, [this]
             { emit applyDeletionRequested(selectedSafeRows()); });
     connect(m_model, &QStandardItemModel::itemChanged, this, [this]
-            { updateActionState(); });
+            { invalidatePreview(); });
     updateActionState();
 }
 
@@ -138,6 +138,8 @@ void UnusedPage::setAnalysisResult(const AnalysisResult &result)
 {
     const QSignalBlocker blocker(m_model);
     m_result = result;
+    m_previewReady = false;
+    m_previewedRows.clear();
     m_model->removeRows(0, m_model->rowCount());
 
     int count = 0;
@@ -228,20 +230,36 @@ void UnusedPage::selectRows(const QVector<int> &rows)
         if (item && item->isCheckable())
             item->setCheckState(selected.contains(item->data(Qt::UserRole + 1).toInt()) ? Qt::Checked : Qt::Unchecked);
     }
+    invalidatePreview();
+}
+
+void UnusedPage::setPreviewText(const QString &text, bool canApply)
+{
+    m_preview->setPlainText(text);
+    m_previewedRows = canApply ? selectedSafeRows() : QVector<int>{};
+    m_previewReady = canApply && !m_previewedRows.isEmpty();
     updateActionState();
 }
 
-void UnusedPage::setPreviewText(const QString &text) { m_preview->setPlainText(text); }
+void UnusedPage::invalidatePreview()
+{
+    m_previewReady = false;
+    m_previewedRows.clear();
+    m_preview->clear();
+    updateActionState();
+}
 
 void UnusedPage::updateActionState()
 {
     const int count = selectedSafeRows().size();
     const bool available = count > 0;
     m_previewButton->setEnabled(available);
-    m_applyButton->setEnabled(available);
+    const bool canApply = available && m_previewReady && selectedSafeRows() == m_previewedRows;
+    m_applyButton->setEnabled(canApply);
     const QString hint = available
                              ? QStringLiteral("%1 safe data object(s) selected").arg(count)
                              : QStringLiteral("Select at least one Safe candidate first");
     m_previewButton->setToolTip(hint);
-    m_applyButton->setToolTip(hint);
+    m_applyButton->setToolTip(canApply ? hint : available
+        ? QStringLiteral("Preview this exact selection before deletion") : hint);
 }

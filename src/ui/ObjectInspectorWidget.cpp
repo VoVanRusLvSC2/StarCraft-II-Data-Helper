@@ -1,14 +1,27 @@
 #include "ui/ObjectInspectorWidget.h"
 
+#include "core/ModkitMcpClient.h"
+
 #include <QAbstractItemView>
 #include <QColor>
 #include <QFormLayout>
 #include <QFrame>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFont>
+#include <QFutureWatcher>
+#include <QHash>
 #include <QHeaderView>
+#include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
 #include <QRegularExpression>
 #include <QPlainTextEdit>
+#include <QPushButton>
+#include <QSettings>
 #include <QSplitter>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -17,6 +30,7 @@
 #include <QSyntaxHighlighter>
 #include <QVBoxLayout>
 #include <QStringList>
+#include <QtConcurrent/QtConcurrentRun>
 
 namespace {
 
@@ -64,6 +78,16 @@ private:
 QString safeText(const QString &text, const QString &fallback = QStringLiteral("N/A"))
 {
     return text.isEmpty() ? fallback : text;
+}
+
+QString scalarFieldName(const sc2dh::ResolvedValue &value)
+{
+    if (value.field.carrier != QStringLiteral("value"))
+        return value.field.carrier;
+    QString name = value.field.path.section(QLatin1Char('/'), -1);
+    const int index = name.indexOf(QLatin1Char('['));
+    if (index >= 0) name.truncate(index);
+    return name;
 }
 
 } // namespace
@@ -155,9 +179,21 @@ ObjectInspectorWidget::ObjectInspectorWidget(QWidget *parent)
     xmlLayout->setContentsMargins(12, 12, 12, 12);
     xmlLayout->setSpacing(8);
 
+    auto *xmlHeader = new QHBoxLayout();
     auto *xmlTitle = new QLabel(QStringLiteral("XML Source"), xmlFrame);
     xmlTitle->setObjectName(QStringLiteral("panelTitle"));
-    xmlLayout->addWidget(xmlTitle);
+    xmlHeader->addWidget(xmlTitle);
+    xmlHeader->addStretch();
+    m_modkitFields = new QLineEdit(xmlFrame);
+    m_modkitFields->setPlaceholderText(QStringLiteral("ModKit fields (optional, comma-separated)"));
+    m_modkitFields->setToolTip(QStringLiteral("Leave empty for the first 24 effective fields, or enter up to 32 exact field names."));
+    m_modkitFields->setMaximumWidth(290);
+    xmlHeader->addWidget(m_modkitFields);
+    m_modkitButton = new QPushButton(QStringLiteral("Inspect effective Data (ModKit)"), xmlFrame);
+    m_modkitButton->setToolTip(QStringLiteral("Read the selected object's effective fields and source provenance through the configured SC2 MCP server."));
+    xmlHeader->addWidget(m_modkitButton);
+    xmlLayout->addLayout(xmlHeader);
+    connect(m_modkitButton, &QPushButton::clicked, this, &ObjectInspectorWidget::inspectWithModkit);
 
     m_xmlView = new QPlainTextEdit(xmlFrame);
     m_xmlView->setObjectName(QStringLiteral("xmlSourceView"));
@@ -168,6 +204,13 @@ ObjectInspectorWidget::ObjectInspectorWidget(QWidget *parent)
     m_xmlView->setPlaceholderText(QStringLiteral("No XML source available."));
     xmlLayout->addWidget(m_xmlView, 1);
     new XmlHighlighter(m_xmlView->document());
+
+    m_modkitView = new QPlainTextEdit(xmlFrame);
+    m_modkitView->setObjectName(QStringLiteral("modkitEffectiveDataView"));
+    m_modkitView->setReadOnly(true);
+    m_modkitView->setMaximumHeight(220);
+    m_modkitView->setPlaceholderText(QStringLiteral("Select an object and inspect its effective Data through ModKit."));
+    xmlLayout->addWidget(m_modkitView);
 
     splitter->addWidget(detailsFrame);
     splitter->addWidget(xmlFrame);
@@ -181,6 +224,7 @@ ObjectInspectorWidget::ObjectInspectorWidget(QWidget *parent)
 
 void ObjectInspectorWidget::setAnalysisResult(const AnalysisResult &result)
 {
+    ++m_modkitRequest;
     m_result = result;
     if (m_currentRow >= m_result.nodes.size()) {
         m_currentRow = -1;
@@ -190,12 +234,14 @@ void ObjectInspectorWidget::setAnalysisResult(const AnalysisResult &result)
 
 void ObjectInspectorWidget::setCurrentRow(int row)
 {
+    ++m_modkitRequest;
     m_currentRow = row;
     refreshCurrentNode();
 }
 
 void ObjectInspectorWidget::clearSelection()
 {
+    ++m_modkitRequest;
     m_currentRow = -1;
     populateEmptyState();
 }
@@ -230,6 +276,8 @@ void ObjectInspectorWidget::populateEmptyState()
     m_attributesTable->setItem(0, 1, new QTableWidgetItem(QStringLiteral("Choose a data row to see properties.")));
 
     m_xmlView->setPlainText(QStringLiteral("No object selected.\n\nClick a row in the Objects table to inspect the XML source and properties."));
+    m_modkitButton->setEnabled(false);
+    m_modkitView->clear();
 }
 
 QString ObjectInspectorWidget::statusTextForNode(const DataNode &node) const
@@ -282,4 +330,116 @@ void ObjectInspectorWidget::populateNodeState(const DataNode &node)
     m_xmlView->setPlainText(node.serializedXml.isEmpty()
                                 ? QStringLiteral("No XML source available.")
                                 : node.serializedXml);
+    const QString suffix = QFileInfo(m_result.rootFolder).suffix();
+    const bool packageSource = suffix.compare(QStringLiteral("SC2Map"), Qt::CaseInsensitive) == 0
+        || suffix.compare(QStringLiteral("SC2Mod"), Qt::CaseInsensitive) == 0;
+    m_modkitButton->setEnabled(packageSource && !node.id.isEmpty()
+        && !ModkitMcpClient::namespaceForType(node.elementName).isEmpty());
+    m_modkitView->clear();
+}
+
+void ObjectInspectorWidget::inspectWithModkit()
+{
+    if (m_currentRow < 0 || m_currentRow >= m_result.nodes.size()) return;
+    const DataNode node = m_result.nodes[m_currentRow];
+    const QString source = m_result.rootFolder;
+    QStringList fields;
+    for (const QString &part : m_modkitFields->text().split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString field = part.trimmed();
+        if (!field.isEmpty()) fields << field;
+    }
+    QString entry = qEnvironmentVariable("SC2_MODKIT_MCP_ENTRY");
+    if (entry.isEmpty()) entry = QSettings().value(QStringLiteral("analysis/modkitMcpEntry")).toString();
+    if (!QFileInfo(entry).isFile()) {
+        entry = QFileDialog::getOpenFileName(this,
+            QStringLiteral("Select SC2Editor-MCP-Codex dist/index.js"),
+            QFileInfo(entry).absolutePath(), QStringLiteral("JavaScript entry (index.js)"));
+        if (entry.isEmpty()) return;
+        QSettings().setValue(QStringLiteral("analysis/modkitMcpEntry"), entry);
+    }
+    const quint64 requestId = ++m_modkitRequest;
+    const QVector<SourceRevision> revisions = m_result.sourceRevisions;
+    m_modkitButton->setEnabled(false);
+    m_modkitView->setPlainText(QStringLiteral("Reading effective Data from ModKit..."));
+    auto *watcher = new QFutureWatcher<ModkitEntityInspection>(this);
+    connect(watcher, &QFutureWatcher<ModkitEntityInspection>::finished, this,
+            [this, watcher, requestId, node] {
+        const ModkitEntityInspection inspection = watcher->result();
+        watcher->deleteLater();
+        if (requestId != m_modkitRequest) return;
+        m_modkitButton->setEnabled(true);
+        if (!inspection.success) {
+            m_modkitView->setPlainText(QStringLiteral("ModKit unavailable: %1").arg(inspection.error));
+            return;
+        }
+        const QJsonArray entities = inspection.answer.value(QStringLiteral("entities")).toArray();
+        if (entities.isEmpty()) {
+            m_modkitView->setPlainText(QStringLiteral("ModKit did not find this ID in the loaded package/dependencies. This is not proof that the object is unused."));
+            return;
+        }
+        const QJsonObject entity = entities.first().toObject();
+        QStringList lines;
+        lines << QStringLiteral("ModKit effective Data | snapshot %1 | complete: %2")
+                     .arg(inspection.inputRevision.left(12),
+                          entity.value(QStringLiteral("complete")).toBool() ? QStringLiteral("yes") : QStringLiteral("no"));
+        lines << QStringLiteral("Effective type: %1").arg(entity.value(QStringLiteral("typeId")).toString());
+        const QJsonArray chain = entity.value(QStringLiteral("inheritanceChain")).toArray();
+        QStringList parents;
+        for (const QJsonValue &item : chain)
+            parents << item.toObject().value(QStringLiteral("entityId")).toString();
+        if (!parents.isEmpty()) lines << QStringLiteral("Inheritance: %1").arg(parents.join(QStringLiteral(" -> ")));
+        const QJsonObject fields = entity.value(QStringLiteral("fields")).toObject();
+        const QJsonObject sources = entity.value(QStringLiteral("fieldSources")).toObject();
+        QHash<QString, QString> localScalars;
+        for (const sc2dh::ResolvedValue &resolved : node.resolvedValues) {
+            if (!resolved.known || resolved.presence != sc2dh::ValuePresence::Present)
+                continue;
+            const QString fieldName = scalarFieldName(resolved);
+            if (!fieldName.isEmpty()) localScalars.insert(fieldName, resolved.effective);
+        }
+        QStringList keys = fields.keys(); keys.sort(Qt::CaseSensitive);
+        int compared = 0;
+        int different = 0;
+        QStringList fieldLines;
+        for (const QString &key : keys) {
+            const QJsonValue value = fields.value(key);
+            const QString printed = value.isString() ? value.toString()
+                : QString::fromUtf8(QJsonDocument(QJsonArray{value})
+                                        .toJson(QJsonDocument::Compact)).mid(1).chopped(1);
+            const QJsonObject origin = sources.value(key).toObject();
+            const QString path = origin.value(QStringLiteral("path")).toString();
+            const int line = origin.value(QStringLiteral("range")).toObject().value(QStringLiteral("line")).toInt();
+            QString comparison;
+            if ((value.isString() || value.isDouble()) && localScalars.contains(key)) {
+                ++compared;
+                if (localScalars.value(key) != printed) {
+                    ++different;
+                    comparison = QStringLiteral("  [optimizer scalar: %1; differs]")
+                                     .arg(localScalars.value(key));
+                }
+            }
+            fieldLines << QStringLiteral("%1 = %2%3%4").arg(key, printed,
+                path.isEmpty() ? QString() :
+                line > 0 ? QStringLiteral("  [%1:%2]").arg(path).arg(line) :
+                           QStringLiteral("  [%1]").arg(path), comparison);
+        }
+        if (compared > 0) lines << QStringLiteral("Compared %1 known optimizer scalars: %2 differ.")
+                                    .arg(compared).arg(different);
+        lines.append(fieldLines);
+        const int omitted = entity.value(QStringLiteral("omittedFieldCount")).toInt();
+        if (omitted > 0) lines << QStringLiteral("%1 further fields omitted by the bounded MCP query.").arg(omitted);
+        lines << QStringLiteral("Read-only evidence; optimization safety is decided by the full local analysis.");
+        m_modkitView->setPlainText(lines.join(QLatin1Char('\n')));
+    });
+    watcher->setFuture(QtConcurrent::run([source, node, entry, fields, revisions] {
+        ModkitEntityInspection stale;
+        for (const SourceRevision &revision : revisions) {
+            QString error;
+            if (!sourceRevisionMatches(revision, &error)) {
+                stale.error = QStringLiteral("Source changed after analysis. Analyze it again before comparing ModKit data: %1").arg(error);
+                return stale;
+            }
+        }
+        return ModkitMcpClient::inspect(source, node.elementName, node.id, entry, fields);
+    }));
 }

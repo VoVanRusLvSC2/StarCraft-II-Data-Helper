@@ -1,0 +1,15 @@
+{
+    "duration_ms": 706,
+    "files": 2,
+    "incomplete_sources": [
+    ],
+    "input": "E:\\SK2\\SC2_Edition_MCP\\hardening-stage\\gui\\native-preflight\\native-fixture",
+    "objects": 3,
+    "peak_working_set_bytes": 162705408,
+    "references": 3,
+    "safe_candidates": 2,
+    "source_completeness": "Complete",
+    "unknown_candidates": 0,
+    "unknown_reasons": {
+    }
+}

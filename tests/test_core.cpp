@@ -35,6 +35,7 @@
 #include "core/ObjectsReferenceSpans.h"
 #include "ui/ObjectFilterProxyModel.h"
 #include "ui/ObjectTableModel.h"
+#include "ui/UnusedPage.h"
 
 #include <QDir>
 #include <QCoreApplication>
@@ -47,6 +48,7 @@
 #include <QLabel>
 #include <QSet>
 #include <QProcess>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QStandardItemModel>
@@ -54,6 +56,7 @@
 #include <QStringList>
 #include <QTabWidget>
 #include <QTranslator>
+#include <QXmlStreamReader>
 #include <QtEndian>
 
 #include <algorithm>
@@ -332,6 +335,7 @@ private slots:
     void folderTransactionRejectsStaleSourceBeforeCommit();
     void localizationWidgetTreeRetranslatesAndPreservesDomainValue();
     void dryRunGeneration();
+    void unusedPageRequiresCurrentPreview();
     void selectedNodeRemoval();
     void removeMultipleSameNameSiblingsWithoutIndexShift();
     void saveFailureSafety();
@@ -390,6 +394,7 @@ private slots:
     void decorationHiddenAiProtectionRequiresBothFlags();
     void decorationStreamingRegionEntryRestoresVisibility();
     void decorationStreamingPreservesNullableTintAndTerrainObjects();
+    void decorationStreamingRecreatesExplicitNullableTintTypeSafely();
     void decorationMapCopyKeepsSurfacesAndTypeReferencedDoodads();
     void decorationMapCopyKeepsTriggerReferencedUnitTypes();
     void decorationGuiActionBuildsEditableSwitchAndIncludes();
@@ -6489,7 +6494,7 @@ void CoreTests::decorationStreamingRestoresExecutableGalaxy()
     int doodads=0, units=0;
     QVERIFY2(planner.restoreObjectsFromGalaxy(artifacts.optimizedObjectsBytes,artifacts.galaxySource,
                                              &restored,&doodads,&units,&error),qPrintable(error));
-    QCOMPARE(doodads,5); QCOMPARE(units,1);
+    QCOMPARE(doodads,4); QCOMPARE(units,1);
     // Older converted maps used a single, rejected SetBearings message.
     // Their script geometry must remain importable after the runtime fix.
     QString legacy = artifacts.galaxySource;
@@ -6560,7 +6565,7 @@ void CoreTests::decorationStreamingRestoresExecutableGalaxy()
     const QString output=QDir(dir.path()).filePath(QStringLiteral("Imported.SC2Map"));
     const auto result=DecorationMapCopyService().restoreGalaxyCopy({source,output});
     QVERIFY2(result.success,qPrintable(result.error));
-    QVERIFY(result.sourceUnchanged); QCOMPARE(result.restoredDoodads,5); QCOMPARE(result.restoredUnits,1);
+    QVERIFY(result.sourceUnchanged); QCOMPARE(result.restoredDoodads,4); QCOMPARE(result.restoredUnits,1);
     Sc2Archive archive; QVERIFY(archive.load(output,&error)); QByteArray objects, runtime;
     QVERIFY(archive.readEntry(QStringLiteral("Objects"),&objects,&error));
     QVERIFY(objects.contains("113,223,-30"));
@@ -6951,47 +6956,154 @@ void CoreTests::decorationStreamingPreservesNullableTintAndTerrainObjects()
     const QByteArray objects = QByteArrayLiteral(
         "<PlacedObjects Version=\"27\">\n"
         " <ObjectDoodad Id=\"1\" Type=\"RainEmitterMedium\" Position=\"10,10,0\" TintColor=\"NULL 100.000000\"/>\n"
-        " <ObjectDoodad Id=\"2\" Type=\"LightOmniBlueLarge\" Position=\"11,10,0\" TintColor=\"NULL 10\"/>\n"
+        " <ObjectDoodad Id=\"2\" Type=\"StarShipAdun_Turret\" Position=\"11,10,0\" TintColor=\"NULL 10\"/>\n"
         " <ObjectDoodad Id=\"3\" Type=\"LightOmniWhite\" Position=\"12,10,0\" TintColor=\"NULL 0.01\"/>\n"
-        " <ObjectDoodad Id=\"4\" Type=\"TreeVisual\" Position=\"13,10,0\" TintColor=\"255,128,0 1.5\"/>\n"
+        " <ObjectDoodad Id=\"4\" Type=\"ColoredTreeVisual\" Position=\"13,10,0\" TintColor=\"255,128,0 1.5\"/>\n"
         " <ObjectDoodad Id=\"5\" Type=\"TreeVisual\" Position=\"14,10,0\" TintColor=\"NULL\"/>\n"
         " <ObjectDoodad Id=\"6\" Type=\"TreeVisual\" Position=\"15,10,0\" TintColor=\"NULL -1\"/>\n"
         " <ObjectDoodad Id=\"7\" Type=\"TreeVisual\" Position=\"16,10,0\" TintColor=\"NULL rubbish\"/>\n"
         " <ObjectDoodad Id=\"8\" Type=\"TreeVisual\" Position=\"17,10,0\" TintColor=\"NULL 1e999\"/>\n"
         " <ObjectDoodad Id=\"9\" Type=\"TerrainObjectStarshipFloraPodDoodadD\" Position=\"18,10,0\"/>\n"
         " <ObjectDoodad Id=\"10\" Type=\"TerrainObjectCollapsingIceMediumDoodad\" Position=\"19,10,0\"/>\n"
+        " <ObjectDoodad Id=\"11\" Type=\"StarShipAdun_Turret\" Position=\"20,10,0\"/>\n"
         "</PlacedObjects>\n");
     const QVector<sc2dh::decor::DecorZone> zones{{1, QStringLiteral("Map_1"), 0, 0, 50, 50}};
-    const auto artifacts = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(objects, zones);
+    sc2dh::decor::DecorationSafetyContext safety;
+    safety.referenceFilesByDoodadKey.insert(QStringLiteral("2"), {QStringLiteral("Triggers")});
+    safety.referenceFilesByDoodadType.insert(QStringLiteral("rainemittermedium"), {QStringLiteral("MapScript.galaxy")});
+    const auto artifacts = sc2dh::decor::DecorationStreamingPlanner().createOptimizedArtifacts(objects, zones, safety);
     QVERIFY2(artifacts.valid, qPrintable(artifacts.warnings.join(QStringLiteral("; "))));
-    QCOMPARE(artifacts.removedDoodadIndices, (QVector<int>{0, 1, 2, 3, 4, 8, 9}));
+    QCOMPARE(artifacts.removedDoodadIndices, (QVector<int>{3, 8, 9}));
+    QCOMPARE(artifacts.plan.zones.at(0).nativeVisibilityDoodadIndices, (QVector<int>{2, 4, 10}));
     const auto &galaxy = artifacts.galaxySource;
-    for (const QString &hdr : {QStringLiteral("100.0"), QStringLiteral("10.0"),
-                               QStringLiteral("0.01"), QStringLiteral("1.0")})
-        QVERIFY(galaxy.contains(QStringLiteral("ActorSend(a, \"SetTintColor {NULL %1} {0.0}\");").arg(hdr)));
-    QVERIFY(!galaxy.contains(QStringLiteral("SetTintColor NULL ")));
+    QVERIFY(!galaxy.contains(QStringLiteral("SetTintColor {NULL")));
+    QVERIFY(!galaxy.contains(QStringLiteral("StarShipAdun_Turret")));
+    QVERIFY(galaxy.contains(QStringLiteral("ActorFromDoodad(DoodadFromId(11))")));
+    QVERIFY(galaxy.contains(QStringLiteral("ActorFromDoodad(DoodadFromId(3))")));
+    QVERIFY(!galaxy.contains(QStringLiteral("ActorFromDoodad(DoodadFromId(2))")));
+    QVERIFY(!galaxy.contains(QStringLiteral("ActorFromDoodad(DoodadFromId(1))")));
+    QVERIFY(galaxy.contains(QStringLiteral("DecorOpt_ShowNativeRegion(target);")));
+    QVERIFY(galaxy.contains(QStringLiteral("DecorOpt_SetNativeZoneVisible(zoneId, false);")));
     QVERIFY(!galaxy.contains(QStringLiteral("Color(100.0, 100.0, 100.0)")));
     QVERIFY(galaxy.contains(QStringLiteral("libNtve_gf_SetTintColor(Color(100.0, 50.196078, 0.0), 1.5, 0.0)")));
     QVERIFY(galaxy.contains(QStringLiteral("TerrainObjectStarshipFloraPodDoodadD")));
     QVERIFY(galaxy.contains(QStringLiteral("TerrainObjectCollapsingIceMediumDoodad")));
-    for (int index = 5; index < 8; ++index)
+    for (int index : {0, 1, 2, 4, 5, 6, 7, 10})
         QVERIFY(artifacts.optimizedObjectsBytes.contains(artifacts.plan.doodads.at(index).rawSource.toUtf8()));
+    QCOMPARE(artifacts.plan.doodads.at(10).staticOnlyReason,
+             QStringLiteral("Static-only: disabled Custom Color (NULL tint) cannot be recreated safely."));
     QVERIFY(artifacts.roundTripVerified);
     QVERIFY(artifacts.outsideScopePreserved);
-    // Both the valid grouped message and older exports remain restorable.
-    auto legacy = galaxy;
-    legacy.replace(QRegularExpression(QStringLiteral("SetTintColor \\{NULL ([^ ]+)\\} \\{0\\.0\\}")),
-                   QStringLiteral("SetTintColor NULL \\1 0.0"));
-    QByteArray restoredCurrent, restoredLegacy;
+    auto forcedSafety = safety;
+    forcedSafety.forcedZoneByDoodadKey.insert(QStringLiteral("11"), 2);
+    const QVector<sc2dh::decor::DecorZone> forcedZones{
+        zones.at(0), {2, QStringLiteral("Other"), 100, 100, 150, 150}};
+    const auto forcedPlan = sc2dh::decor::DecorationStreamingPlanner().buildPlan(objects, forcedZones, forcedSafety);
+    QCOMPARE(forcedPlan.zones.at(1).nativeVisibilityDoodadIndices, (QVector<int>{10}));
+    auto explicitNativeSafety = safety;
+    explicitNativeSafety.nativeVisibilityReferencedDoodadKeys.insert(QStringLiteral("1"));
+    explicitNativeSafety.nativeVisibilityReferencedDoodadKeys.insert(QStringLiteral("2"));
+    const auto explicitNativePlan = sc2dh::decor::DecorationStreamingPlanner().buildPlan(objects, zones, explicitNativeSafety);
+    QVERIFY(explicitNativePlan.zones.at(0).nativeVisibilityDoodadIndices.contains(0));
+    QVERIFY(!explicitNativePlan.zones.at(0).nativeVisibilityDoodadIndices.contains(1));
+    QByteArray restoredCurrent;
     int doodads = 0, units = 0;
     QString error;
     sc2dh::decor::DecorationStreamingPlanner planner;
     QVERIFY2(planner.restoreObjectsFromGalaxy(artifacts.optimizedObjectsBytes, galaxy,
                                                &restoredCurrent, &doodads, &units, &error), qPrintable(error));
-    QCOMPARE(doodads, 7);
-    QVERIFY2(planner.restoreObjectsFromGalaxy(artifacts.optimizedObjectsBytes, legacy,
-                                               &restoredLegacy, &doodads, &units, &error), qPrintable(error));
-    QCOMPARE(restoredLegacy, restoredCurrent);
+    QCOMPARE(doodads, 3);
+}
+
+void CoreTests::decorationStreamingRecreatesExplicitNullableTintTypeSafely()
+{
+    const QByteArray objects = QByteArrayLiteral(
+        "<PlacedObjects Version=\"27\">"
+        "<ObjectDoodad Id=\"1\" Type=\"StarShipAdun_Turret\" Position=\"10,10,0\" TintColor=\"NULL 10\"/>"
+        "<ObjectDoodad Id=\"2\" Type=\"StarShipAdun_Turret\" Position=\"12,10,0\"/>"
+        "</PlacedObjects>");
+    const QVector<sc2dh::decor::DecorZone> zones{{1, QStringLiteral("Adun"), 0, 0, 20, 20}};
+    sc2dh::decor::DecorationSafetyContext safety;
+    safety.recreateNullableTintTypes.insert(QStringLiteral("starshipadun_turret"));
+    sc2dh::decor::DecorationStreamingPlanner planner;
+    const auto recreated = planner.createOptimizedArtifacts(objects, zones, safety);
+    QVERIFY2(recreated.valid, qPrintable(recreated.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(recreated.removedDoodadIndices, (QVector<int>{0, 1}));
+    QVERIFY(recreated.plan.zones.at(0).nativeVisibilityDoodadIndices.isEmpty());
+    QCOMPARE(recreated.galaxySource.count(QStringLiteral("DecorOpt_CreateActor(1, \"StarShipAdun_Turret\"")), 2);
+    QVERIFY(!recreated.galaxySource.contains(QStringLiteral("SetTintColor {NULL")));
+    QByteArray restored;
+    int doodads = 0, units = 0;
+    QString error;
+    QVERIFY2(planner.restoreObjectsFromGalaxy(recreated.optimizedObjectsBytes, recreated.galaxySource,
+                                               &restored, &doodads, &units, &error), qPrintable(error));
+    QCOMPARE(doodads, 2);
+    QVERIFY(restored.contains("TintColor=\"NULL 10\""));
+
+    safety.referenceFilesByDoodadKey.insert(QStringLiteral("1"), {QStringLiteral("Triggers")});
+    const auto referenced = planner.createOptimizedArtifacts(objects, zones, safety);
+    QVERIFY(!referenced.valid);
+    QVERIFY(referenced.removedDoodadIndices.isEmpty());
+    QCOMPARE(referenced.plan.staticOnlyDoodads.size(), 2);
+    QVERIFY(referenced.warnings.join(QLatin1Char(' ')).contains(QStringLiteral("was refused")));
+
+    safety.referenceFilesByDoodadKey.clear();
+    safety.referenceFilesByDoodadType.insert(QStringLiteral("starshipadun_turret"), {QStringLiteral("MapScript.galaxy")});
+    const auto typeReferenced = planner.createOptimizedArtifacts(objects, zones, safety);
+    QVERIFY(!typeReferenced.valid);
+    QVERIFY(typeReferenced.removedDoodadIndices.isEmpty());
+    safety.recreateReferencedNullableTintTypes.insert(QStringLiteral("starshipadun_turret"));
+    const auto bridgedType = planner.createOptimizedArtifacts(objects, zones, safety);
+    QVERIFY2(bridgedType.valid, qPrintable(bridgedType.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(bridgedType.removedDoodadIndices, (QVector<int>{0, 1}));
+    QCOMPARE(bridgedType.plan.bridgedDoodads, (QVector<int>{0, 1}));
+    QVERIFY(bridgedType.galaxySource.contains(QStringLiteral("DecorOpt_BridgedActor_1 = a;")));
+    QVERIFY(bridgedType.galaxySource.contains(QStringLiteral("DecorOpt_BridgedActor_2 = a;")));
+    QVERIFY(!bridgedType.galaxySource.contains(QStringLiteral("SetTintColor {NULL")));
+    safety.referenceFilesByDoodadKey.insert(QStringLiteral("2"), {QStringLiteral("Triggers")});
+    const auto unsafeBridgedType = planner.createOptimizedArtifacts(objects, zones, safety);
+    QVERIFY(!unsafeBridgedType.valid);
+    QVERIFY(unsafeBridgedType.removedDoodadIndices.isEmpty());
+    safety.referenceFilesByDoodadKey.clear();
+    safety.recreateReferencedNullableTintTypes.clear();
+    safety.referenceFilesByDoodadType.clear();
+    const QVector<sc2dh::decor::DecorZone> narrowZone{{1, QStringLiteral("Adun"), 0, 0, 11, 20}};
+    const auto outside = planner.createOptimizedArtifacts(objects, narrowZone, safety);
+    QVERIFY(!outside.valid);
+    QVERIFY(outside.removedDoodadIndices.isEmpty());
+
+    const QByteArray generator = QByteArrayLiteral(
+        "<PlacedObjects Version=\"27\"><ObjectDoodad Id=\"66268824\" "
+        "Type=\"AiurTempleAdunGeneratorDoodadWork\" Position=\"103.5,186.5,10.0627\" "
+        "Scale=\"2,2,2\" TeamColor=\"6\" TintColor=\"NULL 100.000000\"/></PlacedObjects>");
+    const QVector<sc2dh::decor::DecorZone> adunZone{{8, QStringLiteral("Map_3"), 80, 170, 130, 210}};
+    sc2dh::decor::DecorationSafetyContext adunSafety;
+    adunSafety.referenceFilesByDoodadType.insert(QStringLiteral("aiurtempleadungeneratordoodadwork"),
+                                                  {QStringLiteral("MapScript.galaxy"), QStringLiteral("Triggers")});
+    adunSafety.recreateNullableTintDoodadKeys.insert(QStringLiteral("66268824"));
+    const auto bridged = planner.createOptimizedArtifacts(generator, adunZone, adunSafety);
+    QVERIFY2(bridged.valid, qPrintable(bridged.warnings.join(QStringLiteral("; "))));
+    QCOMPARE(bridged.removedDoodadIndices, (QVector<int>{0}));
+    QCOMPARE(bridged.plan.bridgedDoodads, (QVector<int>{0}));
+    QVERIFY(bridged.galaxySource.contains(QStringLiteral("DecorOpt_SendMessageToDoodadsInRegion")));
+    QVERIFY(bridged.galaxySource.contains(QStringLiteral("DecorOpt_PlayAnimationOnDoodadsInRegion")));
+    QVERIFY(bridged.galaxySource.contains(QStringLiteral("DecorOpt_BridgedActor_66268824 = a;")));
+    QVERIFY(bridged.galaxySource.contains(QStringLiteral("a = DecorOpt_BridgedActor_66268824;")));
+    QVERIFY(!bridged.galaxySource.contains(QStringLiteral("SetTintColor {NULL")));
+    QVERIFY(!bridged.optimizedObjectsBytes.contains("Id=\"66268824\""));
+    QByteArray restoredGenerator;
+    QVERIFY2(planner.restoreObjectsFromGalaxy(bridged.optimizedObjectsBytes, bridged.galaxySource,
+                                               &restoredGenerator, &doodads, &units, &error), qPrintable(error));
+    QVERIFY(restoredGenerator.contains("TintColor=\"NULL 100.000000\""));
+    auto wrongBridge = bridged.galaxySource;
+    wrongBridge.replace(QStringLiteral("DecorOpt_BridgedActor_66268824 = a;"),
+                        QStringLiteral("DecorOpt_BridgedActor_66268825 = a;"));
+    QVERIFY(!planner.restoreObjectsFromGalaxy(bridged.optimizedObjectsBytes, wrongBridge,
+                                              &restoredGenerator, &doodads, &units, &error));
+    adunSafety.referenceFilesByDoodadKey.insert(QStringLiteral("66268824"), {QStringLiteral("Triggers")});
+    const auto protectedGenerator = planner.createOptimizedArtifacts(generator, adunZone, adunSafety);
+    QVERIFY(!protectedGenerator.valid);
+    QVERIFY(protectedGenerator.removedDoodadIndices.isEmpty());
 }
 
 void CoreTests::decorationStreamingBuildsOptimizedObjectsArtifacts()
@@ -9288,6 +9400,49 @@ void CoreTests::localizationWidgetTreeRetranslatesAndPreservesDomainValue()
              QStringLiteral("Unused candidate"));
 }
 
+void CoreTests::unusedPageRequiresCurrentPreview()
+{
+    AnalysisResult analysis;
+    DataNode node;
+    node.id = QStringLiteral("UnusedUnit");
+    node.elementName = QStringLiteral("CUnit");
+    analysis.nodes.append(node);
+    UnusedCandidateInfo candidate;
+    candidate.nodeIndex = 0;
+    candidate.state = CandidateState::Safe;
+    candidate.usageState = UsageState::Disconnected;
+    analysis.unusedCandidates.append(candidate);
+
+    UnusedPage page;
+    page.setAnalysisResult(analysis);
+    QPushButton *preview = nullptr;
+    QPushButton *apply = nullptr;
+    for (QPushButton *button : page.findChildren<QPushButton *>()) {
+        if (button->text() == QStringLiteral("Preview Deletion")) preview = button;
+        if (button->text() == QStringLiteral("Delete Selected Unused Data Objects")) apply = button;
+    }
+    QVERIFY(preview);
+    QVERIFY(apply);
+    QVERIFY(!preview->isEnabled());
+    QVERIFY(!apply->isEnabled());
+
+    page.selectRows({0});
+    QVERIFY(preview->isEnabled());
+    QVERIFY(!apply->isEnabled());
+    page.setPreviewText(QStringLiteral("Preview ready"), true);
+    QVERIFY(apply->isEnabled());
+    page.selectRows({});
+    QVERIFY(!apply->isEnabled());
+    page.selectRows({0});
+    QVERIFY(!apply->isEnabled());
+    page.setPreviewText(QStringLiteral("Blocked"), false);
+    QVERIFY(!apply->isEnabled());
+    page.setPreviewText(QStringLiteral("Preview ready"), true);
+    QVERIFY(apply->isEnabled());
+    page.setAnalysisResult(analysis);
+    QVERIFY(!apply->isEnabled());
+}
+
 void CoreTests::dryRunGeneration()
 {
     qInfo("dryRunGeneration");
@@ -9463,7 +9618,9 @@ void CoreTests::archiveAnalysis()
 
     QByteArray xmlBytes;
     QVERIFY2(archive.readEntry(archive.gameDataXmlEntries().front(), &xmlBytes, &errorMessage), qPrintable(errorMessage));
-    QVERIFY(xmlBytes.startsWith("<?xml"));
+    QXmlStreamReader xml(xmlBytes);
+    while (!xml.atEnd()) xml.readNext();
+    QVERIFY2(!xml.hasError(), qPrintable(xml.errorString()));
 }
 
 void CoreTests::archiveRewriteRoundTrip()

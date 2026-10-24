@@ -32,6 +32,42 @@ const QString DecorActorCatalogEntry = QStringLiteral("Base.SC2Data/GameData/Act
 const QString DecorModelCatalogEntry = QStringLiteral("Base.SC2Data/GameData/ModelData.xml");
 const QString DecorImportEntry = QStringLiteral("sc2dh/decor_import.xml");
 
+bool bridgeRecreatedDoodadCalls(const sc2dh::decor::DecorationStreamingPlan &plan,
+                                QByteArray *mapScript, QString *error)
+{
+    if (plan.bridgedDoodads.isEmpty()) return true;
+    QSet<QString> types;
+    for (int index : plan.bridgedDoodads)
+        types.insert(plan.doodads.at(index).type);
+    QString source = QString::fromUtf8(*mapScript);
+    QStringList lines = source.split(QLatin1Char('\n'));
+    for (const QString &type : types) {
+        const QString literal = QLatin1Char('"') + type + QLatin1Char('"');
+        int forwarded = 0;
+        for (QString &line : lines) {
+            if (!line.contains(literal) || line.trimmed().startsWith(QStringLiteral("//")))
+                continue;
+            if (line.contains(QStringLiteral("libVCMI_gf_SendActorMessageToDoodadsInRegion("))) {
+                line.replace(QStringLiteral("libVCMI_gf_SendActorMessageToDoodadsInRegion("),
+                             QStringLiteral("DecorOpt_SendMessageToDoodadsInRegion("));
+            } else if (line.contains(QStringLiteral("libNtve_gf_PlayAnimationOnDoodadsInRegion("))) {
+                line.replace(QStringLiteral("libNtve_gf_PlayAnimationOnDoodadsInRegion("),
+                             QStringLiteral("DecorOpt_PlayAnimationOnDoodadsInRegion("));
+            } else {
+                if (error) *error = QStringLiteral("Unsupported trigger reference to recreated doodad type %1; output was not written.").arg(type);
+                return false;
+            }
+            ++forwarded;
+        }
+        if (!forwarded) {
+            if (error) *error = QStringLiteral("No supported trigger call found for recreated doodad type %1; output was not written.").arg(type);
+            return false;
+        }
+    }
+    *mapScript = lines.join(QLatin1Char('\n')).toUtf8();
+    return true;
+}
+
 QByteArray sha256Hex(const QByteArray &bytes)
 {
     return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
@@ -1075,7 +1111,12 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
             return result;
         }
         const QByteArray optimizedObjects = result.patch.replacementEntries.value(request.objectsEntry);
-        const QByteArray optimizedScript = result.patch.replacementEntries.value(request.mapScriptEntry);
+        QByteArray optimizedScript = result.patch.replacementEntries.value(request.mapScriptEntry);
+        if (!bridgeRecreatedDoodadCalls(result.patch.artifacts.plan, &optimizedScript, &error)) {
+            result.error = error;
+            return result;
+        }
+        result.patch.replacementEntries.insert(request.mapScriptEntry, optimizedScript);
         QByteArray galaxy = result.patch.replacementEntries.value(request.runtimeEntry);
         QString actorCatalogEntry = DecorActorCatalogEntry;
         bool actorCatalogExisted = false;
@@ -1292,6 +1333,8 @@ DecorOptimizedMapResult DecorationMapCopyService::createOptimizedCopy(const Deco
     } else {
         result.removedDoodads = result.patch.artifacts.removedDoodadIndices.size();
         result.removedUnits = result.patch.artifacts.removedUnitIndices.size();
+        for (const ZoneAssignment &zone : result.patch.artifacts.plan.zones)
+            result.visibilityControlledDoodads += zone.nativeVisibilityDoodadIndices.size();
     }
 
     if (!fileSha256(request.sourceArchivePath, &result.sourceSha256After, &sourceHashError)) {
@@ -1547,6 +1590,17 @@ DecorRestoreMapResult DecorationMapCopyService::restoreGalaxyCopy(const DecorRes
         return result;
     }
     const QByteArray staticRuntime = planner.staticPlacementGalaxy(QString::fromUtf8(runtime)).toUtf8();
+    QByteArray restoredMapScript;
+    if (runtime.contains("void DecorOpt_SendMessageToDoodadsInRegion(")) {
+        if (!source.readEntry(request.mapScriptEntry, &restoredMapScript, &error)) {
+            result.error = QStringLiteral("Missing MapScript for trigger bridge rollback: %1").arg(error);
+            return result;
+        }
+        restoredMapScript.replace("DecorOpt_SendMessageToDoodadsInRegion(",
+                                  "libVCMI_gf_SendActorMessageToDoodadsInRegion(");
+        restoredMapScript.replace("DecorOpt_PlayAnimationOnDoodadsInRegion(",
+                                  "libNtve_gf_PlayAnimationOnDoodadsInRegion(");
+    }
     QByteArray actorCatalog;
     const bool hasCatalog = source.readEntry(DecorActorCatalogEntry, &actorCatalog, nullptr);
     const QRegularExpression record(QStringLiteral("^// SC2DH catalog rollback ([01]) ([a-f0-9]{64})(?: ([A-Za-z0-9+/=]+))?$"),QRegularExpression::MultilineOption);
@@ -1595,6 +1649,8 @@ DecorRestoreMapResult DecorationMapCopyService::restoreGalaxyCopy(const DecorRes
         QFile::remove(stagingPath + QStringLiteral(".compact"));
     };
     QHash<QString, QByteArray> replacements{{objectsEntry, originalObjects}, {runtimeEntry, staticRuntime}};
+    if (!restoredMapScript.isEmpty())
+        replacements.insert(request.mapScriptEntry, restoredMapScript);
     QStringList removals;
     if (archiveContainsEntry(source, DecorImportEntry)) removals << DecorImportEntry;
     if (archiveContainsEntry(source, DecorRestoreManifestEntry)) removals << DecorRestoreManifestEntry;
@@ -1615,9 +1671,13 @@ DecorRestoreMapResult DecorationMapCopyService::restoreGalaxyCopy(const DecorRes
     Sc2Archive verification;
     QByteArray verifiedObjects;
     QByteArray verifiedRuntime;
+    QByteArray verifiedMapScript;
     if (!verification.load(stagingPath, &error)
         || !verification.readEntry(objectsEntry, &verifiedObjects, &error)
         || !verification.readEntry(runtimeEntry, &verifiedRuntime, &error)
+        || (!restoredMapScript.isEmpty()
+            && (!verification.readEntry(request.mapScriptEntry, &verifiedMapScript, &error)
+                || verifiedMapScript != restoredMapScript))
         || verifiedObjects != originalObjects || verifiedRuntime != staticRuntime
         || !verifyPreloadPatch(verification, replacements, removals)
         || !verifyPreloadPatch(verification, replacements, removals, DecorModelCatalogEntry)

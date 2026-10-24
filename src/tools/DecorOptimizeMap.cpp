@@ -447,6 +447,14 @@ QJsonObject reportObject(const QString &sourcePath,
     for (const QString &type : request.safetyContext.excludedUnitTypeKeys)
         keptUnitTypes << type;
     report.insert(QStringLiteral("requestedKeptUnitTypes"), stringArray(keptUnitTypes, true));
+    report.insert(QStringLiteral("requestedRecreateNullTintTypes"),
+                  stringArray(request.safetyContext.recreateNullableTintTypes.values(), true));
+    report.insert(QStringLiteral("requestedRecreateReferencedNullTintTypes"),
+                  stringArray(request.safetyContext.recreateReferencedNullableTintTypes.values(), true));
+    report.insert(QStringLiteral("requestedRecreateNullTintDoodadIds"),
+                  stringArray(request.safetyContext.recreateNullableTintDoodadKeys.values(), true));
+    report.insert(QStringLiteral("requestedNativeVisibilityDoodadIds"),
+                  stringArray(request.safetyContext.nativeVisibilityReferencedDoodadKeys.values(), true));
     if (!autoGridReport.isEmpty())
         report.insert(QStringLiteral("autoGrid"), autoGridReport);
 
@@ -508,6 +516,8 @@ QJsonObject reportObject(const QString &sourcePath,
                     plan, plan.zones.at(i), request.galaxyOptions);
                 item.insert(QStringLiteral("createFunction"), QStringLiteral("Create_%1").arg(stem));
                 item.insert(QStringLiteral("clearFunction"), QStringLiteral("Clear_%1").arg(stem));
+                item.insert(QStringLiteral("nativeVisibilityDoodads"),
+                            plan.zones.at(i).nativeVisibilityDoodadIndices.size());
                 zoneReport.replace(i, item);
             }
             report.insert(QStringLiteral("zones"), zoneReport);
@@ -555,6 +565,10 @@ struct CliOptions
     QStringList keepUnitTypes;
     QStringList keepDoodadIds;
     QStringList keepDoodadTypes;
+    QStringList recreateNullTintTypes;
+    QStringList recreateReferencedNullTintTypes;
+    QStringList recreateNullTintDoodadIds;
+    QStringList nativeVisibilityDoodadIds;
 };
 
 QString usageText()
@@ -590,6 +604,10 @@ QString usageText()
         "  --keep-unit-type <type>     Keep every unit of this type in Objects (repeatable).\n"
         "  --keep-doodad-id <id>       Keep this original doodad placement (repeatable).\n"
         "  --keep-doodad-type <type>   Keep every doodad of this type (repeatable).\n"
+        "  --recreate-null-tint-type <type>  Trial: recreate all placements of this disabled-Custom-Color type only if every placement is safe (repeatable).\n"
+        "  --recreate-referenced-null-tint-type <type>  Recreate all safe placements of this type and bridge supported region-wide trigger calls (repeatable).\n"
+        "  --recreate-null-tint-doodad-id <id>  Recreate this disabled-Custom-Color placement and bridge supported type-wide trigger calls (repeatable).\n"
+        "  --native-visibility-doodad-id <id>  Show/hide this original NULL-tint doodad even if its type is referenced by triggers (repeatable).\n"
         "  --report <file>             Write JSON report.\n"
         "  --overwrite                 Replace existing output archive.\n"
         "  --objects-entry <entry>     Placement entry. Default: Objects.\n"
@@ -735,7 +753,11 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
             if (!consumeOptionValue(args, &i, suppliedValue, &options->runtimeEntry, error))
                 return false;
         } else if (name == QStringLiteral("--keep-unit-id") || name == QStringLiteral("--keep-unit-type")
-                   || name == QStringLiteral("--keep-doodad-id") || name == QStringLiteral("--keep-doodad-type")) {
+                   || name == QStringLiteral("--keep-doodad-id") || name == QStringLiteral("--keep-doodad-type")
+                   || name == QStringLiteral("--recreate-null-tint-type")
+                   || name == QStringLiteral("--recreate-referenced-null-tint-type")
+                   || name == QStringLiteral("--recreate-null-tint-doodad-id")
+                   || name == QStringLiteral("--native-visibility-doodad-id")) {
             QString value;
             if (!consumeOptionValue(args, &i, suppliedValue, &value, error))
                 return false;
@@ -751,8 +773,16 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
                 options->keepUnitTypes << value;
             else if (name == QStringLiteral("--keep-doodad-id"))
                 options->keepDoodadIds << value;
-            else
+            else if (name == QStringLiteral("--keep-doodad-type"))
                 options->keepDoodadTypes << value;
+            else if (name == QStringLiteral("--recreate-null-tint-type"))
+                options->recreateNullTintTypes << value;
+            else if (name == QStringLiteral("--recreate-referenced-null-tint-type"))
+                options->recreateReferencedNullTintTypes << value;
+            else if (name == QStringLiteral("--recreate-null-tint-doodad-id"))
+                options->recreateNullTintDoodadIds << value;
+            else
+                options->nativeVisibilityDoodadIds << value;
         } else {
             if (error)
                 *error = QStringLiteral("Unknown option: %1").arg(name);
@@ -773,7 +803,11 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
     if (options->restore) {
         if (zoneSources != 0 || options->visibilityOnly || options->overwrite || options->galaxyOnly || options->entireMapEntryZoneId != 0 || !options->publicFunctionNames.isEmpty()
             || !options->keepUnitIds.isEmpty() || !options->keepUnitTypes.isEmpty()
-            || !options->keepDoodadIds.isEmpty() || !options->keepDoodadTypes.isEmpty()) {
+            || !options->keepDoodadIds.isEmpty() || !options->keepDoodadTypes.isEmpty()
+            || !options->recreateNullTintTypes.isEmpty()
+            || !options->recreateReferencedNullTintTypes.isEmpty()
+            || !options->recreateNullTintDoodadIds.isEmpty()
+            || !options->nativeVisibilityDoodadIds.isEmpty()) {
             if (error)
                 *error = QStringLiteral("--restore cannot be combined with zones, unit exclusions, visibility-only or overwrite.");
             return false;
@@ -786,6 +820,13 @@ bool parseCli(const QStringList &args, CliOptions *options, QString *error)
     if (options->visibilityOnly && !options->autoGridSpec.isEmpty()) {
         if (error)
             *error = QStringLiteral("--visibility-only requires --zones or --map-regions; --auto-grid is for actor recreation only.");
+        return false;
+    }
+    if (options->visibilityOnly && (!options->recreateNullTintTypes.isEmpty()
+                                    || !options->recreateReferencedNullTintTypes.isEmpty()
+                                    || !options->recreateNullTintDoodadIds.isEmpty()
+                                    || !options->nativeVisibilityDoodadIds.isEmpty())) {
+        if (error) *error = QStringLiteral("NULL-tint recreation and native visibility ID options require actor recreation mode.");
         return false;
     }
     options->sourcePath = positional.at(0);
@@ -835,6 +876,7 @@ int main(int argc, char *argv[])
         request.sourceArchivePath = QFileInfo(cli.sourcePath).absoluteFilePath();
         request.outputArchivePath = QFileInfo(cli.outputPath).absoluteFilePath();
         request.objectsEntry = cli.objectsEntry;
+        request.mapScriptEntry = cli.mapScriptEntry;
         request.runtimeEntry = cli.runtimeEntry;
         const auto restored = DecorationMapCopyService().restoreGalaxyCopy(request);
         QJsonObject report{{QStringLiteral("success"), restored.success},
@@ -907,6 +949,14 @@ int main(int argc, char *argv[])
     for (const QString &type : cli.keepDoodadTypes)
         request.safetyContext.staticOnlyReasonByDoodadType.insert(type.toCaseFolded(),
             QStringLiteral("Static-only: doodad type explicitly kept by user."));
+    for (const QString &type : cli.recreateNullTintTypes)
+        request.safetyContext.recreateNullableTintTypes.insert(type.toCaseFolded());
+    for (const QString &type : cli.recreateReferencedNullTintTypes)
+        request.safetyContext.recreateReferencedNullableTintTypes.insert(type.toCaseFolded());
+    for (const QString &id : cli.recreateNullTintDoodadIds)
+        request.safetyContext.recreateNullableTintDoodadKeys.insert(id.toCaseFolded());
+    for (const QString &id : cli.nativeVisibilityDoodadIds)
+        request.safetyContext.nativeVisibilityReferencedDoodadKeys.insert(id.toCaseFolded());
     request.overwriteExisting = cli.overwrite;
     request.writeRestoreSidecars = cli.writeRestoreSidecars;
     request.guiAction = cli.guiAction;

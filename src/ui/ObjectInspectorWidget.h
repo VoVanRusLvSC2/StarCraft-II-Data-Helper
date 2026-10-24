@@ -5,7 +5,9 @@
 #include <QWidget>
 
 class QLabel;
+class QLineEdit;
 class QPlainTextEdit;
+class QPushButton;
 class QTableWidget;
 
 class ObjectInspectorWidget : public QWidget
@@ -24,6 +26,7 @@ private:
     void populateEmptyState();
     void populateNodeState(const DataNode &node);
     QString statusTextForNode(const DataNode &node) const;
+    void inspectWithModkit();
 
     AnalysisResult m_result;
     int m_currentRow = -1;
@@ -39,4 +42,8 @@ private:
     QLabel *m_hashValue = nullptr;
     QTableWidget *m_attributesTable = nullptr;
     QPlainTextEdit *m_xmlView = nullptr;
+    QPushButton *m_modkitButton = nullptr;
+    QLineEdit *m_modkitFields = nullptr;
+    QPlainTextEdit *m_modkitView = nullptr;
+    quint64 m_modkitRequest = 0;
 };

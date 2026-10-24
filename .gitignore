@@ -81,6 +81,7 @@ __pycache__/
 !.vscode/tasks.json
 !.vscode/launch.json
 .lh/
+.codebase-memory/
 out/
 
 # MSVC and user-specific project files

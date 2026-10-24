@@ -1,0 +1,16 @@
+{
+    "duration_ms": 1275,
+    "files": 4,
+    "incomplete_sources": [
+    ],
+    "input": "E:\\SK2\\SC2_Edition_MCP\\hardening-stage\\manual-editor",
+    "objects": 12,
+    "peak_working_set_bytes": 162697216,
+    "references": 29,
+    "safe_candidates": 5,
+    "source_completeness": "Complete",
+    "unknown_candidates": 4,
+    "unknown_reasons": {
+        "Unknown reference coverage: binary file contains an ID token but cannot be safely rewritten": 4
+    }
+}
