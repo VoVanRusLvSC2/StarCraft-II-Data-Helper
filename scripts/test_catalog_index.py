@@ -28,7 +28,8 @@ class CatalogIndexTests(unittest.TestCase):
 
     def test_determinism_and_hash(self):
         self.assertEqual(generate(self.xsd), generate(self.xsd))
-        self.assertEqual(generate(self.xsd)['sourceSha256'], hashlib.sha256(self.xsd.read_bytes()).hexdigest())
+        canonical = self.xsd.read_bytes().replace(b'\r\n', b'\n')
+        self.assertEqual(generate(self.xsd)['sourceSha256'], hashlib.sha256(canonical).hexdigest())
 
     def test_catalog_identity_is_from_explicit_source_constraints(self):
         data = generate(self.xsd)
@@ -54,5 +55,14 @@ class CatalogIndexTests(unittest.TestCase):
             self.assertEqual(inline['base'], '{urn:test}Base')
             self.assertEqual(inline['fields'][0]['type'], '{http://www.w3.org/2001/XMLSchema}integer')
             self.assertEqual(data['types']['{urn:test}Outer']['children'][0]['kind'], 'choice')
+
+    def test_source_hash_ignores_checkout_line_endings(self):
+        source = b'<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">\n<xs:element name="Catalog"/>\n</xs:schema>\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'line-endings.xsd'
+            path.write_bytes(source)
+            canonical = generate(path)
+            path.write_bytes(source.replace(b'\n', b'\r\n'))
+            self.assertEqual(generate(path), canonical)
 
 if __name__ == '__main__': unittest.main()
